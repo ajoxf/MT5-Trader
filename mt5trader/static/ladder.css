@@ -1,0 +1,492 @@
+/* The reference screen, in CSS.
+ *
+ * Colours, grid, borders and every load-bearing rule are defined HERE
+ * and served from this process — no CDN, no web font. A blocked CDN has
+ * taken a trading UI down before, and the dialog that reports "could
+ * not save" has to work when the network is what failed.
+ *
+ * The convention is the reference screen's and it is global:
+ *   BID  = blue    ASK = red    GREEN = traded / up
+ * A price must not change colour depending on which table it sits in.
+ */
+
+:root {
+  --chrome: #d4d0c8;          /* TT's window furniture grey */
+  --chrome-dark: #a9a9a9;
+  --panel: #f0f0f0;
+  --grid-line: #808080;
+  --text: #1a1a1a;
+  --muted: #5a5a5a;
+
+  --bid: #1a6fb5;             /* the solid blue bid band */
+  --bid-cell: #4aa8e0;        /* a quantity inside it */
+  --ask: #b01c1c;             /* the solid red ask band */
+  --ask-cell: #d84a4a;
+  --traded: #2f9e44;          /* LTQ print, positive change */
+  --down: #c92a2a;
+  --last-trade: #d9d2f0;      /* the tinted last-traded price cell */
+  --inside: #000000;          /* the inside-market rule */
+
+  --row-h: 17px;
+  --font: "Segoe UI", "DejaVu Sans", Tahoma, sans-serif;
+  --mono: "Consolas", "DejaVu Sans Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 0 30px 0;
+  background: #6b7a8f;
+  color: var(--text);
+  font: 12px/1.35 var(--font);
+  overflow: hidden;
+}
+
+.hidden { display: none !important; }
+
+/* -- banners ------------------------------------------------------- */
+
+.banner {
+  padding: 6px 12px;
+  font-weight: 600;
+  background: #ffe066;
+  border-bottom: 1px solid #b8860b;
+}
+.banner.critical {
+  background: var(--ask);
+  color: #fff;
+  border-bottom: 2px solid #000;
+}
+.banner .fix {
+  margin-left: 10px;
+  font-weight: 400;
+}
+
+/* -- the desktop of ladder windows --------------------------------- */
+
+#desktop {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 2px;
+  height: calc(100vh - 30px);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.window {
+  display: flex;
+  flex-direction: column;
+  /* Never shrink. A ladder squeezed narrow by the panel beside it puts
+   * the price column somewhere the trader is not expecting it. */
+  flex: 0 0 auto;
+  width: 360px;
+  max-height: 100%;
+  background: var(--chrome);
+  border: 1px solid var(--chrome-dark);
+  box-shadow: 1px 1px 0 rgba(0, 0, 0, .3);
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  background: linear-gradient(#3d7ebf, #2b5f96);
+  color: #fff;
+  font-size: 11px;
+}
+.window.inactive .titlebar { background: #9aa5b1; }
+.titlebar .swatch {
+  width: 9px; height: 9px;
+  background: var(--bid);
+  border: 1px solid #fff;
+}
+.titlebar .title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+.titlebar .route {
+  opacity: .85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+}
+.titlebar .mode-badge { white-space: nowrap; }
+.titlebar .mode-badge {
+  margin-left: auto;
+  padding: 0 5px;
+  border: 1px solid #fff;
+  font-weight: 700;
+  letter-spacing: .5px;
+}
+.window.mode-market .titlebar .mode-badge { background: var(--ask); }
+.winbtn {
+  background: var(--chrome);
+  border: 1px solid #666;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+/* -- the quote strip ----------------------------------------------- */
+
+.quotestrip {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 3px 6px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--chrome-dark);
+}
+.quotestrip .netchg {
+  font-size: 17px;
+  font-weight: 700;
+  font-family: var(--mono);
+  color: var(--down);
+}
+.quotestrip .netchg.up { color: var(--traded); }
+.quotestrip .stats {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  color: var(--muted);
+}
+.quotestrip .stats b { font-family: var(--mono); color: var(--text); }
+.quotestrip label { margin-right: 3px; }
+.quotestrip .ours {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--muted);
+  border: 1px dotted var(--muted);
+  padding: 0 3px;
+  cursor: help;
+}
+
+/* -- the body: control rail + grid ---------------------------------- */
+
+.body { display: flex; min-height: 0; }
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 92px;
+  padding: 4px;
+  background: var(--chrome);
+  border-right: 1px solid var(--chrome-dark);
+}
+.rail select,
+.rail input[type="number"] {
+  width: 100%;
+  font: 11px var(--font);
+  padding: 1px 2px;
+}
+.rail .check { font-size: 10px; }
+.rail-label { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.rail .armed {
+  font-family: var(--mono);
+  text-align: center;
+  background: #fff;
+  border: 1px solid var(--grid-line);
+  padding: 2px 0;
+}
+.keypad { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+.keypad button {
+  font: 11px var(--font);
+  background: var(--panel);
+  border: 1px solid var(--chrome-dark);
+  cursor: pointer;
+  padding: 1px 0;
+}
+.keypad button:hover { background: #fff; }
+.default-qty { font-family: var(--mono); text-align: center; }
+
+.cxl {
+  font: 11px var(--font);
+  text-align: left;
+  padding: 1px 4px;
+  border: 1px solid var(--chrome-dark);
+  cursor: pointer;
+  background: var(--panel);
+}
+.cxl-s { background: #f3c9c9; }
+.cxl-b { background: #c9dcf3; }
+/* The count of orders the button would pull — how the trader knows it
+ * will do something before pressing it. */
+.cxl sup { font-size: 9px; margin-left: 2px; }
+
+/* -- the ladder grid ------------------------------------------------ */
+
+.grid {
+  position: relative;
+  flex: 1;
+  overflow-y: auto;
+  background: #fff;
+}
+.grid table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+}
+.grid th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--chrome);
+  border: 1px solid var(--grid-line);
+  font: 600 10px var(--font);
+  padding: 1px 3px;
+  text-align: left;
+}
+.grid td {
+  height: var(--row-h);
+  border: 1px solid #d5d5d5;
+  padding: 0 3px;
+  font: 11px var(--mono);
+  text-align: right;
+  white-space: nowrap;
+}
+.c-work, .c-ltq { width: 46px; }
+.c-bid, .c-ask { width: 58px; }
+
+/* The solid bands. Everything at or below the best bid is the bid side;
+ * everything at or above the best ask is the ask side. */
+tr.in-bid td.bid { background: var(--bid); }
+tr.in-ask td.ask { background: var(--ask); }
+td.bid.has-qty { background: var(--bid-cell); color: #fff; }
+td.ask.has-qty { background: var(--ask-cell); color: #fff; }
+
+/* THE INSIDE MARKET. The single most important mark on the ladder: a
+ * crisp rule across the full width, between the best bid and the best
+ * ask. Never anti-aliased into a smudge, never between rows. */
+tr.market-line > td { border-top: 2px solid var(--inside); }
+
+td.price { text-align: center; font-weight: 600; }
+td.price.last-trade { background: var(--last-trade); }
+td.ltq.print { background: var(--traded); color: #fff; }
+
+td.work.buy { background: var(--bid-cell); color: #fff; cursor: pointer; }
+td.work.sell { background: var(--ask-cell); color: #fff; cursor: pointer; }
+
+td.bid, td.ask { cursor: pointer; }
+tr:hover td.price { outline: 1px solid #333; }
+
+/* MARKET mode is unmistakable: a click here is immediate and
+ * irreversible, so the click columns change the moment the selector
+ * moves. The expensive misclick is a market order the trader thought
+ * was a working order. */
+.window.mode-market td.bid,
+.window.mode-market td.ask {
+  cursor: crosshair;
+  box-shadow: inset 0 0 0 1px #ffd43b;
+}
+.window.mode-market .grid { background: #fffbe6; }
+
+.counts {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 6px;
+  padding: 1px 4px;
+  background: var(--bid);
+  color: #fff;
+  font: 10px var(--mono);
+}
+
+/* -- footer --------------------------------------------------------- */
+
+.footer {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 2px 6px;
+  background: var(--panel);
+  border-top: 1px solid var(--chrome-dark);
+  font-size: 10px;
+}
+.footer .feed.ok { color: var(--traded); }
+.footer .feed.warn { color: #b8860b; font-weight: 600; }
+.footer .feed.bad { color: var(--ask); font-weight: 700; }
+.footer .pnl.up { color: var(--traded); }
+.footer .pnl.down { color: var(--down); }
+.footer .errors { color: var(--ask); font-weight: 600; }
+
+/* -- the Market Grid ------------------------------------------------ */
+
+.window.market-grid { width: auto; max-width: 100%; }
+.market-grid .grid { overflow: auto; }
+.market-grid table {
+  border-collapse: collapse;
+  /* Auto, not fixed: every column is as wide as the number in it, and
+   * a value that overlaps its neighbour is a value nobody can read. */
+  table-layout: auto;
+  width: max-content;
+}
+.market-grid th {
+  background: var(--chrome);
+  border: 1px solid var(--grid-line);
+  font: 600 10px var(--font);
+  padding: 2px 4px;
+  text-align: right;
+}
+.market-grid th:first-child { text-align: left; }
+.market-grid th { white-space: nowrap; }
+.market-grid td {
+  border: 1px solid #d5d5d5;
+  padding: 1px 6px;
+  font: 11px var(--mono);
+  text-align: right;
+  white-space: nowrap;
+}
+.market-grid td.reason { max-width: 260px; overflow: hidden;
+                         text-overflow: ellipsis; }
+.market-grid td.contract { text-align: left; font-family: var(--font); cursor: pointer; }
+.market-grid td.bid { background: var(--bid); color: #fff; cursor: pointer; }
+.market-grid td.ask { background: var(--ask); color: #fff; cursor: pointer; }
+.market-grid tr.broken td { background: #ffe3e3; }
+.market-grid td.reason { text-align: left; color: var(--ask); font-family: var(--font); }
+.market-grid select { font: 10px var(--font); width: 96px; }
+.market-grid input { font: 10px var(--mono); width: 64px; text-align: right; }
+.window.mode-market .market-grid td.bid,
+.window.mode-market .market-grid td.ask { box-shadow: inset 0 0 0 1px #ffd43b; }
+
+/* -- the positions monitor ------------------------------------------ */
+
+.window.monitor { width: auto; max-width: 100%; }
+.monitor table { table-layout: auto; width: max-content; min-width: 100%; }
+.monitor th, .monitor td { white-space: nowrap; }
+.monitor .tabs { display: flex; gap: 2px; padding: 2px; background: var(--chrome); }
+.monitor .tabs button {
+  font: 11px var(--font);
+  border: 1px solid var(--chrome-dark);
+  background: var(--panel);
+  cursor: pointer;
+  padding: 2px 8px;
+}
+.monitor .tabs button.on { background: #fff; font-weight: 600; }
+.monitor .pane { overflow: auto; max-height: 60vh; }
+.monitor table { border-collapse: collapse; width: 100%; }
+.monitor th {
+  background: var(--chrome);
+  border: 1px solid var(--grid-line);
+  font: 600 10px var(--font);
+  padding: 2px 4px;
+  text-align: right;
+}
+.monitor th:first-child, .monitor td:first-child { text-align: left; }
+.monitor td {
+  border: 1px solid #d5d5d5;
+  padding: 1px 4px;
+  font: 11px var(--mono);
+  text-align: right;
+}
+.monitor tr.detail td { background: #fafafa; font-size: 10px; }
+.monitor .up { color: var(--traded); }
+.monitor .down { color: var(--down); }
+.monitor .note {
+  padding: 4px 6px;
+  background: #fff9db;
+  border-top: 1px solid var(--chrome-dark);
+  font: 10px var(--font);
+}
+.monitor .mismatch { background: var(--ask); color: #fff; font-weight: 700; }
+
+/* -- taskbar -------------------------------------------------------- */
+
+#taskbar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  padding: 2px 4px;
+  background: var(--chrome);
+  border-top: 1px solid #fff;
+}
+#tabs { display: flex; gap: 3px; }
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 11px var(--font);
+  background: var(--panel);
+  border: 1px solid var(--chrome-dark);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.tab.on { background: #fff; font-weight: 600; }
+.tab .badge {
+  background: var(--bid);
+  color: #fff;
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 9px;
+}
+.taskbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.taskbar-right .stat { font: 10px var(--mono); color: var(--muted); }
+.kill {
+  font: 700 11px var(--font);
+  background: var(--ask);
+  color: #fff;
+  border: 1px solid #7a1010;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+/* -- modal and toasts ----------------------------------------------- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal-box {
+  background: #fff;
+  border: 1px solid #333;
+  padding: 14px 16px;
+  min-width: 380px;
+  max-width: 520px;
+}
+.modal-box h2 { margin: 0 0 6px; font-size: 14px; }
+.modal-box p { margin: 0 0 12px; font-size: 12px; white-space: pre-wrap; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn {
+  font: 12px var(--font);
+  padding: 3px 12px;
+  border: 1px solid var(--chrome-dark);
+  background: var(--panel);
+  cursor: pointer;
+}
+.btn.danger { background: var(--ask); color: #fff; border-color: #7a1010; }
+
+#toasts {
+  position: fixed;
+  right: 8px;
+  bottom: 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 40;
+  max-width: 460px;
+}
+.toast {
+  background: #fff;
+  border-left: 4px solid var(--ask);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
+  padding: 6px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.toast.ok { border-left-color: var(--traded); }
+.toast .dismiss { float: right; color: var(--muted); }

@@ -101,6 +101,11 @@ def main():
     parser = argparse.ArgumentParser(description='MT5-Trader launcher')
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--status', default='status.json')
+    parser.add_argument('--commands', default='commands.jsonl')
+    parser.add_argument('--results', default='results.json')
+    parser.add_argument('--web-port', type=int, default=8000)
+    parser.add_argument('--no-web', action='store_true',
+                        help='engine only, no browser UI')
     args = parser.parse_args()
 
     problems = check_config(args.config)
@@ -129,9 +134,21 @@ def main():
     time.sleep(2.0)
     coordinator = Child('coordinator',
                         [sys.executable, 'run_coordinator.py',
-                         '--config', args.config, '--status', args.status])
+                         '--config', args.config, '--status', args.status,
+                         '--commands', args.commands,
+                         '--results', args.results])
     coordinator.start()
     children.append(coordinator)
+
+    if not args.no_web:
+        web = Child('web', [sys.executable, '-m', 'mt5trader.webapp',
+                            '--config', args.config, '--status', args.status,
+                            '--commands', args.commands,
+                            '--results', args.results,
+                            '--port', str(args.web_port)])
+        web.start()
+        children.append(web)
+        print(f'[launcher] ladders at http://127.0.0.1:{args.web_port}/')
 
     try:
         while True:

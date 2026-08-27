@@ -46,6 +46,9 @@ class Coordinator:
                                      clock=clock)
         self._last_reconcile = None
         self.session_clock = SessionClock(config)
+        #: Set by the launcher: the bridge from the web process. Primed
+        #: at startup, so a restart never replays a command history.
+        self.commands = None
         #: What the cutoff did, per day, for the monitor to show.
         self.session_events = []
         # The guards measure on a MONOTONIC clock and the quote's own
@@ -388,6 +391,10 @@ class Coordinator:
                 'short_spread': (md or {}).get('short_spread'),
                 'long_spread': (md or {}).get('long_spread'),
                 'errors': self.errors.get(key) or [],
+                # The rows the ladder draws come from HERE, so the Work
+                # column, the click that places an order and the price
+                # that names it cannot disagree about where a level is.
+                'rows': ladder_rows(pair, md, self.book),
                 'orders': [o.to_dict() for o in self.book.orders(key)],
                 'quotes': self.quoter.snapshot(key),
                 'quoting_leg': pair.quoting_leg,
@@ -432,6 +439,10 @@ class Coordinator:
         while not self._stop.is_set():
             began = self.clock()
             try:
+                if self.commands is not None:
+                    # Before the poll: a click acts on the prices the
+                    # trader was looking at, not on the next pass's.
+                    self.commands.drain()
                 self.poll_once()
                 self.publish()
             except Exception as e:                     # never die on one poll
@@ -563,6 +574,12 @@ def _badge(md, stale, jumped):
     return f'OK (oldest leg {max(ages):.1f}s)'
 
 
+#: A ladder that had to grow to reach a level stops somewhere: past
+#: this many rows the increment is simply wrong for the pair, and
+#: drawing 10,000 of them helps nobody.
+MAX_LADDER_ROWS = 400
+
+
 def ladder_rows(pair, md, book, rows=None):
     """The rows the ladder draws: the spread +/- N increments.
 
@@ -570,16 +587,37 @@ def ladder_rows(pair, md, book, rows=None):
     disagree with the engine about where a level is — the Work column,
     the click that places an order and the price that names it all come
     off this one list.
+
+    The window is widened to cover both executable touches and every
+    working order on the pair. A level the ladder cannot show is one the
+    trader can neither see nor pull, and on a wide book the touches can
+    sit well outside a window centred on the mid.
     """
     increment = pair.effective_increment()
     if not md or not increment:
         return []
     rows = int(rows or pair.rows)
-    mid = md['spread']
-    centre = round(mid / increment) * increment
+    centre = round(md['spread'] / increment) * increment
+    low = centre - rows * increment
+    high = centre + rows * increment
+
+    marks = [md.get('short_spread'), md.get('long_spread')]
+    marks += [order.level for order in book.orders(pair.key)]
+    marks = [m for m in marks if m is not None]
+    if marks:
+        low = min([low] + marks)
+        high = max([high] + marks)
+
+    steps = int(round((high - low) / increment))
+    if steps + 1 > MAX_LADDER_ROWS:
+        # Keep the market itself; the far-away level is unreachable at
+        # this increment and the ladder says so by not pretending.
+        low = centre - (MAX_LADDER_ROWS // 2) * increment
+        steps = MAX_LADDER_ROWS - 1
+
     out = []
-    for step in range(rows, -rows - 1, -1):
-        level = round(centre + step * increment, 10)
+    for step in range(steps, -1, -1):
+        level = round(low + step * increment, 10)
         buys, sells = book.working_at(pair.key, level)
         out.append({
             'level': level,

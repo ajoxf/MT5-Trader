@@ -139,7 +139,7 @@ def test_ladder_rows_centre_on_the_spread_and_carry_the_work_column(
 
     rows = ladder_rows(pair, md, coordinator.book, rows=40)
 
-    assert len(rows) == 81                       # 40 either side of centre
+    assert len(rows) >= 81                       # 40 either side of centre
     assert rows[0]['level'] > rows[-1]['level']  # highest price at the top
     centre = [r for r in rows if abs(r['level'] - level) < 1e-9][0]
     assert centre['work_buy'] == pytest.approx(2.0)
@@ -149,6 +149,45 @@ def test_ladder_rows_centre_on_the_spread_and_carry_the_work_column(
     best_ask = [r for r in rows if r['is_best_ask']]
     assert best_bid and best_ask
     assert best_bid[0]['level'] < best_ask[0]['level']
+
+
+def test_the_ladder_always_shows_both_touches_and_every_working_order(
+        config, pair, legs):
+    """A level the ladder cannot show is one the trader can neither see
+    nor pull — and on a wide book the touches sit outside a window
+    centred on the mid."""
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+    md = coordinator.market[pair.key]
+    far = round(md['spread'] - 3.0, 4)           # way below the window
+    coordinator.book.add_order(pair, SpreadSide.BUY, far, 1.0)
+
+    rows = ladder_rows(pair, md, coordinator.book, rows=5)
+    levels = [row['level'] for row in rows]
+
+    assert min(levels) <= far <= max(levels)
+    assert any(row['is_best_bid'] for row in rows)
+    assert any(row['is_best_ask'] for row in rows)
+    assert [row for row in rows
+            if abs(row['level'] - far) < 1e-9][0]['work_buy'] == 1.0
+
+
+def test_a_level_too_far_to_draw_does_not_grow_the_ladder_without_bound(
+        config, pair, legs):
+    """Past a few hundred rows the increment is simply wrong for the
+    pair, and drawing 10,000 of them helps nobody."""
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+    md = coordinator.market[pair.key]
+    coordinator.book.add_order(pair, SpreadSide.BUY,
+                               round(md['spread'] - 500.0, 4), 1.0)
+
+    rows = ladder_rows(pair, md, coordinator.book, rows=30)
+
+    assert len(rows) <= 400
+    assert any(row['is_best_bid'] for row in rows)   # the market is kept
 
 
 def test_the_session_stats_are_ours_and_say_so(config, pair, legs):

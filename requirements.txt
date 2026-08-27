@@ -2,4 +2,11 @@
 # Everything else — and the whole test suite — runs anywhere.
 MetaTrader5>=5.0.45 ; sys_platform == "win32"
 python-dotenv>=1.0.0
+Flask>=3.0.0
+
+# Tests. Playwright drives a real Chromium: Python tests cannot see a
+# script error that silently unregisters a handler, and that has
+# happened. The browser tests skip cleanly where no browser is
+# installed.
 pytest>=8.0.0
+playwright>=1.40.0

@@ -12,6 +12,7 @@ import logging
 import signal
 import sys
 
+from mt5trader.commands import CommandRunner
 from mt5trader.config import TraderConfig
 from mt5trader.coordinator import Coordinator
 from mt5trader.legs import RemoteLeg
@@ -41,6 +42,8 @@ def main():
     parser = argparse.ArgumentParser(description='MT5-Trader coordinator')
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--status', default='status.json')
+    parser.add_argument('--commands', default='commands.jsonl')
+    parser.add_argument('--results', default='results.json')
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -57,6 +60,12 @@ def main():
         sys.exit(1)
 
     coordinator = Coordinator(config, legs, status_path=args.status)
+    # PRIME before the first drain. Everything already in the command
+    # file was written to a process that is gone; replaying it would
+    # place those orders again, now, at today's prices.
+    runner = CommandRunner(coordinator, args.commands, args.results)
+    runner.prime()
+    coordinator.commands = runner
 
     def stop(signum, frame):
         # Positions first, because closing them is irreversible and an

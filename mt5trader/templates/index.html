@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MT5-Trader</title>
+<!-- Everything is self-hosted. A blocked CDN has already taken a
+     trading UI down once, and the dialog that reports "could not save"
+     must work when the network is what failed. -->
+<link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ladder.css') }}">
+</head>
+<body>
+
+<!-- The engine banner. A dead coordinator must never be mistaken for a
+     quiet market: that is the confusion that gets orders clicked into a
+     screen with nothing behind it. -->
+<div id="engine-banner" class="banner hidden" role="status"></div>
+
+<!-- Any naked leg, on any pair: the loudest thing on the screen, and it
+     does not auto-hide. It clears when the exposure does. -->
+<div id="naked-banner" class="banner critical hidden" role="alert"></div>
+
+<div id="desktop"></div>
+
+<!-- The bottom taskbar: one tab per open panel, a working-order count
+     badge on each, and + to open the Market Grid and pick another. -->
+<div id="taskbar">
+  <button id="add-panel" class="tab plus" title="Open the Market Grid">+</button>
+  <div id="tabs"></div>
+  <div class="taskbar-right">
+    <span id="loop-stat" class="stat" title="The coordinator's achieved loop interval, and how old this snapshot is">—</span>
+    <button id="kill" class="kill">KILL ALL</button>
+  </div>
+</div>
+
+<!-- One shared modal. No native confirm() / alert() / prompt(), ever —
+     a test fails the build if they come back. -->
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box">
+    <h2 id="modal-title"></h2>
+    <p id="modal-body"></p>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="btn">Cancel</button>
+      <button id="modal-confirm" class="btn danger"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Errors live here until they are dismissed. A failure that vanishes
+     in 3 seconds is one the operator misses. -->
+<div id="toasts"></div>
+
+<template id="ladder-template">
+  <section class="window ladder">
+    <div class="titlebar">
+      <span class="swatch"></span>
+      <span class="title"></span>
+      <span class="route"></span>
+      <span class="mode-badge"></span>
+      <span class="winbtns"><button class="winbtn close" title="Close this ladder">&times;</button></span>
+    </div>
+    <div class="quotestrip">
+      <span class="netchg">—</span>
+      <div class="stats">
+        <span><label>H:</label><b class="stat-h">—</b></span>
+        <span><label>L:</label><b class="stat-l">—</b></span>
+      </div>
+      <div class="stats">
+        <span><label>O:</label><b class="stat-o">—</b></span>
+        <span><label>V:</label><b class="stat-v">—</b></span>
+      </div>
+      <span class="ours" title="MT5 publishes no session data for a spread that does not exist. O/H/L are our own mid series since this process started; V is the volume of our own fills.">ours</span>
+    </div>
+    <div class="body">
+      <div class="rail">
+        <select class="route-select" disabled></select>
+        <label class="check"><input type="checkbox" class="filter"> Filter</label>
+        <select class="order-type">
+          <option value="LIMIT">Limit</option>
+          <option value="MARKET">Market</option>
+        </select>
+        <select class="tif">
+          <option value="DAY">Day</option>
+          <option value="GTC">GTC</option>
+        </select>
+        <div class="armed">--</div>
+        <div class="keypad">
+          <button class="qty" data-qty="1">1</button>
+          <button class="qty" data-qty="5">5</button>
+          <button class="qty" data-qty="10">10</button>
+          <button class="qty" data-qty="50">50</button>
+          <button class="qty" data-qty="100">100</button>
+          <button class="qty clr" data-qty="">CLR</button>
+        </div>
+        <input class="default-qty" type="number" min="0" step="0.01">
+        <button class="cxl cxl-s">CXL S<sup class="count-s"></sup></button>
+        <button class="cxl cxl-all">CXL All<sup class="count-all"></sup></button>
+        <button class="cxl cxl-b">CXL B<sup class="count-b"></sup></button>
+        <label class="rail-label">Increment</label>
+        <input class="increment" type="number" min="0" step="0.0001">
+        <label class="check lock"><input type="checkbox" class="lock-scroll"> Lock</label>
+        <select class="overnight" title="At the session cutoff">
+          <option value="ALLOW">Allow o/n</option>
+          <option value="EXIT_IF_PROFIT">Exit if profit</option>
+          <option value="EXIT_ALWAYS">Exit always</option>
+        </select>
+      </div>
+      <div class="grid">
+        <table>
+          <thead>
+            <tr>
+              <th class="c-work">Work</th>
+              <th class="c-bid">Bids</th>
+              <th class="c-price">Price</th>
+              <th class="c-ask">Asks</th>
+              <th class="c-ltq">LTQ</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div class="counts"><span class="cnt-b">B:0</span><span class="cnt-s">S:0</span><span class="cnt-w">W:0</span></div>
+      </div>
+    </div>
+    <div class="footer">
+      <span class="feed" title="The staleness and jump guards (a guard may withhold an order; it never prevents a close)">—</span>
+      <span class="pos">flat</span>
+      <span class="pnl">—</span>
+      <span class="clip" title="One spread, in leg lots, and the dollars per 1.00 of spread">—</span>
+      <span class="errors"></span>
+    </div>
+  </section>
+</template>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

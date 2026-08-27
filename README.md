@@ -34,9 +34,20 @@ The spec's build order, in order. Steps 1-8 are in:
 | `mt5trader/reconcile.py` | Orphans and ghosts, three strikes, contract-size-correct P&L |
 | `mt5trader/session.py` | The one cutoff: DAY orders die, each ladder's overnight rule decides |
 | `mt5trader/shutdown.py` | An unanswered prompt means NO |
+| `mt5trader/commands.py` | The web↔coordinator bridge, primed at startup so a restart never replays a command |
+| `mt5trader/webapp.py` | The Flask process: it renders and it asks; it never trades |
+| `mt5trader/static/`, `templates/` | The ladder, the Market Grid and the positions monitor — self-hosted, no CDN |
 
-Still to come: the ladder UI against the reference screen (§3.3), the
-positions monitor (§16) and the Market Grid (§17).
+The UI is the reference TT screen: window chrome and a bottom taskbar,
+the quote strip, the left control rail, and the five-column grid
+(`Work | Bids | Price | Asks | LTQ`) with the black inside-market rule,
+bid blue and ask red. MARKET mode re-tints the click columns and
+confirms through the one shared modal — there are no native dialogs
+anywhere, and a test fails the build if they come back.
+
+Still to come: per-account margin and the account/pair setup screens in
+the browser (the API is there), restart recovery of open positions, and
+the slippage report over a real session.
 
 ## Running it
 
@@ -62,6 +73,12 @@ python run_coordinator.py --config config.json
 ```
 pytest tests/ -q
 ```
+
+155 of them, including nine that drive Chromium under Playwright and
+read `pageerror` — Python tests cannot see a temporal-dead-zone
+`ReferenceError` that aborts a script block and silently unregisters a
+handler, and that is exactly what happened in the system this is ported
+from. They skip cleanly where no browser is installed.
 
 They must pass before any commit, and LIVE mode must never be run
 without them. Everything is faked — `FakeBroker` keeps a real
