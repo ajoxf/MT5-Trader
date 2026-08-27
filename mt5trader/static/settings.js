@@ -324,7 +324,7 @@
       'leg B on the other; the spread is B − β × A</small></h3>';
     html += '<table class="grid-form"><thead><tr><th>Key</th><th>Name</th>' +
       '<th>Leg A</th><th>Leg B</th><th>β</th><th>Increment</th>' +
-      '<th>Enabled</th><th></th></tr></thead><tbody>';
+      '<th>Enabled</th><th>Status</th><th></th></tr></thead><tbody>';
     Object.keys(local.pairs).forEach(function (key) {
       var pair = local.pairs[key];
       html += '<tr data-pair="' + escape(key) + '">';
@@ -342,6 +342,7 @@
                               pair.increment === undefined
                               ? 'derived' : pair.increment) + '</td>';
       html += '<td>' + (pair.enabled === false ? 'no' : 'yes') + '</td>';
+      html += pairStatusCell(key, pair);
       html += '<td class="actions">' +
         '<button class="btn edit-pair">Edit</button>' +
         '<button class="btn danger delete-pair">Delete</button></td></tr>';
@@ -350,6 +351,56 @@
     html += '<button class="btn new-pair">New pair</button>';
     if (local.editing !== null) { html += pairForm(); }
     return html;
+  }
+
+  function pairStatus(key, pair) {
+    /* Is this ladder actually working? Read from the ENGINE's own
+     * snapshot, never from the fact that a row was saved.
+     *
+     * The distinction that matters to whoever is setting this up: a
+     * pair that is configured, a pair the engine has picked up, and a
+     * pair that is quoting are three different things, and only the
+     * last one can be traded. Saying "connected" for any of the others
+     * is how a symbol that does not exist at the broker survives all
+     * the way to a click.
+     */
+    var snapshot = (UI.state && UI.state.snapshot) || {};
+    if (pair.enabled === false) {
+      return {state: 'off', text: 'disabled'};
+    }
+    if (snapshot.engine !== 'up') {
+      return {state: 'unknown',
+              text: 'the engine is not running — nothing to check against'};
+    }
+    var live = (snapshot.pairs || {})[key];
+    if (!live) {
+      return {state: 'bad',
+              text: 'saved, but the engine has not picked it up yet — ' +
+                    'it restarts itself within a few seconds'};
+    }
+    if ((live.errors || []).length) {
+      // The engine's own words, which name the symbol and what the
+      // account actually offers.
+      return {state: 'bad', text: live.errors[0]};
+    }
+    if (!live.market || live.short_spread === null ||
+        live.short_spread === undefined) {
+      return {state: 'bad',
+              text: 'both legs resolved, but no two-sided quote has ' +
+                    'arrived yet'};
+    }
+    return {state: 'ok',
+            text: 'CONNECTED — quoting at ' +
+                  UI.fmt(live.short_spread, 4) + ' / ' +
+                  UI.fmt(live.long_spread, 4)};
+  }
+
+  function pairStatusCell(key, pair) {
+    var status = pairStatus(key, pair);
+    var className = status.state === 'ok' ? 'c-pass'
+      : status.state === 'bad' ? 'c-fail' : 'c-info';
+    return '<td class="pair-status ' + className + '">' +
+      escape(status.text) + '</td>';
   }
 
   function legText(leg) {
@@ -366,8 +417,18 @@
       (local.editing ? 'Editing ' + escape(local.editing) : 'New pair') +
       '</h4><div class="fields">';
     html += field('Key', '<input class="p-key" value="' +
-                  escape(draft.key) + '" placeholder="XAUUSD_|GC1226"' +
-                  (local.editing ? ' disabled' : '') + '>');
+                  escape(draft.key) + '" placeholder="' +
+                  escape(autoKey() || 'built from the two symbols') + '"' +
+                  (local.editing ? ' disabled' : '') + '>' +
+                  '<div class="hint">Leave it blank and it is built from ' +
+                  'the two symbols — the key is an identifier, not a ' +
+                  'setting, and typing one by hand is not something this ' +
+                  'should ask for.' +
+                  (local.editing && autoKey() && autoKey() !== local.editing
+                    ? ' <b class="problem-text">Saving will rename this ' +
+                      'pair to ' + escape(autoKey()) + ', because its ' +
+                      'symbols changed.</b>'
+                    : '') + '</div>');
     html += field('Name', '<input class="p-name" value="' +
                   escape(draft.name) + '">');
     html += field('Leg A', accountSelect('p-account-a', draft.leg_a_account) +
@@ -759,25 +820,63 @@
       });
   }
 
+  function autoKey() {
+    /* A pair's key IS its two symbols. Deriving it means the operator
+     * never has to know that, and a key can never drift away from the
+     * instruments it names. */
+    var draft = local.draft || {};
+    if (!draft.leg_a_symbol || !draft.leg_b_symbol) { return ''; }
+    return draft.leg_a_symbol + '|' + draft.leg_b_symbol;
+  }
+
+  function openOn(key) {
+    var live = ((UI.state.snapshot || {}).pairs || {})[key] || {};
+    return (live.positions || []).length;
+  }
+
   function savePair() {
     readDraft();
-    var key = local.editing || local.draft.key;
-    if (!key) { UI.toast('the pair needs a key, e.g. XAUUSD_|GC1226'); return; }
     var payload = draftPayload();
     if (!payload.leg_a.symbol || !payload.leg_b.symbol) {
       UI.toast('both legs need a symbol — Find lists what each account '
                + 'actually offers');
       return;
     }
-    return api('/api/pairs/' + key,
+    var key = local.editing || local.draft.key || autoKey();
+    // The symbols were changed on an existing pair: the key names the
+    // instruments, so it moves with them rather than being left
+    // pointing at something that is no longer traded here.
+    var rename = (local.editing && autoKey() && autoKey() !== local.editing)
+      ? autoKey() : null;
+    if (rename && openOn(local.editing)) {
+      UI.toast('this pair has an open position — flatten it before ' +
+               'changing its symbols; the position is on the OLD ' +
+               'instruments and nothing here can move it');
+      return;
+    }
+    var target = rename || key;
+    return api('/api/pairs/' + encodeURIComponent(target),
                {method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(payload)})
       .then(function (result) {
         if (!result.ok) { UI.toast(result.body.error); return; }
+        if (!rename) { return result; }
+        return api('/api/pairs/' + encodeURIComponent(local.editing),
+                   {method: 'DELETE'}).then(function (dropped) {
+          if (!dropped.ok) {
+            UI.toast('saved as ' + target + ', but the old ' +
+                     local.editing + ' could not be removed: ' +
+                     dropped.body.error);
+          }
+          return result;
+        });
+      })
+      .then(function (result) {
+        if (!result) { return; }
         UI.toast(result.body.restart_required
-          ? 'saved ' + key + ' — symbols, accounts and β are structural, so ' +
-            'restart the launcher'
-          : 'saved ' + key, 'ok');
+          ? 'saved ' + target + ' — symbols, accounts and β are structural, ' +
+            'so the engine restarts itself to pick them up'
+          : 'saved ' + target, 'ok');
         local.editing = null;
         refresh();
       });

@@ -708,3 +708,255 @@ def add_account(page, name, endpoint, login=''):
         row.locator('.f-login').fill(login)
     assert row.locator('.f-name').input_value() == name
     row.locator('.save-account').click()
+
+
+# -- moving the windows ---------------------------------------------------
+
+def drag(page, selector, dx, dy, steps=8):
+    """Drag one window by its title bar, the way a hand does it."""
+    bar = page.locator(selector + ' .titlebar').first
+    box = bar.bounding_box()
+    start = (box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    page.mouse.move(*start)
+    page.mouse.down()
+    page.mouse.move(start[0] + dx, start[1] + dy, steps=steps)
+    page.mouse.up()
+
+
+def tidy(page):
+    page.click('#tidy')
+
+
+def open_ladder(page):
+    """The settings tests leave the desk showing their own panel; these
+    are about a window, so put one on it."""
+    page.evaluate("""() => {
+        const state = window.MT5Trader.state;
+        const key = Object.keys(state.snapshot.pairs)[0];
+        state.open = [window.MT5Trader.panelId('ladder', key)];
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('.window.ladder .titlebar', timeout=5000)
+
+
+def test_a_window_goes_where_it_is_dragged_and_is_still_there_after_a_reload(
+        page):
+    """The layout is a preference about this screen, so it lives in the
+    browser — but it has to SURVIVE, or every reload rearranges the desk
+    under the trader."""
+    open_ladder(page)
+    tidy(page)
+    before = page.locator('.window.ladder').first.bounding_box()
+
+    drag(page, '.window.ladder', 220, 130)
+
+    after = page.locator('.window.ladder').first.bounding_box()
+    assert after['x'] - before['x'] == pytest.approx(220, abs=6)
+    assert after['y'] - before['y'] == pytest.approx(130, abs=6)
+    assert page.locator('.window.ladder.floating').count() == 1
+
+    page.reload()
+    page.wait_for_selector('.ladder tbody tr')
+    open_ladder(page)
+    restored = page.locator('.window.ladder').first.bounding_box()
+    assert restored['x'] == pytest.approx(after['x'], abs=2)
+    assert restored['y'] == pytest.approx(after['y'], abs=2)
+    tidy(page)
+
+
+def test_a_window_can_never_be_dropped_where_it_cannot_be_got_back(page):
+    """A window dragged off the edge with no title bar left on screen is
+    a window that cannot be moved, closed or focused again — and the
+    only way back would be clearing browser storage."""
+    open_ladder(page)
+    tidy(page)
+
+    drag(page, '.window.ladder', -4000, -4000)
+
+    bar = page.locator('.window.ladder .titlebar').first.bounding_box()
+    desktop = page.locator('#desktop').bounding_box()
+    assert bar['y'] >= desktop['y'] - 1
+    assert bar['x'] + bar['width'] > desktop['x'] + 40   # still grabbable
+
+    drag(page, '.window.ladder', 4000, 4000)
+    bar = page.locator('.window.ladder .titlebar').first.bounding_box()
+    assert bar['x'] < desktop['x'] + desktop['width']
+    assert bar['y'] < desktop['y'] + desktop['height']
+    tidy(page)
+
+
+def test_dragging_a_title_bar_is_never_an_order(page):
+    """The drag passes right over the ladder, which is where a click
+    places an order. It must not be one."""
+    open_ladder(page)
+    tidy(page)
+    before = command_count(page)
+
+    drag(page, '.window.ladder', 60, 220)
+
+    page.wait_for_timeout(300)
+    assert command_count(page) == before
+    tidy(page)
+
+
+def test_a_button_in_the_title_bar_still_works_while_windows_move(page):
+    """The close button lives IN the title bar. A drag handler that
+    swallowed its click would make a window impossible to close."""
+    tidy(page)
+    page.evaluate("""() => {
+        window.MT5Trader.state.open = ['monitor:'];
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('.window.monitor', timeout=5000)
+
+    page.click('.window.monitor .titlebar .close')
+
+    page.wait_for_selector('.window.monitor', state='detached', timeout=5000)
+
+
+def test_tidy_puts_every_window_back_in_the_row(page):
+    """The way out of a mess, and the one instruction that fixes any
+    arrangement a non-technical operator can get into."""
+    open_ladder(page)
+    drag(page, '.window.ladder', 180, 90)
+    assert page.locator('.window.floating').count() >= 1
+
+    tidy(page)
+
+    assert page.locator('.window.floating').count() == 0
+    assert page.evaluate(
+        "() => window.localStorage.getItem('mt5trader.windows.v1')") in (
+            None, '{}')
+
+
+def seed_config(page, pairs=True):
+    """A saved account and pair, as a configured install has."""
+    config = {'accounts': {'acct_a': {'endpoint': '127.0.0.1:9101'},
+                           'acct_b': {'endpoint': '127.0.0.1:9102'}},
+              'pairs': {}}
+    if pairs:
+        config['pairs'] = {'XAUUSD_|GC1226': {
+            'name': 'Gold basis', 'enabled': True, 'hedge_ratio': 1.0,
+            'hedge_ratio_for': 'XAUUSD_|GC1226',
+            'leg_a': {'account': 'acct_a', 'symbol': 'XAUUSD_'},
+            'leg_b': {'account': 'acct_b', 'symbol': 'GC1226'}}}
+    with open(page.paths['config'], 'w', encoding='utf-8') as f:
+        json.dump(config, f)
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .pairs', timeout=5000)
+    page.evaluate('() => window.MT5Settings.refresh()')
+    page.wait_for_timeout(300)
+
+
+def test_a_window_is_freely_expandable_from_its_corner(page):
+    """A ladder is a price column: how many rows fit on screen is the
+    difference between seeing the market and scrolling for it."""
+    open_ladder(page)
+    tidy(page)
+    before = page.locator('.window.ladder').first.bounding_box()
+    grip = page.locator('.window.ladder .grip').first.bounding_box()
+
+    # Wider, and SHORTER: a window is never taller than the desktop it
+    # is on — a ladder whose bottom rows are off screen is a ladder the
+    # trader cannot click.
+    page.mouse.move(grip['x'] + 6, grip['y'] + 6)
+    page.mouse.down()
+    page.mouse.move(grip['x'] + 206, grip['y'] - 144, steps=8)
+    page.mouse.up()
+
+    after = page.locator('.window.ladder').first.bounding_box()
+    assert after['width'] - before['width'] == pytest.approx(200, abs=8)
+    assert before['height'] - after['height'] == pytest.approx(150, abs=10)
+
+    page.reload()
+    page.wait_for_selector('.ladder tbody tr')
+    open_ladder(page)
+    restored = page.locator('.window.ladder').first.bounding_box()
+    assert restored['width'] == pytest.approx(after['width'], abs=2)
+    assert restored['height'] == pytest.approx(after['height'], abs=2)
+    tidy(page)
+    assert page.locator('.window.ladder').first.bounding_box()['width'] == \
+        pytest.approx(before['width'], abs=2)
+
+
+def test_the_panels_are_not_redrawn_when_the_engine_published_nothing(page):
+    """The screen polls three times a second. Redrawing every ladder,
+    the grid and the monitor on a snapshot the coordinator has not
+    republished is wasted work — and it is worst exactly when the
+    coordinator is stalled or restarting, which is when the operator is
+    trying to click things to fix it."""
+    open_ladder(page)
+    frozen = page.evaluate("""() => {
+        const snapshot = JSON.parse(JSON.stringify(
+            window.MT5Trader.state.snapshot));
+        window.__realFetch = window.__realFetch || window.fetch;
+        window.fetch = function (url, options) {
+            if (String(url).indexOf('/api/status') >= 0) {
+                return Promise.resolve(new Response(JSON.stringify(snapshot),
+                    {status: 200,
+                     headers: {'Content-Type': 'application/json'}}));
+            }
+            return window.__realFetch(url, options);
+        };
+        document.querySelector('.window.ladder .grid').dataset.stamp = 'kept';
+        return snapshot.at;
+    }""")
+    assert frozen
+
+    page.wait_for_timeout(1200)              # four polls, same snapshot
+
+    assert page.get_attribute('.window.ladder .grid', 'data-stamp') == 'kept'
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+
+
+def test_the_pairs_table_says_whether_each_ladder_is_actually_quoting(page):
+    """"Saved" is not "connected". A pair whose symbol does not exist at
+    the broker looks perfect in the config and cannot trade — the engine
+    knows, so the row says so."""
+    seed_config(page)
+
+    cell = page.locator('td.pair-status').first
+    assert 'CONNECTED' in cell.text_content()
+
+    # ...and when the engine reports a problem on that pair, the row
+    # carries the engine's own words rather than a green light.
+    page.evaluate("""() => {
+        const pairs = window.MT5Trader.state.snapshot.pairs;
+        const key = Object.keys(pairs)[0];
+        pairs[key].errors = ["leg A: 'XAUUSD_' is not on account 'leg_a'"];
+        window.MT5Settings.render();
+    }""")
+    text = page.text_content('td.pair-status')
+    assert "is not on account" in text
+    assert page.locator('td.pair-status.c-fail').count() >= 1
+
+
+def test_a_new_pairs_key_is_built_from_its_two_symbols(page):
+    """Typing `XAUUSD|GCZ6` by hand is not something a trading screen
+    should ask for — and a key typed wrong is a pair that never loads."""
+    seed_config(page)
+    page.click('.new-pair')
+    page.wait_for_selector('.pair-form', timeout=5000)
+
+    page.fill('.p-symbol-a', 'XAUUSD')
+    page.fill('.p-symbol-b', 'GCZ6')
+    page.select_option('.p-account-a', 'acct_a')
+    page.select_option('.p-account-b', 'acct_b')
+    saved = page.evaluate("""async () => {
+        window.__realFetch = window.__realFetch || window.fetch;
+        const seen = [];
+        window.fetch = function (url, options) {
+            seen.push(String(url));
+            return Promise.resolve(new Response(
+                JSON.stringify({ok: true, pair: 'x', restart_required: true}),
+                {status: 200,
+                 headers: {'Content-Type': 'application/json'}}));
+        };
+        document.querySelector('.save-pair').click();
+        await new Promise(function (r) { window.setTimeout(r, 400); });
+        window.fetch = window.__realFetch;
+        return seen;
+    }""")
+
+    assert any('XAUUSD%7CGCZ6' in url or 'XAUUSD|GCZ6' in url
+               for url in saved), saved

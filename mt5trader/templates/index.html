@@ -32,6 +32,7 @@
   <button id="add-panel" class="tab plus" title="Open the Market Grid">+</button>
   <div id="tabs"></div>
   <div class="taskbar-right">
+    <button id="tidy" class="tab" title="Put every window back in a row">Tidy</button>
     <button id="open-settings" class="tab" title="Accounts, pairs and connection">Exchanges</button>
     <span id="loop-stat" class="stat" title="The coordinator's achieved loop interval, and how old this snapshot is">—</span>
     <button id="help" class="tab" title="Keyboard shortcuts (?)">?</button>
@@ -72,6 +73,9 @@
       <tr><th>M</th><td>switch this ladder between LIMIT and MARKET</td></tr>
       <tr><th>Tab</th><td>focus the next ladder</td></tr>
       <tr><th>Esc</th><td>close this, or any open dialog</td></tr>
+      <tr><th>Drag</th><td>move a window by its title bar — it stays
+        where you put it, and comes back there after a reload.
+        <b>Tidy</b> in the taskbar puts them all back in a row</td></tr>
     </table>
     <p class="fine">In MARKET mode a click and B/S/F cross both accounts
     immediately — no confirmation, by design. Turn on “confirm market

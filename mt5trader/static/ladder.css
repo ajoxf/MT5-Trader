@@ -66,6 +66,10 @@ body {
 /* -- the desktop of ladder windows --------------------------------- */
 
 #desktop {
+  /* The frame a moved window is positioned inside. Windows that have
+   * not been moved stay in the flex row; the moment one is dragged it
+   * leaves the flow and keeps the place it was put. */
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 2px;
@@ -76,6 +80,8 @@ body {
 }
 
 .window {
+  /* The frame the resize grip sits in the corner of. */
+  position: relative;
   display: flex;
   flex-direction: column;
   /* Never shrink. A ladder squeezed narrow by the panel beside it puts
@@ -88,7 +94,47 @@ body {
   box-shadow: 1px 1px 0 rgba(0, 0, 0, .3);
 }
 
+/* Resized windows: the size they were given, and the inside scrolls
+ * rather than pushing the window back open. */
+.window.sized { max-height: none; overflow: hidden; }
+.window.sized > .body,
+.window.sized > .pane,
+.window.sized > .grid,
+.window.sized > .settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.window .grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  z-index: 4;
+  background: linear-gradient(135deg, transparent 45%,
+                              var(--chrome-dark) 45%, var(--chrome-dark) 55%,
+                              transparent 55%, transparent 70%,
+                              var(--chrome-dark) 70%, var(--chrome-dark) 80%,
+                              transparent 80%);
+}
+
+/* Moved windows: out of the row, at the place they were dropped. */
+.window.floating {
+  position: absolute;
+  margin: 0;
+}
+.window.dragging {
+  /* No text selection and no hover work while a window is in flight. */
+  user-select: none;
+  cursor: move;
+  opacity: .96;
+}
+
 .titlebar {
+  cursor: move;
+  user-select: none;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -126,6 +172,8 @@ body {
   letter-spacing: .5px;
 }
 .window.mode-market .titlebar .mode-badge { background: var(--ask); }
+.titlebar button,
+.titlebar select { cursor: default; }
 .winbtn {
   background: var(--chrome);
   border: 1px solid #666;
@@ -623,6 +671,12 @@ table.checks td.status {
   text-align: center;
 }
 table.checks td.what { width: 190px; font-weight: 600; }
+/* The Pairs table's own verdict column: is this ladder actually
+ * quoting, or only saved? */
+td.pair-status { max-width: 320px; font-weight: 600; }
+td.pair-status.c-pass { color: #1b6b32; }
+td.pair-status.c-fail { color: var(--ask); font-weight: 400; }
+td.pair-status.c-info { color: var(--muted); font-weight: 400; }
 tr.c-pass td.status { color: #1b6b32; }
 tr.c-warn td.status { color: #b8860b; }
 tr.c-fail td.status { color: var(--ask); }

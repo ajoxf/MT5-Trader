@@ -42,6 +42,9 @@
     // The slippage report, over the session that is actually running.
     // Same treatment as the journal: recorded, not live, so it is read
     // on its own slow clock.
+    // The coordinator's own publish clock, from the last snapshot: the
+    // panels are redrawn when this MOVES, not on every poll.
+    lastAt: null,
     slippage: null,
     slippageAt: 0,
     slippageAll: false
@@ -148,6 +151,237 @@
   function closePanel(id) {
     state.open = state.open.filter(function (other) { return other !== id; });
     render();
+  }
+
+  function panelIdOf(node) {
+    /* Which panel a window element IS. One definition, because three
+     * copies of this drifting apart is how a window ends up impossible
+     * to close, focus or move. */
+    if (!node) { return null; }
+    return node.classList.contains('market-grid') ? panelId('grid')
+      : node.classList.contains('monitor') ? panelId('monitor')
+        : node.classList.contains('settings') ? panelId('settings')
+          : panelId('ladder', node.dataset.pair);
+  }
+
+  // -- moving the windows ------------------------------------------------
+  //
+  // Drag a title bar and the window goes where it is put, over the
+  // others, and stays there across a reload. Two rules the reference
+  // screen has and this needs for the same reason:
+  //
+  //   - A window can NEVER be dropped where it cannot be got back. The
+  //     title bar is kept on screen at both edges, so there is always
+  //     something left to grab.
+  //   - Dragging is not clicking. A drag that started on a title bar
+  //     never reaches the ladder underneath, and the ladder is where a
+  //     click places an order.
+  //
+  // The layout is per browser, in localStorage: it is a preference
+  // about this screen, not state the engine should ever be asked about.
+
+  var LAYOUT_KEY = 'mt5trader.windows.v1';
+  //: How much of a window must stay on the desktop, in pixels.
+  var KEEP_VISIBLE_PX = 90;
+  var layout = readLayout();
+  var topZ = 10;
+
+  function readLayout() {
+    try {
+      return JSON.parse(window.localStorage.getItem(LAYOUT_KEY) || '{}') || {};
+    } catch (e) {
+      return {};                     // private mode, or a corrupt value
+    }
+  }
+
+  function writeLayout() {
+    try {
+      window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+    } catch (e) {
+      // A layout that cannot be saved is a layout that does not survive
+      // a reload. Nothing else about the screen depends on it.
+    }
+  }
+
+  function desktopBox() {
+    return el('desktop').getBoundingClientRect();
+  }
+
+  function clampTo(node, left, top) {
+    var desktop = desktopBox();
+    var width = node.offsetWidth || 200;
+    return {
+      left: Math.min(Math.max(left, KEEP_VISIBLE_PX - width),
+                     Math.max(desktop.width - KEEP_VISIBLE_PX, 0)),
+      // Never above the desktop: a title bar under the banner cannot be
+      // grabbed at all.
+      top: Math.min(Math.max(top, 0),
+                    Math.max(desktop.height - 24, 0))
+    };
+  }
+
+  function place(node, left, top) {
+    var at = clampTo(node, left, top);
+    node.classList.add('floating');
+    node.style.left = at.left + 'px';
+    node.style.top = at.top + 'px';
+    return at;
+  }
+
+  function ensureGrip(node) {
+    /* The corner every window is resized by. Added here rather than in
+     * the template because the monitor, the grid and the settings page
+     * build their own markup — one grip, added the same way to all of
+     * them, is one behaviour to get right. */
+    if (node.querySelector(':scope > .grip')) { return; }
+    var grip = document.createElement('div');
+    grip.className = 'grip';
+    grip.title = 'Drag to resize this window';
+    node.appendChild(grip);
+  }
+
+  function size(node, width, height) {
+    var desktop = desktopBox();
+    var w = Math.max(240, Math.min(width, desktop.width));
+    var h = Math.max(120, Math.min(height, desktop.height));
+    node.classList.add('sized');
+    node.style.width = w + 'px';
+    node.style.height = h + 'px';
+    return {w: w, h: h};
+  }
+
+  function applyLayout(node) {
+    /* Put a window back where it was left. Called for every window on
+     * every render, because panels are created lazily — the monitor
+     * opened an hour later must still come back to its own corner. */
+    var id = panelIdOf(node);
+    var saved = layout[id];
+    if (!saved) { return; }
+    if (saved.w && saved.h) { size(node, saved.w, saved.h); }
+    if (saved.left === undefined) { return; }   // resized, never moved
+    var at = place(node, saved.left, saved.top);
+    node.style.zIndex = saved.z || 10;
+    topZ = Math.max(topZ, saved.z || 10);
+    // Clamped on the way in as well as on the way out: a layout saved
+    // on a big monitor must not hide a window on a laptop.
+    if (at.left !== saved.left || at.top !== saved.top) {
+      layout[id] = {left: at.left, top: at.top, z: saved.z || 10};
+      writeLayout();
+    }
+  }
+
+  function raise(node) {
+    var id = panelIdOf(node);
+    if (!layout[id] || layout[id].left === undefined) {
+      return;                           // still in the row; nothing to raise
+    }
+    topZ += 1;
+    node.style.zIndex = topZ;
+    layout[id].z = topZ;
+    writeLayout();
+  }
+
+  function tidyWindows() {
+    /* Everything back to the row it started in. The way out of a mess,
+     * and the way back from a window dragged somewhere useless. */
+    layout = {};
+    writeLayout();
+    Array.prototype.forEach.call(document.querySelectorAll('.window'),
+      function (node) {
+        node.classList.remove('floating', 'sized');
+        node.style.left = node.style.top = node.style.zIndex = '';
+        node.style.width = node.style.height = '';
+      });
+  }
+
+  function startDrag(e) {
+    if (e.button !== 0) { return; }
+    var node = e.target.closest('.window');
+    if (!node) { return; }
+    if (e.target.closest('.grip')) { return startResize(e, node); }
+    var bar = e.target.closest('.titlebar');
+    if (!bar) { return; }
+    // The buttons and selects that live IN the title bar keep working.
+    if (e.target.closest('button, select, input, a')) { return; }
+
+    var box = node.getBoundingClientRect();
+    var desktop = desktopBox();
+    var grabX = e.clientX - box.left;
+    var grabY = e.clientY - box.top;
+    var startX = e.clientX;
+    var startY = e.clientY;
+    var moved = false;
+    state.active = panelIdOf(node);
+
+    function move(event) {
+      if (!moved) {
+        // A CLICK on a title bar must not rearrange the desk: the
+        // window only leaves the row once the pointer has actually
+        // travelled. Pinned first at exactly where it already is, so
+        // it does not jump out from under the cursor.
+        if (Math.abs(event.clientX - startX) < 4 &&
+            Math.abs(event.clientY - startY) < 4) { return; }
+        moved = true;
+        node.classList.add('dragging');
+        layout[panelIdOf(node)] = Object.assign(
+          {}, layout[panelIdOf(node)],
+          {left: box.left - desktop.left, top: box.top - desktop.top,
+           z: topZ + 1});
+        place(node, box.left - desktop.left, box.top - desktop.top);
+        raise(node);
+      }
+      var frame = desktopBox();
+      var at = place(node, event.clientX - grabX - frame.left,
+                     event.clientY - grabY - frame.top);
+      layout[panelIdOf(node)].left = at.left;
+      layout[panelIdOf(node)].top = at.top;
+    }
+
+    function drop() {
+      node.classList.remove('dragging');
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', drop);
+      if (moved) {
+        writeLayout();
+        render();
+      }
+    }
+
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', drop);
+    // The drag has the pointer now: the ladder underneath must not also
+    // see this as a click.
+    e.preventDefault();
+  }
+
+  function startResize(e, node) {
+    /* Windows are freely expandable, in both directions, from the
+     * corner. The ladder gets longer — more price rows on screen at
+     * once, which is the whole point of a ladder — and the monitor and
+     * the grid get wider without a horizontal scrollbar. */
+    var box = node.getBoundingClientRect();
+    var startX = e.clientX;
+    var startY = e.clientY;
+    var id = panelIdOf(node);
+    node.classList.add('dragging');
+
+    function move(event) {
+      var to = size(node, box.width + (event.clientX - startX),
+                    box.height + (event.clientY - startY));
+      layout[id] = Object.assign({}, layout[id], {w: to.w, h: to.h});
+    }
+
+    function drop() {
+      node.classList.remove('dragging');
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', drop);
+      writeLayout();
+      render();
+    }
+
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', drop);
+    e.preventDefault();
   }
 
   // -- the ladder ------------------------------------------------------
@@ -1207,9 +1441,13 @@
 
   // -- the whole screen ---------------------------------------------------
 
-  function render() {
+  function renderStatusLine() {
+    /* The two things that change on every poll whether or not the
+     * coordinator published anything: whether it is alive, and how old
+     * its last snapshot is. Cheap, and separate from the panels, so a
+     * stalled engine does not cost a full redraw three times a second
+     * — which is exactly when the screen must stay responsive. */
     var snapshot = state.snapshot;
-    prunePending();
     var banner = el('engine-banner');
     if (snapshot.engine && snapshot.engine !== 'up') {
       banner.textContent = snapshot.engine_note;
@@ -1217,6 +1455,17 @@
     } else {
       banner.classList.add('hidden');
     }
+    var loop = snapshot.loop_interval_sec;
+    el('loop-stat').textContent = loop
+      ? 'loop ' + (loop * 1000).toFixed(0) + 'ms · snapshot ' +
+        ((snapshot.status_age_sec || 0) * 1000).toFixed(0) + 'ms old'
+      : DASH;
+  }
+
+  function render() {
+    var snapshot = state.snapshot;
+    prunePending();
+    renderStatusLine();
 
     renderNaked();
     renderUnclaimed();
@@ -1236,19 +1485,15 @@
     // Remove the panels that are no longer open.
     Array.prototype.forEach.call(document.querySelectorAll('.window'),
       function (node) {
-        var id = node.classList.contains('market-grid') ? panelId('grid')
-          : node.classList.contains('monitor') ? panelId('monitor')
-            : node.classList.contains('settings') ? panelId('settings')
-              : panelId('ladder', node.dataset.pair);
-        if (!wanted[id]) { node.remove(); }
+        if (!wanted[panelIdOf(node)]) { node.remove(); return; }
+        // Where it was left, and the size it was left at, every render:
+        // panels are created lazily, and one opened later must still
+        // come back to its own corner.
+        ensureGrip(node);
+        applyLayout(node);
       });
 
     renderTabs();
-    var loop = snapshot.loop_interval_sec;
-    el('loop-stat').textContent = loop
-      ? 'loop ' + (loop * 1000).toFixed(0) + 'ms · snapshot ' +
-        ((snapshot.status_age_sec || 0) * 1000).toFixed(0) + 'ms old'
-      : DASH;
   }
 
   function renderUnclaimed() {
@@ -1412,7 +1657,19 @@
           state.open.push(panelId('monitor'));
           state.active = state.open[0];
         }
-        render();
+        // Redraw the PANELS only when the coordinator has actually
+        // published something new. `at` is its own publish clock, so a
+        // stalled or restarting engine — the state this screen is in
+        // exactly when the operator is trying to fix it — costs one
+        // banner update per poll instead of a full redraw of every
+        // ladder, the grid and the monitor.
+        var published = snapshot.at !== state.lastAt;
+        state.lastAt = snapshot.at;
+        if (published || state.pending.length) {
+          render();
+        } else {
+          renderStatusLine();
+        }
       })
       .catch(function (error) {
         el('engine-banner').textContent =
@@ -1469,11 +1726,14 @@
     window.addEventListener('click', function (e) {
       var window_ = e.target.closest('.window');
       if (!window_) { return; }
-      state.active = window_.classList.contains('market-grid') ? panelId('grid')
-        : window_.classList.contains('monitor') ? panelId('monitor')
-          : window_.classList.contains('settings') ? panelId('settings')
-            : panelId('ladder', window_.dataset.pair);
+      state.active = panelIdOf(window_);
+      raise(window_);
     });
+    // Delegated, on the desktop rather than on each window: panels come
+    // and go, and a listener per window is a listener per window to
+    // forget.
+    el('desktop').addEventListener('pointerdown', startDrag);
+    el('tidy').addEventListener('click', tidyWindows);
     poll();
     window.setInterval(poll, REFRESH_MS);
   }
@@ -1490,6 +1750,7 @@
   window.MT5Trader = {
     state: state, render: render, toast: toast, ask: ask, send: send,
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
-    fmt: fmt, money: money, DASH: DASH
+    fmt: fmt, money: money, DASH: DASH,
+    tidyWindows: tidyWindows
   };
 })();
