@@ -205,6 +205,36 @@ class BrokerSession:
                 break
         return found
 
+    def session_stats(self, symbol):
+        """This symbol's own session O/H/L and volume, as the TERMINAL
+        reports them.
+
+        Read defensively with getattr: brokers fill in different subsets
+        of these fields, and a missing one must come back as None rather
+        than as a zero that would be drawn as a real high of 0.00.
+        """
+        if mt5 is None:
+            return None
+        info = self.ensure_symbol(symbol)
+        if info is None:
+            return None
+
+        def value(*names):
+            for name in names:
+                found = getattr(info, name, None)
+                if found not in (None, 0.0, 0):
+                    return float(found)
+            return None
+
+        return {
+            'symbol': symbol,
+            'open': value('session_open'),
+            'high': value('session_high', 'bidhigh'),
+            'low': value('session_low', 'bidlow'),
+            # Tick volume, which is what MT5 has for most instruments.
+            'volume': value('session_volume', 'volume'),
+        }
+
     def symbol_report(self, symbol):
         """Everything the connectivity checklist needs about one symbol
         on this account: does it exist, is it in Market Watch, is it

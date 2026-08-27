@@ -36,6 +36,9 @@ class FakeSymbol:
         self.tick_size = tick_size
         self.trade_allowed = trade_allowed
         self.time = 1_700_000_000
+        #: {'open','high','low','volume'} when this broker publishes a
+        #: session for the symbol, None when it does not.
+        self.session = None
 
     def quote(self, bid, ask):
         self.bid, self.ask = bid, ask
@@ -45,8 +48,13 @@ class FakeSymbol:
 class FakeBroker:
     """One account's book, in memory."""
 
-    def __init__(self, name='fake', symbols=None, timeline=None):
+    def __init__(self, name='fake', symbols=None, timeline=None, login=None):
         self.account = SimpleNamespace(name=name)
+        #: One MT5 login per broker, DIFFERENT per account by default —
+        #: two legs reporting the same login is a real fault (both
+        #: runners attached to one terminal), and a fixture that always
+        #: modelled it would make the test for it pass on anything.
+        self.login = login or (100000 + (abs(hash(name)) % 8999))
         self.symbols = {s.name: s for s in (symbols or [])}
         #: ticket -> position dict. Hedging mode: one per fill.
         self.positions = {}
@@ -106,7 +114,7 @@ class FakeBroker:
 
     def account_info(self):
         return SimpleNamespace(
-            login=12345, server='FakeServer', name=self.account.name,
+            login=self.login, server='FakeServer', name=self.account.name,
             currency='USD', leverage=100, balance=100_000.0,
             equity=100_000.0, margin=0.0, margin_free=100_000.0,
             margin_level=None, margin_so_call=50.0, margin_so_so=30.0,
@@ -114,6 +122,18 @@ class FakeBroker:
 
     def ensure_symbol(self, symbol):
         return self.symbols.get(symbol)
+
+    def session_stats(self, symbol):
+        """What the terminal publishes for this symbol's own session.
+
+        None when the broker publishes nothing, which is the case the
+        ladder has to fall back from — several brokers fill in no
+        session fields at all for CFDs.
+        """
+        info = self.symbols.get(symbol)
+        if info is None or getattr(info, 'session', None) is None:
+            return None
+        return dict(info.session, symbol=symbol)
 
     def symbol_info(self, symbol):
         return self.symbols.get(symbol)
@@ -157,7 +177,7 @@ class FakeBroker:
     def terminal_report(self):
         return {'library': True, 'terminal': True, 'logged_in': True,
                 'algo_trading': True, 'hedging': True,
-                'login': 12345, 'server': 'FakeServer'}
+                'login': self.login, 'server': 'FakeServer'}
 
     def verify_ticket(self, ticket, attempts=3, delay=0.0):
         position = self.positions.get(int(ticket))

@@ -178,7 +178,8 @@ class PairConfig:
                  default_quantity=1.0, order_type=OrderType.LIMIT.value,
                  time_in_force=TimeInForce.DAY.value,
                  overnight=OvernightMode.ALLOW.value,
-                 quoting_leg=None, enabled=True, rows=30):
+                 quoting_leg=None, enabled=True, rows=30,
+                 expiry=None, swap_per_day=None):
         self.key = key
         self.name = name or key
         self.leg_a = dict(leg_a or {})      # {'account': ..., 'symbol': ...}
@@ -203,6 +204,14 @@ class PairConfig:
         self.quoting_leg = quoting_leg
         self.enabled = bool(enabled)
         self.rows = int(rows)
+        #: The futures leg's expiry, and what carrying one spread for
+        #: one day is worth at THIS broker on THIS account, in spread
+        #: points. Neither is derivable from the price feed, and both
+        #: are what turn a basis into a fair value rather than a number
+        #: that happens to oscillate. Unset = no fair value shown.
+        self.expiry = expiry
+        self.swap_per_day = (None if swap_per_day in (None, '')
+                             else float(swap_per_day))
         #: Cached MT5 metadata per leg, refreshed by the coordinator.
         self.meta_a = {}
         self.meta_b = {}
@@ -253,6 +262,7 @@ class PairConfig:
             'overnight': self.overnight.value,
             'quoting_leg': self.quoting_leg,
             'enabled': self.enabled, 'rows': self.rows,
+            'expiry': self.expiry, 'swap_per_day': self.swap_per_day,
         }
 
     @classmethod

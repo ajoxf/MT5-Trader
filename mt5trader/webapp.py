@@ -832,7 +832,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         for field in ('name', 'leg_a', 'leg_b', 'pair_type', 'hedge_ratio',
                       'increment', 'default_quantity', 'order_type',
                       'time_in_force', 'overnight', 'quoting_leg', 'enabled',
-                      'rows', 'clip_lots_a', 'clip_lots_b'):
+                      'rows', 'clip_lots_a', 'clip_lots_b',
+                      'expiry', 'swap_per_day'):
             if field in payload:
                 pair[field] = payload[field]
         if 'hedge_ratio' in payload:

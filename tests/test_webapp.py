@@ -246,10 +246,18 @@ def test_the_inside_market_rule_is_drawn_crisply():
 
 def test_market_mode_changes_the_click_columns():
     """The expensive misclick on any ladder is a market order the trader
-    thought was a working order."""
+    thought was a working order.
+
+    Marked only where it is TRUE, though: a market order crosses at the
+    touch, and a click ten rows away rests instead. So the two touch
+    rows carry the M cursor and the yellow rule, and the rest of the
+    ladder carries the resting cursor rather than a promise to cross.
+    """
     css = (STATIC / 'ladder.css').read_text(encoding='utf-8')
     assert '.window.mode-market td.bid' in css
-    assert 'cursor: crosshair' in css
+    assert '.window.mode-market tr.in-bid td.bid' in css
+    assert "font-size='15' font-weight='700'" in css      # the M cursor
+    assert 'cursor: cell' in css                          # away = rests
 
 
 # -- the settings endpoints: they must work with the ENGINE down --------

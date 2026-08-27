@@ -18,8 +18,9 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime
 
-from . import hedgeratio, sizing
+from . import fairvalue, hedgeratio, sizing
 from .book import Book
 from .database import Store
 from .executor import PairExecutor, mark_position
@@ -73,6 +74,8 @@ class Coordinator:
         self.market = {}                    # pair key -> snapshot
         self.session = {}                   # pair key -> O/H/L/V of OUR series
         self._account_cache = {}            # account -> (at, info)
+        #: (account, symbol) -> (at, the leg's own session figures)
+        self._session_cache = {}
         self._loop_interval = None
         self._last_poll = None
         self._stop = threading.Event()
@@ -334,7 +337,7 @@ class Coordinator:
             # The badge the ladder shows continuously, so a trader can
             # see what they are clicking into (spec §8).
             md['feed_badge'] = _badge(md, stale, jumped)
-            self._observe_session(key, md)
+            self._observe_session(key, md, pair)
             self.market[key] = md
             # LIMIT-mode orders are worked on the SAME pass that priced
             # them: a peg re-priced off a snapshot older than the one on
@@ -363,12 +366,38 @@ class Coordinator:
                 ticks[(account, symbol)] = tick
         return ticks
 
-    def _observe_session(self, key, md):
-        """O/H/L/V of OUR OWN series, since this process started.
+    def leg_session(self, account, symbol):
+        """One leg's own session O/H/L/V, cached: it is an IPC round
+        trip for numbers that move slowly, and the ladder polls three
+        times a second."""
+        ttl = float(self.config.get('SESSION_STATS_TTL_SEC', 2.0))
+        now = self.clock()
+        cached = self._session_cache.get((account, symbol))
+        if cached and now - cached[0] < ttl:
+            return cached[1]
+        leg = self.legs.get(account)
+        stats = None
+        if leg is not None and symbol:
+            try:
+                stats = leg.session_stats(symbol)
+            except Exception:                 # a leg mid-restart
+                stats = None
+        self._session_cache[(account, symbol)] = (now, stats)
+        return stats
 
-        MT5 has no session statistics for a spread that does not exist,
-        so these are ours and the UI labels them as ours. A borrowed
-        number here would be read as the exchange's.
+    def _observe_session(self, key, md, pair=None):
+        """The session line above the ladder.
+
+        Taken from the two LEGS' own session figures where the terminals
+        publish them — H is `high B - beta x high A`, the same
+        convention as every other price on this screen — and from our
+        own mid series where they do not. Which of the two it is, is
+        said on the strip: a borrowed number read as the exchange's is
+        how a spread gets judged against a range nobody traded.
+
+        Volume stays PER LEG, never added: one lot of gold and one lot
+        of the future are not two lots of anything, and a combined
+        figure would be a number with no unit.
         """
         spread = md.get('spread')
         session = self.session.get(key)
@@ -380,7 +409,36 @@ class Coordinator:
         session['low'] = min(session['low'], spread)
         session['volume'] = sum(p['quantity']
                                 for p in self.book.prints.get(key, ()))
-        md['session'] = dict(session)
+        published = dict(session)
+
+        if pair is not None:
+            beta = float(pair.hedge_ratio or 1.0)
+            stats_a = self.leg_session(pair.account_a, pair.symbol_a) or {}
+            stats_b = self.leg_session(pair.account_b, pair.symbol_b) or {}
+
+            def combined(field):
+                first, second = stats_a.get(field), stats_b.get(field)
+                if first is None or second is None:
+                    return None
+                return second - beta * first
+
+            legs_high = combined('high')
+            legs_low = combined('low')
+            legs_open = combined('open')
+            if legs_high is not None or legs_low is not None:
+                published.update({
+                    'high': legs_high, 'low': legs_low,
+                    'open': legs_open if legs_open is not None
+                    else session['open'],
+                    'ours': False,
+                })
+            published['volume_a'] = stats_a.get('volume')
+            published['volume_b'] = stats_b.get('volume')
+            published['legs'] = {'a': stats_a or None, 'b': stats_b or None}
+
+        md['session'] = published
+        # Net change is always against OUR open — the one the trader has
+        # been watching this process quote.
         md['net_change'] = (spread - session['open']
                             if session['open'] is not None else None)
 
@@ -405,6 +463,21 @@ class Coordinator:
         pair = self.config.pairs.get(pair_key)
         if pair is None:
             return {'ok': False, 'reason': f'no pair {pair_key}'}
+        shared = self.legs_share_an_account(pair)
+        if shared:
+            # Not a hedge at all: both orders would land on ONE account.
+            # Refused before anything is sent, and named — this is the
+            # fault that looks perfectly normal on the screen.
+            return {'ok': False, 'refused': True,
+                    'reason': (
+                        f"'{pair.account_a}' and '{pair.account_b}' are "
+                        f"configured as two accounts but are BOTH attached "
+                        f"to MT5 login #{shared}. If they are meant to be "
+                        f"two terminals, give each one its own "
+                        f"terminal_path on the Exchanges page. If this pair "
+                        f"really is one account trading both legs, point "
+                        f"both legs at the same account there — that is "
+                        f"supported, and margin is then one pool.")}
         md = self.market.get(pair_key)
         quantity = pair.default_quantity if quantity is None else quantity
 
@@ -669,12 +742,46 @@ class Coordinator:
         return {
             'accounts': rows,
             'warn_level': warn_at,
+            # TWO LEGS, ONE ACCOUNT. Two runners can both attach to the
+            # same running terminal — a blank terminal path on both, or
+            # one terminal open — and then every "hedge" is two orders
+            # on one account: no spread, twice the exposure, and a
+            # screen that looks perfectly normal. The logins are read
+            # from the terminals themselves, so this catches it however
+            # the config was written.
+            'same_login': _same_login(rows),
             # The weakest account governs. Named, not averaged.
             'weakest': weakest['account'] if weakest else None,
             'weakest_level': weakest['margin_level'] if weakest else None,
             'unknown': [name for name, row in rows.items()
                         if not row['known']],
         }
+
+    def legs_share_an_account(self, pair):
+        """Two SEPARATE accounts that turned out to be one terminal.
+
+        One account carrying both legs is perfectly ordinary — spot
+        silver and the silver future at the same broker is a spread, and
+        a hedging account holds both sides at once. That case is
+        configured deliberately, by pointing both legs at the SAME
+        account, and it trades here like any other.
+
+        What this catches is the other thing, which looks identical on
+        the screen and is not the same at all: two accounts configured
+        as two, both attaching to one running terminal — a blank
+        terminal path on both is enough. Then the config says "hedged
+        across two brokers" while every order lands on one login, the
+        margin is one pool nobody is watching, and two runners are
+        fighting over one terminal. Entries are refused on that; closes
+        and cancels are never touched.
+        """
+        if pair.account_a == pair.account_b:
+            return None                      # deliberate, and supported
+        first = (self.account_info(pair.account_a) or {}).get('login')
+        second = (self.account_info(pair.account_b) or {}).get('login')
+        if first and second and first == second:
+            return first
+        return None
 
     def broker_offset(self):
         """Seconds the BROKER's clock runs ahead of this machine's.
@@ -775,6 +882,13 @@ class Coordinator:
                 'market': md,
                 'short_spread': (md or {}).get('short_spread'),
                 'long_spread': (md or {}).get('long_spread'),
+                # What the CARRY says this spread should be, from the
+                # two things only the trader knows: the futures leg's
+                # expiry and the swap per day at their broker.
+                'fair': fairvalue.describe((md or {}).get('spread'),
+                                           pair.swap_per_day, pair.expiry,
+                                           self.session_clock.broker_now()
+                                           or datetime.now()),
                 'errors': self.errors.get(key) or [],
                 # The rows the ladder draws come from HERE, so the Work
                 # column, the click that places an order and the price
@@ -1063,6 +1177,16 @@ def _badge(md, stale, jumped):
 MAX_LADDER_ROWS = 400
 
 
+def _same_login(rows):
+    """Which MT5 logins are being reported by more than one account."""
+    seen = {}
+    for name, row in rows.items():
+        login = row.get('login')
+        if login:
+            seen.setdefault(str(login), []).append(name)
+    return {login: names for login, names in seen.items() if len(names) > 1}
+
+
 def ladder_rows(pair, md, book, rows=None):
     """The rows the ladder draws: the spread +/- N increments.
 
@@ -1110,6 +1234,11 @@ def ladder_rows(pair, md, book, rows=None):
             # between (spec §3.3).
             'is_best_bid': _at(level, md['short_spread'], increment),
             'is_best_ask': _at(level, md['long_spread'], increment),
+            # The MID of the book — the row the ladder centres on, and
+            # the one carrying the heavy rule. On a wide spread the two
+            # touches can be many rows apart, and "where the market is"
+            # is then a question the inside rule alone cannot answer.
+            'is_mid': _at(level, md.get('spread'), increment),
         })
     return out
 

@@ -27,7 +27,8 @@ def test_the_ladder_and_the_grid_read_one_snapshot(config, pair, legs,
     assert row['short_spread'] < row['market']['spread'] < row['long_spread']
     assert row['increment'] == pytest.approx(0.01)
     assert row['spread_units'] == pytest.approx(10.0)
-    assert published['accounts']['acct_a']['login'] == 12345
+    assert published['accounts']['acct_a']['login'] == \
+        legs['acct_a'].broker.login
 
 
 def test_account_info_is_cached_not_polled(config, legs):
@@ -204,3 +205,40 @@ def test_the_session_stats_are_ours_and_say_so(config, pair, legs):
     assert md['session']['high'] > md['session']['open']
     assert md['net_change'] == pytest.approx(md['spread']
                                              - md['session']['open'])
+
+
+def test_the_session_line_is_the_two_legs_own_high_and_low(config, pair,
+                                                            legs):
+    """H and L are `high B − β × high A`, the same convention as every
+    other price on this screen, taken from what the two terminals
+    publish. Volume stays PER LEG: one lot of the spot and one of the
+    future are not two lots of anything."""
+    legs['acct_a'].broker.symbols[pair.symbol_a].session = {
+        'open': 4290.0, 'high': 4300.0, 'low': 4280.0, 'volume': 1200}
+    legs['acct_b'].broker.symbols[pair.symbol_b].session = {
+        'open': 4350.0, 'high': 4364.0, 'low': 4331.0, 'volume': 900}
+    coordinator = Coordinator(config, legs)
+
+    coordinator.poll_once()
+    session = coordinator.market[pair.key]['session']
+
+    assert session['high'] == pytest.approx(64.0)      # 4364 − 1.0 × 4300
+    assert session['low'] == pytest.approx(51.0)
+    assert session['open'] == pytest.approx(60.0)
+    assert session['volume_a'] == 1200 and session['volume_b'] == 900
+    assert session['ours'] is False                    # the LEGS', not ours
+
+
+def test_where_the_broker_publishes_no_session_ours_is_used_and_labelled(
+        config, pair, legs):
+    """The control. Several brokers publish no session fields at all for
+    a CFD, and a screen that then showed nothing would be worse than one
+    showing its own series — as long as it says which it is."""
+    coordinator = Coordinator(config, legs)
+
+    coordinator.poll_once()
+    session = coordinator.market[pair.key]['session']
+
+    assert session['ours'] is True
+    assert session['high'] is not None
+    assert session['volume_a'] is None and session['volume_b'] is None

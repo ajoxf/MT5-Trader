@@ -256,24 +256,45 @@ body {
   padding: 1px 2px;
 }
 .rail .check { font-size: 10px; color: var(--frame-text); }
+.rail .fair {
+  margin-top: 4px;
+  padding: 3px;
+  background: var(--frame-dark);
+  border: 1px solid var(--frame-line);
+}
+.rail .fair-value {
+  display: block;
+  font: 700 13px var(--mono);
+  color: var(--frame-text);
+}
+.rail .fair-gap { font: 700 11px var(--mono); }
+.rail .fair-gap.up { color: #69db7c; }
+.rail .fair-gap.down { color: #ff8787; }
+.rail .fair-note { font-size: 9px; color: var(--frame-muted); }
 .rail-label { font-size: 10px; color: var(--frame-muted); margin-top: 4px; }
 .rail .armed {
+  width: 100%;
   font-family: var(--mono);
+  font-size: 13px;
   text-align: center;
   background: #fff;
   border: 1px solid var(--grid-line);
   padding: 2px 0;
 }
 /* Armed is a DIFFERENT state from the ladder's default size, and one
- * click sends it — so it does not look the same. */
+ * click sends it — so it does not look the same. Teal rather than
+ * yellow: yellow is the MARKET-mode mark on the touch rows, and two
+ * different meanings in one colour is one meaning nobody reads. */
 .rail .armed.on {
-  background: #ffd43b;
-  border-color: #b8860b;
+  background: #0c8599;
+  border-color: #095c6b;
+  color: #fff;
   font-weight: 700;
 }
 .keypad button.on {
-  background: #ffd43b;
-  border-color: #b8860b;
+  background: #0c8599;
+  border-color: #095c6b;
+  color: #fff;
   font-weight: 700;
 }
 
@@ -335,6 +356,13 @@ body {
 /* The count of orders the button would pull — how the trader knows it
  * will do something before pressing it. */
 .cxl sup { font-size: 9px; margin-left: 2px; }
+/* A button with nothing to cancel is not a button. Dead on purpose, and
+ * visibly so — the alternative is three controls that look broken. */
+.cxl:disabled {
+  opacity: .45;
+  cursor: default;
+  filter: grayscale(1);
+}
 
 /* -- the ladder grid ------------------------------------------------ */
 
@@ -388,6 +416,16 @@ td.ask.has-qty { background: var(--ask-cell); color: #fff; }
  * ask. Never anti-aliased into a smudge, never between rows. */
 tr.market-line > td { border-top: 2px solid var(--inside); }
 
+/* THE MID. On a wide spread the two touches are many rows apart, and
+ * "where is the market" is then a question the inside rule alone
+ * cannot answer — so the mid, which is also the row the ladder centres
+ * on, carries a heavier rule of its own. */
+tr.mid-line > td {
+  border-top: 3px solid #111;
+  border-bottom: 3px solid #111;
+}
+tr.mid-line > td.price { background: #fff3bf; font-weight: 700; }
+
 td.price {
   text-align: center;
   font-weight: 600;
@@ -423,16 +461,26 @@ tr.flash-sell > td { animation: flash-sell .35s ease-out; }
 td.bid, td.ask { cursor: pointer; }
 tr:hover td.price { outline: 1px solid #333; }
 
-/* MARKET mode is unmistakable: a click here is immediate and
- * irreversible, so the click columns change the moment the selector
- * moves. The expensive misclick is a market order the trader thought
- * was a working order. */
-.window.mode-market td.bid,
-.window.mode-market td.ask {
-  cursor: crosshair;
-  box-shadow: inset 0 0 0 1px #ffd43b;
+/* MARKET mode is unmistakable — but only where it is TRUE. A market
+ * order crosses at the touch; a click ten rows away cannot cross at any
+ * price and rests as a working order instead. Tinting the whole ladder
+ * said the opposite: that every row was a market click. So only the two
+ * touch rows are marked, and the cursor carries an M wherever a click
+ * would cross now. */
+.window.mode-market tr.in-bid td.bid,
+.window.mode-market tr.in-ask td.ask {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><text x='2' y='17' font-family='Segoe UI,sans-serif' font-size='15' font-weight='700' fill='%23111' stroke='%23fff' stroke-width='0.7'>M</text></svg>") 4 12, crosshair;
 }
-.window.mode-market .grid { background: #fffbe6; }
+.window.mode-market tr.market-line td.bid,
+.window.mode-market tr.market-line td.ask,
+.window.mode-market tr.best-ask td.bid,
+.window.mode-market tr.best-ask td.ask {
+  box-shadow: inset 0 0 0 2px #ffd43b;
+}
+/* Away from the touch a market-mode click RESTS, and the cursor says
+ * so rather than promising a cross. */
+.window.mode-market td.bid,
+.window.mode-market td.ask { cursor: cell; }
 
 .counts {
   position: sticky;
@@ -536,8 +584,8 @@ tr:hover td.price { outline: 1px solid #333; }
   text-align: right;
 }
 .monitor tr.detail td { background: #fafafa; font-size: 10px; }
-.monitor .up { color: var(--traded); }
-.monitor .down { color: var(--down); }
+.monitor .up { color: var(--traded); font-weight: 600; }
+.monitor .down { color: var(--down); font-weight: 600; }
 .monitor .note {
   padding: 4px 6px;
   background: #fff9db;

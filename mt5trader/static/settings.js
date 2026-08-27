@@ -404,10 +404,31 @@
   }
 
   function legText(leg) {
+    /* The symbol, and the ACCOUNT it trades on — by name, MT5 login and
+     * server. Two accounts is the whole architecture of this thing, and
+     * which login a leg is actually on is the first question anyone
+     * asks of a spread that has gone wrong. Reading it off the account
+     * row instead of the pair row means holding two tables in your head
+     * at once.
+     */
     leg = leg || {};
     if (!leg.account && !leg.symbol) { return DASH; }
-    return escape(leg.symbol) + '<div class="hint">on ' +
-      escape(leg.account) + '</div>';
+    var account = null;
+    (local.accounts || []).forEach(function (row) {
+      if (row.name === leg.account) { account = row; }
+    });
+    var detail = escape(leg.account || '?');
+    if (account && account.login) { detail += ' · #' + escape(account.login); }
+    if (account && account.server) {
+      detail += ' · ' + escape(account.server);
+    }
+    if (!account) {
+      // A leg pointing at an account that is no longer configured is a
+      // pair that cannot trade, and it says so here rather than at the
+      // first click.
+      detail += ' — no such account';
+    }
+    return escape(leg.symbol) + '<div class="hint">on ' + detail + '</div>';
   }
 
   function pairForm() {
@@ -454,6 +475,22 @@
                       derived.suggested_beta + '">use ' +
                       derived.suggested_beta + '</button></div>'
                     : ''));
+    html += field('Futures expiry',
+                  '<input class="p-expiry" type="date" value="' +
+                  escape(draft.expiry || '') + '">' +
+                  '<div class="hint">The futures leg\'s last trading ' +
+                  'day. With the swap below it gives the FAIR spread: a ' +
+                  'basis converges to zero at expiry, and until then it ' +
+                  'is worth its carry.</div>');
+    html += field('Swap per day',
+                  '<input class="p-swap" type="number" step="0.000001" ' +
+                  'value="' + escape(draft.swap_per_day) + '" ' +
+                  'placeholder="in spread points, signed">' +
+                  '<div class="hint">What carrying ONE spread for one ' +
+                  'day is worth at your broker, on your account, in ' +
+                  'spread points — the swap MT5 actually charges you, ' +
+                  'not a textbook rate. Signed the way the spread is ' +
+                  '(B − β × A).</div>');
     html += field('Increment',
                   '<input class="p-increment" type="number" step="0.000001" ' +
                   'value="' + escape(draft.increment) +
@@ -615,7 +652,9 @@
         leg_a_account: (pair.leg_a || {}).account,
         leg_a_symbol: (pair.leg_a || {}).symbol,
         leg_b_account: (pair.leg_b || {}).account,
-        leg_b_symbol: (pair.leg_b || {}).symbol
+        leg_b_symbol: (pair.leg_b || {}).symbol,
+        expiry: pair.expiry || '',
+        swap_per_day: pair.swap_per_day
       };
       local.derived = null;
       local.symbols = {};
@@ -768,7 +807,10 @@
       leg_a_account: value('.p-account-a'),
       leg_a_symbol: value('.p-symbol-a'),
       leg_b_account: value('.p-account-b'),
-      leg_b_symbol: value('.p-symbol-b')
+      leg_b_symbol: value('.p-symbol-b'),
+      expiry: value('.p-expiry') || null,
+      swap_per_day: value('.p-swap') === ''
+        ? null : parseFloat(value('.p-swap'))
     };
   }
 
@@ -802,7 +844,9 @@
       increment: draft.increment,
       default_quantity: draft.default_quantity,
       quoting_leg: draft.quoting_leg || null,
-      enabled: draft.enabled
+      enabled: draft.enabled,
+      expiry: draft.expiry || null,
+      swap_per_day: draft.swap_per_day
     };
   }
 

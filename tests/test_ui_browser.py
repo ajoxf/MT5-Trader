@@ -87,7 +87,10 @@ def snapshot(order_type='LIMIT', confirm=False):
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
         rows.append({'level': level, 'work_buy': None, 'work_sell': None,
-                     'is_best_bid': step == -1, 'is_best_ask': step == 1})
+                     'is_best_bid': step == -1, 'is_best_ask': step == 1,
+                     # The mid, which is where the heavy rule goes and
+                     # what the ladder centres on.
+                     'is_mid': step == 0})
     return {
         'at': time.time(), 'loop_interval_sec': 0.31,
         'confirm_market_clicks': confirm, 'row_height_px': 17,
@@ -274,10 +277,16 @@ def test_a_market_click_fires_on_ONE_click(page):
     page.wait_for_selector('.window.mode-market', timeout=3000)
     # Read in ONE evaluate: the ladder repaints on every publish, and a
     # node resolved in Python can be replaced before the style is read.
-    cursor = page.evaluate(
-        "() => getComputedStyle(document.querySelector("
-        "'.window.mode-market tbody td.bid')).cursor")
-    assert cursor == 'crosshair'
+    # AT THE TOUCH a market click crosses now and the cursor carries an
+    # M; away from it the same click rests, and the cursor says so
+    # instead of promising a cross.
+    cursors = page.evaluate(
+        "() => ({touch: getComputedStyle(document.querySelector("
+        "'.window.mode-market tr.in-bid td.bid')).cursor,"
+        " away: getComputedStyle(document.querySelector("
+        "'.window.mode-market tbody td.bid')).cursor})")
+    assert 'svg+xml' in cursors['touch'] and 'crosshair' in cursors['touch']
+    assert cursors['away'] == 'cell'
 
     before = command_count(page)
     page.locator('.ladder tbody tr td.bid').nth(6).click()
@@ -395,7 +404,7 @@ def test_one_key_is_one_order_too(page):
 
     page.keyboard.press('3')                        # arm 10 spreads
     page.wait_for_timeout(120)
-    assert page.text_content('.ladder .armed') == '10'
+    assert page.input_value('.ladder .armed') == '10'
 
     page.keyboard.press('b')
     page.wait_for_timeout(250)
@@ -412,7 +421,7 @@ def test_one_key_is_one_order_too(page):
     page.wait_for_timeout(120)
     # Never blank: the box says what ONE CLICK sends, which with
     # nothing armed is this ladder's own default size.
-    assert page.text_content('.ladder .armed') == '1'
+    assert page.input_value('.ladder .armed') == '1'
 
 
 def test_x_pulls_this_ladders_orders_and_l_locks_the_scroll(page):
@@ -1190,3 +1199,181 @@ def test_a_window_opened_at_the_end_of_the_row_is_scrolled_into_view(page):
         });
     }""")
     tidy(page)
+
+
+def test_a_pair_row_names_the_account_each_leg_trades_on(page):
+    """Two accounts is the architecture, and which login a leg is on is
+    the first question anyone asks of a spread that has gone wrong."""
+    seed_config(page)
+
+    # Scoped to the settings window: the Market Grid marks its rows
+    # with data-pair too.
+    row = page.locator('.window.settings tr[data-pair] td').nth(2)  # leg A
+
+    assert 'XAUUSD_' in row.text_content()
+    assert 'acct_a' in row.text_content()
+
+
+def test_the_tool_windows_float_over_the_ladders_instead_of_queueing(page):
+    """The Market Grid, Positions and Exchanges are wide and are opened
+    all day. At the end of the desktop row they push every ladder off
+    the screen, and reaching one means scrolling sideways past the
+    lot."""
+    tidy(page)
+    open_ladder(page)
+    page.evaluate("() => window.MT5Trader.openPanel('monitor:')")
+    page.wait_for_selector('.window.monitor', timeout=5000)
+    page.wait_for_timeout(200)
+
+    assert page.locator('.window.monitor.floating').count() == 1
+    inside = page.evaluate("""() => {
+        const box = document.querySelector('.window.monitor')
+            .getBoundingClientRect();
+        const frame = document.getElementById('desktop')
+            .getBoundingClientRect();
+        return box.left >= frame.left - 2 && box.right <= frame.right + 2;
+    }""")
+    assert inside
+    # ...and the ladder is still where it was, in the row behind it.
+    assert page.locator('.window.ladder.floating').count() == 0
+    page.evaluate("() => window.MT5Trader.closePanel('monitor:')")
+    tidy(page)
+
+
+def test_the_journal_colours_what_was_made_and_what_was_lost(page):
+    """A column of black numbers is one nobody reads twice. An OPENING
+    deal books nothing, though, so 0.00 stays black — colouring it green
+    would make every entry look like a winner."""
+    page.evaluate("""() => {
+        window.__realFetch = window.__realFetch || window.fetch;
+        window.fetch = function (url, options) {
+            if (String(url).indexOf('/api/fills') >= 0) {
+                return Promise.resolve(new Response(JSON.stringify({
+                    ok: true,
+                    totals: {fills: 3, volume: 3, commission: -2,
+                             swap: 0, profit: 64.9},
+                    fills: [
+                        {deal_id: '1', account: 'a', symbol: 'X',
+                         side: 'buy', entry: 'close', volume: 1,
+                         price: 10, profit: 81.1, is_ours: 1},
+                        {deal_id: '2', account: 'a', symbol: 'X',
+                         side: 'sell', entry: 'close', volume: 1,
+                         price: 10, profit: -16.2, is_ours: 1},
+                        {deal_id: '3', account: 'a', symbol: 'X',
+                         side: 'buy', entry: 'open', volume: 1,
+                         price: 10, profit: 0.0, is_ours: 1}
+                    ]}), {status: 200,
+                          headers: {'Content-Type': 'application/json'}}));
+            }
+            return window.__realFetch(url, options);
+        };
+        const UI = window.MT5Trader;
+        UI.state.fills = null;
+        UI.state.open = [UI.panelId('monitor')];
+        UI.state.monitorTab = 'fills';
+        UI.render();
+    }""")
+    page.wait_for_function(
+        "() => document.querySelectorAll('.monitor td.up').length > 0",
+        timeout=5000)
+
+    assert page.locator('.monitor td.up').count() == 1        # the winner
+    assert page.locator('.monitor td.down').count() == 1      # the loser
+    made = page.locator('.monitor td.up').first
+    assert made.evaluate('n => getComputedStyle(n).color') == \
+        'rgb(47, 158, 68)'
+    lost = page.locator('.monitor td.down').first
+    assert lost.evaluate('n => getComputedStyle(n).color') == \
+        'rgb(201, 42, 42)'
+    page.evaluate("""() => {
+        window.fetch = window.__realFetch;
+        window.MT5Trader.state.fills = null;
+        window.MT5Trader.state.monitorTab = 'positions';
+    }""")
+
+
+def test_the_armed_size_applies_to_both_sides(page):
+    """One number, both directions: a keypad that armed only the buy
+    side would be a size that means something different depending on
+    which button is pressed."""
+    open_ladder(page)
+    page.click('.ladder .titlebar')
+    page.click('.ladder .keypad button[data-qty="10"]')
+    page.wait_for_timeout(150)
+    assert page.input_value('.ladder .armed') == '10'
+
+    page.click('.ladder .buy-touch')
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload']['quantity'] == 10
+    assert last_command(page)['payload']['side'] == 'BUY'
+
+    page.click('.ladder .sell-touch')
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload']['quantity'] == 10
+    assert last_command(page)['payload']['side'] == 'SELL'
+
+    # Armed is not the ladder's default, so it does not look like it.
+    colour = page.locator('.ladder .armed').evaluate(
+        'n => getComputedStyle(n).backgroundColor')
+    assert colour == 'rgb(12, 133, 153)'
+    page.click('.ladder .keypad button.clr')
+
+
+def test_the_cancel_buttons_are_dead_when_there_is_nothing_to_cancel(page):
+    """Three buttons that look pressable and do nothing are three
+    buttons the trader wonders about while the market moves."""
+    open_ladder(page)
+    # Wait for a render off a fresh snapshot rather than a fixed pause:
+    # the button's state comes from the published working counts.
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .cxl-all')"
+        " && document.querySelector('.ladder .cxl-all').disabled",
+        timeout=5000)
+
+    assert page.locator('.ladder .cxl-all').is_disabled()
+    assert 'Cancel all' in page.text_content('.ladder .cxl-all')
+
+    page.evaluate("""() => {
+        const state = window.MT5Trader.state;
+        state.snapshot.pairs['XAUUSD_|GC1226'].working_buys = 2;
+        window.MT5Trader.render();
+    }""")
+    assert page.locator('.ladder .cxl-b').is_enabled()
+    assert '2' in page.text_content('.ladder .cxl-b')
+
+
+def test_the_mid_carries_a_rule_of_its_own(page):
+    """On a wide spread the two touches are many rows apart, and "where
+    is the market" is a question the inside rule alone cannot answer."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder tr.mid-line', timeout=5000)
+
+    border = page.evaluate(
+        "() => getComputedStyle(document.querySelector("
+        "'.ladder tr.mid-line td')).borderTopWidth")
+    assert border == '3px'
+    assert page.locator('.ladder tr.mid-line').count() == 1
+
+
+def test_any_size_from_0_01_can_be_typed_into_the_qty_box(page):
+    """The keypad is five common sizes; the box is every other one. A
+    lot is 0.01 at most brokers, and a ladder that only offers 1, 5, 10,
+    50 and 100 cannot trade the size the account is sized for."""
+    open_ladder(page)
+    page.fill('.ladder .armed', '0.25')
+    page.wait_for_timeout(150)
+
+    before = command_count(page)
+    page.click('.ladder .buy-touch')
+    page.wait_for_timeout(250)
+
+    assert command_count(page) == before + 1
+    assert last_command(page)['payload']['quantity'] == 0.25
+    # Emptying it goes back to the ladder's own default, not to zero —
+    # a click that sends nothing is worse than one that sends the
+    # default.
+    page.fill('.ladder .armed', '')
+    page.wait_for_timeout(150)
+    page.click('.ladder .sell-touch')
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload'].get('quantity') in (None, 1)

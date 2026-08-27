@@ -23,6 +23,9 @@
 <!-- Positions at the broker that our book cannot explain. Never closed
      automatically; put here for a person to decide. -->
 <div id="unclaimed-banner" class="banner critical hidden" role="alert"></div>
+<!-- Two legs on ONE MT5 account: no hedge, twice the exposure, and a
+     screen that otherwise looks perfectly normal. -->
+<div id="same-login-banner" class="banner critical hidden" role="alert"></div>
 
 <div id="desktop"></div>
 
@@ -113,9 +116,9 @@
       </div>
       <div class="stats">
         <span><label>O:</label><b class="stat-o">—</b></span>
-        <span><label>V:</label><b class="stat-v">—</b></span>
+        <span title="Volume is per LEG: one lot of the spot and one of the future are not two lots of anything, so they are never added"><label>V1:</label><b class="stat-v1">—</b> <label>V2:</label><b class="stat-v2">—</b></span>
       </div>
-      <span class="ours" title="MT5 publishes no session data for a spread that does not exist. O/H/L are our own mid series since this process started; V is the volume of our own fills.">ours</span>
+      <span class="ours" title="Where the two terminals publish session figures, H/L/O are the LEGS' own — B − β × A, the same convention as every other price here. Where they do not, they are our own mid series since this process started, and this badge says so.">ours</span>
     </div>
     <div class="body">
       <div class="rail">
@@ -135,13 +138,16 @@
           <option value="DAY">Day</option>
           <option value="GTC">GTC</option>
         </select>
-        <label class="rail-label">Qty per click</label>
-        <div class="armed" title="What one click will send. The keypad below arms a size; CLR goes back to this ladder's default.">--</div>
         <!-- The three fastest actions on the ladder, without hunting
-             for a row: hit the bid, lift the offer, get flat. -->
+             for a row: lift the offer, hit the bid, close what is on. -->
         <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY <small>lift</small></button>
         <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL <small>hit</small></button>
-        <button class="quick flatten" title="Close every open position on this pair, at market, by ticket. Asks once (F)">FLATTEN</button>
+        <button class="quick flatten" title="Close every open position on this pair, at market, by ticket. It does not touch working orders — use Cancel all for those. Asks once (F)">CLOSE ALL</button>
+        <label class="rail-label">Qty</label>
+        <!-- Typed or armed, it is the same number: the size ONE click
+             sends, on both sides. Lots go down to 0.01. -->
+        <input class="armed" type="number" min="0.01" step="0.01"
+               title="The size ONE click sends, on both sides: BUY and SELL alike. Type any size from 0.01, or use the keypad; CLR goes back to this ladder's default.">
         <div class="keypad">
           <button class="qty" data-qty="1">1</button>
           <button class="qty" data-qty="5">5</button>
@@ -151,9 +157,9 @@
           <button class="qty clr" data-qty="">CLR</button>
         </div>
         <input class="default-qty" type="number" min="0" step="0.01">
-        <button class="cxl cxl-s">CXL S<sup class="count-s"></sup></button>
-        <button class="cxl cxl-all">CXL All<sup class="count-all"></sup></button>
-        <button class="cxl cxl-b">CXL B<sup class="count-b"></sup></button>
+        <button class="cxl cxl-s" title="Cancel this ladder's working SELL orders">Cancel sells<sup class="count-s"></sup></button>
+        <button class="cxl cxl-all" title="Cancel every working order on this ladder (X)">Cancel all<sup class="count-all"></sup></button>
+        <button class="cxl cxl-b" title="Cancel this ladder's working BUY orders">Cancel buys<sup class="count-b"></sup></button>
         <label class="rail-label">Increment</label>
         <input class="increment" type="number" min="0" step="0.0001">
         <label class="check lock"><input type="checkbox" class="lock-scroll"> Lock</label>
@@ -162,6 +168,15 @@
           <option value="EXIT_IF_PROFIT">Exit if profit</option>
           <option value="EXIT_ALWAYS">Exit always</option>
         </select>
+        <!-- What the CARRY says this spread should be: the swap per day
+             to expiry. Not a signal — a number beside the market, which
+             is the question the instrument is about. -->
+        <div class="fair" title="Fair = swap per day x days to expiry. Set both on the Exchanges page.">
+          <label class="rail-label">Fair spread</label>
+          <b class="fair-value">—</b>
+          <div class="fair-gap"></div>
+          <div class="fair-note hint"></div>
+        </div>
       </div>
       <div class="grid">
         <table>

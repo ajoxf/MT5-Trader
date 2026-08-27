@@ -63,6 +63,9 @@ class LegServer:
                 if tick is None:
                     return {'ok': False, 'error': f"No tick for {msg['symbol']}"}
                 return {'ok': True, 'tick': tick}
+            if cmd == 'session_stats':
+                return {'ok': True,
+                        'stats': self.leg.session_stats(msg['symbol'])}
             if cmd == 'order':
                 return self.leg.order(
                     msg['symbol'], msg['side'], msg['volume'],

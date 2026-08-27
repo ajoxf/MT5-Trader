@@ -341,13 +341,55 @@
     return {w: w, h: h};
   }
 
+  //: The windows that are TOOLS rather than ladders. They are wide,
+  //: they are opened and closed all day, and putting them at the end of
+  //: the desktop row pushes everything else off the screen: the trader
+  //: then scrolls sideways past every ladder to reach the one they
+  //: wanted. They float over the ladders instead, in view, and can be
+  //: dragged and resized like anything else.
+  var FLOATING_BY_DEFAULT = ['grid:', 'monitor:', 'settings:'];
+
+  function floatByDefault(node, id) {
+    var desktop = desktopBox();
+    if (!desktop.width) { return; }
+    var wanted = size(node,
+                      Math.min(1180, Math.max(desktop.width - 80, 320)),
+                      Math.min(560, Math.max(desktop.height - 80, 200)));
+    // Stepped down and across so a second and third one do not land
+    // exactly on top of the first.
+    // Beside the tiled ladders where there is room for it, so opening
+    // Positions does not cover the market. Over them when there is not
+    // — it is a window, and it can be dragged.
+    var index = FLOATING_BY_DEFAULT.indexOf(id);
+    var free = 0;
+    Array.prototype.forEach.call(document.querySelectorAll('.window.ladder'),
+      function (ladder) {
+        if (ladder.classList.contains('floating')) { return; }
+        var box = ladder.getBoundingClientRect();
+        free = Math.max(free, box.right - desktop.left + 8);
+      });
+    var left = Math.max(Math.min(free + index * 24,
+                                 desktop.width - wanted.w - 8), 8);
+    var top = Math.min(30 + index * 24,
+                       Math.max(desktop.height - wanted.h - 8, 0));
+    var at = place(node, left, top);
+    topZ += 1;
+    node.style.zIndex = topZ;
+    layout[id] = {left: at.left, top: at.top, z: topZ,
+                  w: wanted.w, h: wanted.h};
+    writeLayout();
+  }
+
   function applyLayout(node) {
     /* Put a window back where it was left. Called for every window on
      * every render, because panels are created lazily — the monitor
      * opened an hour later must still come back to its own corner. */
     var id = panelIdOf(node);
     var saved = layout[id];
-    if (!saved) { return; }
+    if (!saved) {
+      if (FLOATING_BY_DEFAULT.indexOf(id) >= 0) { floatByDefault(node, id); }
+      return;
+    }
     if (saved.w && saved.h) { size(node, saved.w, saved.h); }
     if (saved.left === undefined) { return; }   // resized, never moved
     var at = place(node, saved.left, saved.top);
@@ -514,6 +556,13 @@
     node.querySelector('.filter').addEventListener('change', function (e) {
       state.filtered[key] = e.target.checked;
       render();
+    });
+    node.querySelector('.armed').addEventListener('input', function (e) {
+      // Typed sizes are armed the moment they are typed: no Enter, no
+      // second gesture. Blank goes back to the ladder's default rather
+      // than arming zero, which would be a click that sends nothing.
+      var value = parseFloat(e.target.value);
+      state.armed[key] = (isFinite(value) && value > 0) ? value : null;
     });
     node.querySelector('.keypad').addEventListener('click', function (e) {
       var button = e.target.closest('.qty');
@@ -692,7 +741,16 @@
     node.querySelector('.stat-h').textContent = fmt(session.high, 4);
     node.querySelector('.stat-l').textContent = fmt(session.low, 4);
     node.querySelector('.stat-o').textContent = fmt(session.open, 4);
-    node.querySelector('.stat-v').textContent = fmt(session.volume, 2);
+    // Per LEG, never added: one lot of spot and one of the future are
+    // not two lots of anything.
+    node.querySelector('.stat-v1').textContent = fmt(session.volume_a, 0);
+    node.querySelector('.stat-v2').textContent = fmt(session.volume_b, 0);
+    // Whose numbers these are — the terminals', or ours since this
+    // process started. A borrowed range read as the exchange's is how a
+    // spread gets judged against prices nobody traded.
+    var ours = node.querySelector('.ours');
+    ours.textContent = session.ours === false ? 'legs' : 'ours';
+    ours.classList.toggle('legs', session.ours === false);
 
     setValue(node.querySelector('.order-type'), row.order_type);
     setValue(node.querySelector('.tif'), row.time_in_force);
@@ -702,10 +760,14 @@
     var armed = node.querySelector('.armed');
     // Never blank: this box says what ONE CLICK will send, which is the
     // armed size if there is one and the ladder's default otherwise.
-    armed.textContent = state.armed[key]
-      ? String(state.armed[key])
-      : (row.default_quantity === null || row.default_quantity === undefined
-          ? '--' : String(row.default_quantity));
+    // Never written while it is being TYPED IN, either — the poll would
+    // otherwise eat the size as it is entered.
+    if (document.activeElement !== armed) {
+      armed.value = state.armed[key]
+        ? String(state.armed[key])
+        : (row.default_quantity === null || row.default_quantity === undefined
+            ? '' : String(row.default_quantity));
+    }
     armed.classList.toggle('on', !!state.armed[key]);
     Array.prototype.forEach.call(node.querySelectorAll('.keypad .qty'),
       function (button) {
@@ -725,10 +787,17 @@
       routeText(row.account_a, row.symbol_a);
     node.querySelector('.route-b b').innerHTML =
       routeText(row.account_b, row.symbol_b);
-    node.querySelector('.count-b').textContent = row.working_buys || '';
-    node.querySelector('.count-s').textContent = row.working_sells || '';
-    node.querySelector('.count-all').textContent =
-      (row.working_buys + row.working_sells) || '';
+    // The three cancel buttons, with what they would pull ON them —
+    // and disabled when that is nothing, so a button that cannot do
+    // anything cannot be pressed and wondered about.
+    var buys = row.working_buys || 0;
+    var sells = row.working_sells || 0;
+    node.querySelector('.count-b').textContent = buys || '';
+    node.querySelector('.count-s').textContent = sells || '';
+    node.querySelector('.count-all').textContent = (buys + sells) || '';
+    node.querySelector('.cxl-b').disabled = !buys;
+    node.querySelector('.cxl-s').disabled = !sells;
+    node.querySelector('.cxl-all').disabled = !(buys + sells);
 
     renderRows(node, key, row);
 
@@ -758,7 +827,29 @@
       ' per 1.00';
     node.querySelector('.errors').textContent = (row.errors || []).join(' ');
     node.querySelector('.legs').innerHTML = legFeed(row, market);
+    renderFair(node, row);
     return node;
+  }
+
+  function renderFair(node, row) {
+    /* Fair value beside the market. Never an instruction: the ladder
+     * shows what the carry says the spread should be, and by how much
+     * the market differs. Nothing here places or withholds an order. */
+    var fair = row.fair || {};
+    node.querySelector('.fair-value').textContent = fmt(fair.fair_spread, 4);
+    var gap = node.querySelector('.fair-gap');
+    if (fair.gap === null || fair.gap === undefined) {
+      gap.textContent = '';
+      gap.className = 'fair-gap';
+    } else {
+      // Rich = trading above its own carry, which is the side a trader
+      // sells. Said in the word as well as the sign: the direction of a
+      // basis is the thing everyone gets backwards once.
+      gap.textContent = (fair.gap > 0 ? '+' : '') + fmt(fair.gap, 4) +
+        (fair.rich ? ' rich' : ' cheap');
+      gap.className = 'fair-gap ' + (fair.rich ? 'down' : 'up');
+    }
+    node.querySelector('.fair-note').textContent = fair.note || '';
   }
 
   function legFeed(row, market) {
@@ -851,6 +942,8 @@
       if (inBid) { classes.push('in-bid'); }
       if (inAsk) { classes.push('in-ask'); }
       if (line.is_best_bid) { classes.push('market-line'); }
+      if (line.is_mid) { classes.push('mid-line'); }
+      if (line.is_best_ask) { classes.push('best-ask'); }
       var isLast = lastPrint.level !== undefined &&
         Math.abs(lastPrint.level - level) < (row.increment || 1) / 2;
 
@@ -918,6 +1011,8 @@
   }
 
   function midRow(node, market) {
+    var marked = node.querySelector('tbody tr.mid-line');
+    if (marked) { return marked; }
     /* The row the CURRENT MID sits on — the middle of the book, which
      * is where the ladder centres. Centring on a touch puts the other
      * side against an edge, and a side you cannot see is a side you
@@ -1303,8 +1398,9 @@
       '<td>' + fmt(totals.volume, 2) + ' lots</td>' +
       '<td>commission ' + money(totals.commission) + '</td>' +
       '<td>swap ' + money(totals.swap) + '</td>' +
-      '<td>the broker\'s own P&amp;L ' + money(totals.profit) +
-      '</td></tr></tbody></table>';
+      '<td>the broker\'s own P&amp;L ' +
+      '<b class="' + upDown(totals.profit) + '">' + money(totals.profit) +
+      '</b></td></tr></tbody></table>';
 
     html += '<table><thead><tr><th>Broker time</th><th>Account</th>' +
       '<th>Symbol</th><th>Pair</th><th>Leg</th><th>Side</th><th>In/Out</th>' +
@@ -1324,7 +1420,10 @@
       html += '<td>' + fmt(fill.price, 4) + '</td>';
       html += '<td>' + money(fill.commission) + '</td>';
       html += '<td>' + money(fill.swap) + '</td>';
-      html += '<td>' + money(fill.profit) + '</td>';
+      // The broker's own P&L on this deal: green made, red lost. An
+      // opening deal books nothing, so 0.00 stays black — colouring it
+      // green would make every entry look like a winner.
+      html += moneyCell(fill.profit);
       html += '<td>' + (fill.position_ticket || DASH) + '</td>';
       html += '<td>' + (fill.deal_id || DASH) + '</td>';
       html += '<td>' + (fill.is_ours ? 'yes' : 'no') + '</td>';
@@ -1335,6 +1434,18 @@
       html += '<tr><td colspan="16">no fills recorded yet</td></tr>';
     }
     return html + '</tbody></table>';
+  }
+
+  function upDown(value) {
+    if (value === null || value === undefined || !isFinite(value) ||
+        value === 0) {
+      return '';
+    }
+    return value > 0 ? 'up' : 'down';
+  }
+
+  function moneyCell(value) {
+    return '<td class="' + upDown(value) + '">' + money(value) + '</td>';
   }
 
   function brokerTime(fill) {
@@ -1732,6 +1843,7 @@
 
     renderNaked();
     renderUnclaimed();
+    renderSameLogin();
 
     var wanted = {};
     state.open.forEach(function (id) { wanted[id] = true; });
@@ -1783,6 +1895,34 @@
     window.setTimeout(function () {
       node.classList.remove('revealed');
     }, 900);
+  }
+
+  function renderSameLogin() {
+    /* Both legs on one MT5 account. Two leg runners can attach to the
+     * same running terminal — a blank terminal path on both is enough —
+     * and then every "hedge" is two orders on ONE account: no spread,
+     * twice the exposure, and nothing on the screen looks wrong. The
+     * engine refuses entries on such a pair; this says why. */
+    var health = state.snapshot.account_health || {};
+    var same = health.same_login || {};
+    var logins = Object.keys(same);
+    var banner = el('same-login-banner');
+    if (!logins.length) {
+      banner.classList.add('hidden');
+      return;
+    }
+    banner.innerHTML = logins.map(function (login) {
+      return '<b>' + same[login].join(' and ') + ' are configured as two ' +
+        'accounts but are both attached to MT5 login #' + login + '.</b> ' +
+        'Two terminals were intended: give each account its own ' +
+        'terminal_path on the Exchanges page. If this really is ONE ' +
+        'account trading both legs — spot and the future at one broker is ' +
+        'an ordinary spread — point both legs of the pair at the same ' +
+        'account instead; that is supported, and margin is then one pool. ' +
+        'Until one or the other, entries on the affected pairs are ' +
+        'refused. Closing what is already open still works.';
+    }).join('<br>');
+    banner.classList.remove('hidden');
   }
 
   function renderUnclaimed() {
@@ -1940,10 +2080,11 @@
           if (arrived) { ghost.done = true; }
         });
         var first = !state.open.length;
-        if (first) {
-          state.open.push(panelId('grid'));
-          state.open.push(panelId('monitor'));
-        }
+        // First load is LADDERS, and nothing else. The Market Grid and
+        // the Positions window are tools: opened when wanted, from the
+        // + button or the taskbar. Opening them here put two wide
+        // windows over the ladders before the trader had asked for
+        // either.
         // A ladder for every enabled pair — including one added while
         // this screen was open. A pair configured on the Exchanges page
         // and then nowhere to be seen is the whole setup looking

@@ -91,6 +91,9 @@ class LocalLeg:
         return {'bid': t.bid, 'ask': t.ask, 'last': t.last,
                 'time': getattr(t, 'time', time.time())}
 
+    def session_stats(self, symbol):
+        return self.broker.session_stats(symbol)
+
     def order(self, symbol, side, volume, slippage_points=1.0, comment=""):
         result = self.broker.send_market_order(
             symbol, OrderSide(side), volume,
@@ -262,6 +265,12 @@ class RemoteLeg:
         reply = self._request({'cmd': 'tick', 'symbol': symbol})
         if reply and reply.get('ok'):
             return reply['tick']
+        return None
+
+    def session_stats(self, symbol):
+        reply = self._request({'cmd': 'session_stats', 'symbol': symbol})
+        if reply and reply.get('ok'):
+            return reply.get('stats')
         return None
 
     def order(self, symbol, side, volume, slippage_points=1.0, comment=""):
