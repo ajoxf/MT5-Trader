@@ -35,6 +35,10 @@ class Publisher:
         self.every = every
         self.order_type = 'LIMIT'
         self.confirm = False
+        #: Two accounts reporting one MT5 login, as the engine publishes
+        #: it — the banner under test is driven from the SNAPSHOT, not
+        #: from a value poked into the page that the next poll erases.
+        self.same_login = None
         self.live = threading.Event()
         self.live.set()
         self.stop = threading.Event()
@@ -47,7 +51,7 @@ class Publisher:
             time.sleep(self.every)
 
     def publish(self, at=None):
-        payload = snapshot(self.order_type, self.confirm)
+        payload = snapshot(self.order_type, self.confirm, self.same_login)
         if at is not None:
             payload['at'] = at
         tmp = self.path + '.tmp'
@@ -82,7 +86,7 @@ def server(tmp_path_factory):
     httpd.shutdown()
 
 
-def snapshot(order_type='LIMIT', confirm=False):
+def snapshot(order_type='LIMIT', confirm=False, same_login=None):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -98,7 +102,7 @@ def snapshot(order_type='LIMIT', confirm=False):
         'accounts': {'acct_a': {'profit': 0.0}, 'acct_b': {'profit': 0.0}},
         'account_health': {
             'warn_level': 200.0, 'weakest': 'acct_b', 'weakest_level': 125.0,
-            'unknown': [],
+            'unknown': [], 'same_login': same_login or {},
             'accounts': {
                 'acct_a': {'account': 'acct_a', 'known': True, 'login': 5001,
                            'server': 'CFI-Live', 'currency': 'USD',
@@ -1390,31 +1394,26 @@ def test_the_shared_account_notice_can_be_put_away_and_comes_back(page):
     """It is an FYI, not a blocker: it names something worth knowing and
     the trader keeps working. Dismissing it is for the SITUATION they
     read — a different one brings it back."""
-    page.evaluate("""() => {
-        const state = window.MT5Trader.state;
-        state.dismissed = {};
-        state.snapshot.account_health.same_login = {'100006': ['a', 'b']};
-        window.MT5Trader.render();
-    }""")
+    page.evaluate('() => { window.MT5Trader.state.dismissed = {}; }')
+    page.paths['publisher'].same_login = {'100006': ['leg_a', 'leg_b']}
+    page.paths['publisher'].publish()
     page.wait_for_selector('#same-login-banner:not(.hidden)', timeout=5000)
     assert '#100006' in page.text_content('#same-login-banner')
     assert 'one pool' in page.text_content('#same-login-banner')
 
     page.click('#same-login-banner .banner-close')
-    page.evaluate('() => window.MT5Trader.render()')
-    assert page.locator('#same-login-banner.hidden').count() == 1
+    page.wait_for_selector('#same-login-banner.hidden', state='attached',
+                           timeout=5000)
 
     # A DIFFERENT login is a different situation, and it is said again.
-    page.evaluate("""() => {
-        window.MT5Trader.state.snapshot.account_health.same_login =
-            {'200007': ['a', 'b']};
-        window.MT5Trader.render();
-    }""")
-    assert page.locator('#same-login-banner:not(.hidden)').count() == 1
-    page.evaluate("""() => {
-        window.MT5Trader.state.snapshot.account_health.same_login = {};
-        window.MT5Trader.render();
-    }""")
+    page.paths['publisher'].same_login = {'200007': ['leg_a', 'leg_b']}
+    page.paths['publisher'].publish()
+    page.wait_for_selector('#same-login-banner:not(.hidden)', timeout=5000)
+
+    page.paths['publisher'].same_login = None
+    page.paths['publisher'].publish()
+    page.wait_for_selector('#same-login-banner.hidden', state='attached',
+                           timeout=5000)
 
 
 def test_nothing_in_the_window_is_cropped_when_it_is_made_short(page):
@@ -1442,3 +1441,31 @@ def test_nothing_in_the_window_is_cropped_when_it_is_made_short(page):
     assert fits['footerInside']
     assert fits['railScrolls']
     tidy(page)
+
+
+def test_each_legs_book_is_laid_out_with_its_width(page):
+    """Bid, ask and the width each leg is charging — and the same three
+    for the spread, whose width IS the round turn. Read by comparing
+    them, so it is a table."""
+    open_ladder(page)
+    page.evaluate("""() => {
+        const market = window.MT5Trader.state.snapshot
+            .pairs['XAUUSD_|GC1226'].market;
+        market.leg_a_bid = 4607.38; market.leg_a_ask = 4607.63;
+        market.leg_b_bid = 4660.40; market.leg_b_ask = 4660.80;
+        market.leg_a_quote_age_sec = 0.3;
+        market.leg_b_quote_age_sec = 9.0;
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('table.legbook', timeout=5000)
+
+    rows = page.locator('table.legbook tbody tr')
+    assert rows.count() == 3                       # A, B, and the spread
+    assert '0.2500' in rows.nth(0).text_content()  # leg A's own width
+    assert '0.4000' in rows.nth(1).text_content()
+    # A leg that has stopped is marked, and it is the leg that matters:
+    # a spread is only as good as its worse leg.
+    assert 'bad' in (rows.nth(1).get_attribute('class') or '')
+    spread = rows.nth(2).text_content()
+    assert '59.0900' in spread and '59.1100' in spread
+    assert '0.0200' in spread                      # one round turn

@@ -96,6 +96,35 @@ scrolling it by hand — and **Lock** on the rail stops it moving at all.
 The taskbar has **Sound** and **Keys** switches, and one badge that is
 green only when both accounts answered and every ladder is quoting.
 
+## "QUOTES STALE"
+
+The badge turns amber when one leg's quote has not CHANGED for longer
+than `MAX_QUOTE_AGE_SEC` (5 seconds by default). It is not about the
+connection — a leg that is being re-sent unchanged still reads as
+stale, which is the point: the spread is a difference, so one frozen
+leg makes the whole number fictitious while the other ticks perfectly.
+
+Which leg it is, is on the ladder's footer: each leg's bid, ask, width
+and the age of its last change, with the stale one in red.
+
+The three ordinary causes, in order of likelihood:
+
+1. **That instrument is out of session** — a future overnight, a
+   holiday, the daily break. Nothing to fix; it clears when the market
+   opens.
+2. **That terminal has lost its feed.** Look at the symbol in that
+   MT5's Market Watch: if the numbers are frozen there too, it is the
+   terminal, not this software. Re-log that terminal in.
+3. **The instrument genuinely ticks slowly.** An illiquid future can be
+   quiet for more than five seconds in normal trading. Raise
+   `MAX_QUOTE_AGE_SEC` in Settings → Trading if that is what you are
+   trading — deliberately, because the guard exists to stop an order
+   being priced off a book that has stopped moving.
+
+While it is stale, ORDERS are withheld and say so. Closing is never
+withheld: a guard may hold back an order, and must never prevent a
+close.
+
 ## More than one spread
 
 Each pair is its own ladder and they run side by side. Add one on

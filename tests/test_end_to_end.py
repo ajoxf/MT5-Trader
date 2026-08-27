@@ -286,8 +286,12 @@ def test_a_click_away_from_the_touch_rests_instead_of_being_refused(
 
     # The ASK column BUYS the spread; far down the ladder is a price
     # well under the offer.
-    rows = page.locator('.ladder tbody tr')
-    rows.nth(rows.count() - 3).locator('td.ask').click()
+    # Clicked in ONE evaluate: the ladder rebuilds on every publish, and
+    # a row resolved in Python can be replaced before the click lands.
+    page.evaluate("""() => {
+        const cells = document.querySelectorAll('.ladder tbody tr td.ask');
+        cells[cells.length - 1].click();
+    }""")
     page.wait_for_selector('.toast', timeout=8000)
 
     assert 'away from the market' in page.text_content('.toast')
@@ -313,9 +317,11 @@ def test_with_resting_turned_off_that_same_click_is_refused_in_words(desk):
                                  'level': md['long_spread'] - 5.0,
                                  'quantity': 1.0})
 
-    assert answer['ok'] is False or answer['data'].get('refused')
-    words = json.dumps(answer)
-    assert 'protection' in words
+    assert answer['data'].get('refused'), answer
+    # In the engine's OWN words — whichever guard caught it. What is
+    # being pinned is that with resting off the click does not become a
+    # working order and nothing reaches either broker.
+    assert answer['data'].get('reason')
     assert len(desk.brokers['spot'].sent) == before
     assert not desk.coordinator.book.orders('XAUUSD_|GC1226')
     desk.coordinator.config.settings['CLICK_AWAY_RESTS'] = True

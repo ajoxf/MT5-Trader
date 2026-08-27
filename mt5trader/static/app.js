@@ -874,30 +874,50 @@
   }
 
   function legFeed(row, market) {
-    /* Each leg's own quote, and how long since it last CHANGED.
+    /* The two books, laid out: bid, ask, and the width each leg is
+     * charging — plus the same three for the spread itself.
      *
-     * A spread that is not moving is one leg that is not moving, and
-     * without this the screen cannot say which — the trader is left
-     * looking at a still number with no way to tell a quiet market from
-     * a dead feed. Ages come from the engine's quote-identity tracker,
-     * so a broker that re-sends the same tick does not read as fresh.
+     * As a table rather than a run of numbers, because these are read
+     * by COMPARING them: a spread that is not moving is one leg that is
+     * not moving, and a leg whose width has doubled is the leg that is
+     * about to cost money. Neither is visible in a sentence.
+     *
+     * The spread row is the executable pair — sell at `bid B - beta x
+     * ask A`, buy at `ask B - beta x bid A` — so its width IS the round
+     * turn, which is the number the ladder is really about.
      */
     if (!market || market.leg_a_bid === undefined) {
       return '<span class="bad">no quote from either leg yet</span>';
     }
-    function leg(label, symbol, bid, ask, age) {
-      var stale = age !== null && age !== undefined && age > 5;
-      return '<span class="' + (stale ? 'bad' : '') + '">' + label + ' ' +
-        (symbol || '?') + ' ' + fmt(bid, 2) + '/' + fmt(ask, 2) +
-        (age === null || age === undefined
-          ? '' : ' ' + age.toFixed(1) + 's') + '</span>';
+    function width(bid, ask) {
+      if (bid === null || bid === undefined ||
+          ask === null || ask === undefined) { return DASH; }
+      return fmt(ask - bid, 4);
     }
-    return leg('A', row.symbol_a, market.leg_a_bid, market.leg_a_ask,
-               market.leg_a_quote_age_sec) + ' &nbsp; ' +
-      leg('B', row.symbol_b, market.leg_b_bid, market.leg_b_ask,
-          market.leg_b_quote_age_sec) + ' &nbsp; ' +
-      'spread ' + fmt(market.short_spread, 4) + ' / ' +
-      fmt(market.long_spread, 4);
+    function age(seconds) {
+      if (seconds === null || seconds === undefined) { return DASH; }
+      return seconds.toFixed(1) + 's';
+    }
+    function line(label, symbol, bid, ask, seconds) {
+      var stale = seconds !== null && seconds !== undefined && seconds > 5;
+      return '<tr' + (stale ? ' class="bad"' : '') + '><th>' + label +
+        '</th><td class="sym">' + (symbol || '?') + '</td>' +
+        '<td>' + fmt(bid, 4) + '</td><td>' + fmt(ask, 4) + '</td>' +
+        '<td>' + width(bid, ask) + '</td><td>' + age(seconds) + '</td></tr>';
+    }
+    var html = '<table class="legbook"><thead><tr><th></th><th></th>' +
+      '<th>Bid</th><th>Ask</th><th>Width</th><th>Age</th></tr></thead>' +
+      '<tbody>';
+    html += line('A', row.symbol_a, market.leg_a_bid, market.leg_a_ask,
+                 market.leg_a_quote_age_sec);
+    html += line('B', row.symbol_b, market.leg_b_bid, market.leg_b_ask,
+                 market.leg_b_quote_age_sec);
+    html += '<tr class="spread"><th>=</th><td class="sym">spread</td>' +
+      '<td>' + fmt(market.short_spread, 4) + '</td>' +
+      '<td>' + fmt(market.long_spread, 4) + '</td>' +
+      '<td>' + width(market.short_spread, market.long_spread) + '</td>' +
+      '<td></td></tr>';
+    return html + '</tbody></table>';
   }
 
   function badgeClass(badge) {

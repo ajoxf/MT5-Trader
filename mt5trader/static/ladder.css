@@ -551,12 +551,31 @@ tr:hover td.price { outline: 1px solid #333; }
 .footer .pnl.up { color: var(--traded); }
 .footer .pnl.down { color: var(--down); }
 .footer .errors { color: var(--ask); font-weight: 600; }
-/* The two legs' own quotes, in ONE place. The strip above carries the
- * session figures and the net change; these are the raw books, and the
- * same numbers in two corners of one window is two things to check
- * against each other for no reason. */
-.footer .legs { font-family: var(--mono); color: var(--frame-muted); }
-.footer .legs .bad { color: #ff8787; font-weight: 700; }
+/* The two legs' own books, in ONE place. The strip above carries the
+ * session figures and the net change; this is bid, ask and width per
+ * leg, and the same three for the spread — read by comparing them,
+ * which is why it is a table and not a sentence. */
+.footer .legs { flex: 1 1 auto; }
+table.legbook {
+  border-collapse: collapse;
+  font: 10px var(--mono);
+  color: var(--frame-text);
+}
+table.legbook th,
+table.legbook td { padding: 0 5px 0 0; text-align: right; }
+table.legbook thead th {
+  color: var(--frame-muted);
+  font-weight: 400;
+}
+table.legbook tbody th { color: var(--frame-muted); text-align: left; }
+table.legbook td.sym { text-align: left; color: var(--frame-muted); }
+table.legbook tr.bad td,
+table.legbook tr.bad th { color: #ff8787; font-weight: 700; }
+table.legbook tr.spread td,
+table.legbook tr.spread th {
+  border-top: 1px solid var(--frame-line);
+  font-weight: 700;
+}
 
 /* -- the Market Grid ------------------------------------------------ */
 
