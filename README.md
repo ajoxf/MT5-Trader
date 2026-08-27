@@ -145,6 +145,16 @@ That is the product, so it is the default and it is fast:
   entirely: B and S are orders.
 - **One line says whether it is working**, always on screen: green only
   when both accounts answered AND every enabled ladder is quoting.
+- **The Bids and Asks columns carry the implied size** — how many
+  spreads the two order books can actually do, matched leg against leg
+  and counted once. Where a broker publishes no depth the columns stay
+  empty rather than inventing a size from one leg.
+- **Fair spread on the rail**: `swap per day × days to expiry`, with
+  the market named rich or cheap against it. Set the futures leg's
+  expiry and swap on the Exchanges page; without both there is no fair
+  value and the box shows an em dash.
+- **The mid carries a heavy rule** and is what the ladder centres on;
+  the inside-market rule stays where it was, between the two touches.
 - **Keyboard**: `B` buy at the offer, `S` sell at the bid, `F` flatten,
   `X` cancel this ladder, `1`–`5` arm 1/5/10/50/100, `0` clear, `L`
   lock the scroll, `M` switch LIMIT↔MARKET, `Tab` next ladder, `?` the

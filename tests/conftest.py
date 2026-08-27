@@ -123,6 +123,15 @@ class FakeBroker:
     def ensure_symbol(self, symbol):
         return self.symbols.get(symbol)
 
+    def depth(self, symbol):
+        """The DOM this broker publishes, or None.
+
+        None by default: most CFD accounts publish no depth at all, and
+        that is the case the ladder has to handle without inventing a
+        size.
+        """
+        return getattr(self, 'depth_book', None)
+
     def session_stats(self, symbol):
         """What the terminal publishes for this symbol's own session.
 

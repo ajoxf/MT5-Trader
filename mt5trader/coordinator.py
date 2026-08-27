@@ -20,7 +20,7 @@ import threading
 import time
 from datetime import datetime
 
-from . import fairvalue, hedgeratio, sizing
+from . import depth as depth_book, fairvalue, hedgeratio, sizing
 from .book import Book
 from .database import Store
 from .executor import PairExecutor, mark_position
@@ -76,6 +76,8 @@ class Coordinator:
         self._account_cache = {}            # account -> (at, info)
         #: (account, symbol) -> (at, the leg's own session figures)
         self._session_cache = {}
+        #: (account, symbol) -> (at, that leg's DOM)
+        self._depth_cache = {}
         self._loop_interval = None
         self._last_poll = None
         self._stop = threading.Event()
@@ -365,6 +367,48 @@ class Coordinator:
             if tick:
                 ticks[(account, symbol)] = tick
         return ticks
+
+    def leg_depth(self, account, symbol):
+        """One leg's market depth, cached for a fraction of a second.
+
+        A DOM is a round trip per leg per poll. Most CFD accounts
+        publish none at all, and the broker remembers that refusal, so
+        this costs nothing where there is nothing.
+        """
+        if not self.config.get('SHOW_DEPTH', True):
+            return None
+        ttl = float(self.config.get('DEPTH_TTL_SEC', 0.25))
+        now = self.clock()
+        cached = self._depth_cache.get((account, symbol))
+        if cached and now - cached[0] < ttl:
+            return cached[1]
+        leg = self.legs.get(account)
+        book = None
+        if leg is not None and symbol:
+            try:
+                book = leg.depth(symbol)
+            except Exception:                 # a leg mid-restart
+                book = None
+        self._depth_cache[(account, symbol)] = (now, book)
+        return book
+
+    def implied_depth(self, pair):
+        """How many SPREADS each side of the two books can actually do.
+
+        Empty when either broker publishes no depth: a size invented
+        from one leg would show a hundred lots available on a spread
+        that can do four, and it is a lie a trader would click on.
+        """
+        book_a = self.leg_depth(pair.account_a, pair.symbol_a)
+        book_b = self.leg_depth(pair.account_b, pair.symbol_b)
+        if not book_a or not book_b:
+            return {'buy': {}, 'sell': {}, 'published': False}
+        sizes = depth_book.implied(
+            book_a, book_b, pair.hedge_ratio,
+            clip_a=pair.clip_lots_a, clip_b=pair.clip_lots_b,
+            increment=pair.effective_increment())
+        sizes['published'] = True
+        return sizes
 
     def leg_session(self, account, symbol):
         """One leg's own session O/H/L/V, cached: it is an IPC round
@@ -850,6 +894,7 @@ class Coordinator:
         pairs = {}
         for key, pair in self.config.pairs.items():
             md = self.market.get(key)
+            sizes = self.implied_depth(pair)
             net, avg_entry = self.book.net_position(key)
             buys, sells = self.book.working_counts(key)
             positions = []
@@ -893,13 +938,21 @@ class Coordinator:
                 # The rows the ladder draws come from HERE, so the Work
                 # column, the click that places an order and the price
                 # that names it cannot disagree about where a level is.
-                'rows': ladder_rows(pair, md, self.book),
+                'rows': ladder_rows(pair, md, self.book, sizes=sizes),
+                'depth_published': sizes['published'],
                 'orders': [o.to_dict() for o in self.book.orders(key)],
                 'quotes': self.quoter.snapshot(key),
                 'quoting_leg': pair.quoting_leg,
                 'leg_a_width': (pair.meta_a or {}).get('width'),
                 'leg_b_width': (pair.meta_b or {}).get('width'),
                 'working_buys': buys, 'working_sells': sells,
+                # What is actually RESTING at the broker for this pair,
+                # beside what our book thinks is working. They should
+                # agree; when they do not, the ladder says so rather
+                # than showing our own number twice.
+                'broker_pendings': sum(
+                    1 for quote in self.quoter.snapshot(key)
+                    if quote.get('ticket')),
                 'positions': positions,
                 'net_position': net, 'avg_entry': avg_entry,
                 'open_pnl': open_pnl if positions else None,
@@ -1187,7 +1240,7 @@ def _same_login(rows):
     return {login: names for login, names in seen.items() if len(names) > 1}
 
 
-def ladder_rows(pair, md, book, rows=None):
+def ladder_rows(pair, md, book, rows=None, sizes=None):
     """The rows the ladder draws: the spread +/- N increments.
 
     Generated here rather than in the browser so the ladder cannot
@@ -1222,6 +1275,7 @@ def ladder_rows(pair, md, book, rows=None):
         low = centre - (MAX_LADDER_ROWS // 2) * increment
         steps = MAX_LADDER_ROWS - 1
 
+    sizes = sizes or {}
     out = []
     for step in range(steps, -1, -1):
         level = round(low + step * increment, 10)
@@ -1239,6 +1293,11 @@ def ladder_rows(pair, md, book, rows=None):
             # touches can be many rows apart, and "where the market is"
             # is then a question the inside rule alone cannot answer.
             'is_mid': _at(level, md.get('spread'), increment),
+            # What the two ORDER BOOKS can actually do here, in
+            # spreads. None where a broker publishes no depth — which
+            # is not the same as none available, and must not look it.
+            'ask_size': depth_book.at(sizes.get('buy'), level, increment),
+            'bid_size': depth_book.at(sizes.get('sell'), level, increment),
         })
     return out
 

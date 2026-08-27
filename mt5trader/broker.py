@@ -47,6 +47,10 @@ class BrokerSession:
     def __init__(self, account):
         self.account = account
         self.connected = False
+        #: symbol -> whether this terminal has a DOM for it. The
+        #: subscription is made once; a refusal is remembered too, so a
+        #: broker with no depth is not asked three times a second.
+        self._depth_symbols = {}
 
     def initialize(self):
         """Connect this process to one MT5 terminal.
@@ -154,6 +158,10 @@ class BrokerSession:
 
     def shutdown(self):
         if mt5 is not None:
+            for symbol, subscribed in list(self._depth_symbols.items()):
+                if subscribed:
+                    mt5.market_book_release(symbol)
+            self._depth_symbols.clear()
             mt5.shutdown()
         self.connected = False
 
@@ -204,6 +212,46 @@ class BrokerSession:
             if len(found) >= limit:
                 break
         return found
+
+    def depth(self, symbol):
+        """This symbol's market depth, or None when the broker has none.
+
+        MT5 only fills a DOM for symbols it is subscribed to, and the
+        subscription is per symbol and per terminal — so it is made once
+        here and remembered. Most CFD accounts publish no depth at all;
+        that comes back as None, and the ladder shows nothing rather
+        than inventing a size from the tick volume.
+        """
+        if mt5 is None:
+            return None
+        if symbol not in self._depth_symbols:
+            if not mt5.market_book_add(symbol):
+                # Remember the refusal too: asking three times a second
+                # for a book this broker does not have is a round trip
+                # per poll for nothing.
+                self._depth_symbols[symbol] = False
+            else:
+                self._depth_symbols[symbol] = True
+        if not self._depth_symbols.get(symbol):
+            return None
+        rows = mt5.market_book_get(symbol)
+        if not rows:
+            return None
+        out = []
+        for row in rows:
+            kind = getattr(row, 'type', None)
+            # 1 = BOOK_TYPE_SELL (an offer), 2 = BOOK_TYPE_BUY (a bid);
+            # the _MARKET variants are 3 and 4.
+            side = ('ask' if kind in (1, 3) else
+                    'bid' if kind in (2, 4) else None)
+            if side is None:
+                continue
+            out.append({'type': side,
+                        'price': float(getattr(row, 'price', 0.0) or 0.0),
+                        'volume': float(getattr(row, 'volume_real', 0.0)
+                                        or getattr(row, 'volume', 0.0)
+                                        or 0.0)})
+        return out or None
 
     def session_stats(self, symbol):
         """This symbol's own session O/H/L and volume, as the TERMINAL

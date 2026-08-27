@@ -804,8 +804,16 @@
     var counts = node.querySelector('.counts');
     counts.querySelector('.cnt-b').textContent = 'B:' + bought(row);
     counts.querySelector('.cnt-s').textContent = 'S:' + sold(row);
+    var working = row.working_buys + row.working_sells;
+    var resting = row.broker_pendings;
+    // Ours, and — when they disagree — the broker's. A pending at the
+    // broker that our book knows nothing about is the one number worth
+    // interrupting for: it is money resting that nothing is watching.
     counts.querySelector('.cnt-w').textContent =
-      'W:' + (row.working_buys + row.working_sells);
+      'W:' + working + (resting !== undefined && resting !== working
+                        ? ' (broker ' + resting + ')' : '');
+    counts.querySelector('.cnt-w').classList.toggle(
+      'mismatch', resting !== undefined && resting !== working);
 
     var feed = node.querySelector('.feed');
     feed.textContent = market.feed_badge || DASH;
@@ -829,6 +837,16 @@
     node.querySelector('.legs').innerHTML = legFeed(row, market);
     renderFair(node, row);
     return node;
+  }
+
+  function depthText(size, isTouch, mark) {
+    if (size === null || size === undefined) {
+      return isTouch ? mark : '';
+    }
+    // Rounded to two, because a spread's implied size is a ratio of two
+    // lot sizes and 3.3333333 is not a number anyone can act on.
+    var text = size >= 10 ? String(Math.round(size)) : size.toFixed(2);
+    return text.replace(/\.00$/, '');
   }
 
   function renderFair(node, row) {
@@ -958,16 +976,20 @@
         (ghostQty ? '<span class="ghost" title="sent — waiting for the ' +
           'engine">' + ghostQty + '</span>' : '') + '</td>';
       // MT5 publishes no depth for a spread, so only the touch is real.
+      // The size is the two ORDER BOOKS', in spreads: whatever the
+      // worse of the two legs can fill at the prices this level
+      // implies. Nothing where the brokers publish no depth — an
+      // invented size is one a trader would click on.
       html += '<td class="bid' + (line.is_best_bid ? ' has-qty' : '') +
         '" title="Click: SELL the spread at ' + fmt(level, 4) +
         ' (sell leg B, buy leg A)">' +
-        (line.is_best_bid ? '▲' : '') + '</td>';
+        depthText(line.bid_size, line.is_best_bid, '▲') + '</td>';
       html += '<td class="price' + (isLast ? ' last-trade' : '') + '">' +
         fmt(level, digitsFor(row.increment)) + '</td>';
       html += '<td class="ask' + (line.is_best_ask ? ' has-qty' : '') +
         '" title="Click: BUY the spread at ' + fmt(level, 4) +
         ' (buy leg B, sell leg A)">' +
-        (line.is_best_ask ? '▼' : '') + '</td>';
+        depthText(line.ask_size, line.is_best_ask, '▼') + '</td>';
       html += '<td class="ltq' + (isLast ? ' print' : '') + '">' +
         (isLast ? fmt(lastPrint.quantity, 2) : '') + '</td>';
       html += '</tr>';

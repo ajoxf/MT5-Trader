@@ -482,6 +482,7 @@ tr:hover td.price { outline: 1px solid #333; }
 .window.mode-market td.bid,
 .window.mode-market td.ask { cursor: cell; }
 
+.counts .mismatch { background: var(--ask); padding: 0 3px; }
 .counts {
   position: sticky;
   bottom: 0;
