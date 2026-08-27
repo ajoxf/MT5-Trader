@@ -537,7 +537,8 @@ tr:hover td.price { outline: 1px solid #333; }
 
 .footer {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   align-items: center;
   padding: 2px 6px;
   background: var(--frame);
@@ -551,22 +552,31 @@ tr:hover td.price { outline: 1px solid #333; }
 .footer .pnl.up { color: var(--traded); }
 .footer .pnl.down { color: var(--down); }
 .footer .errors { color: var(--ask); font-weight: 600; }
-/* The two legs' own books, in ONE place, as a small aligned panel. The
- * columns are fixed so the figures line up down the column — that is
- * how they are read. */
-.footer .legs { flex: 0 0 auto; }
+/* The two legs' own books, in ONE place: a panel the width of the
+ * window, never wider. It used to be laid out in `ch` units, which is
+ * fine until the prices are four digits and a symbol is long — then it
+ * runs off the right-hand edge of the ladder and the Age column is the
+ * first thing to go, which is the column that says WHICH leg stopped.
+ *
+ * So: a fixed table at 100% of the footer, proportional columns, and
+ * the only thing allowed to overflow is the symbol name, which
+ * truncates. Numbers never truncate. */
+.footer .legs { flex: 1 1 100%; min-width: 0; }
 table.legbook {
+  width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
-  font: 10px/1.5 var(--mono);
+  font: 10px/1.45 var(--mono);
   color: var(--frame-text);
   background: rgba(255, 255, 255, .5);
   border: 1px solid var(--frame-line);
 }
 table.legbook th,
 table.legbook td {
-  padding: 0 6px;
+  padding: 0 4px;
   text-align: right;
   white-space: nowrap;
+  overflow: hidden;
 }
 table.legbook thead th {
   color: var(--frame-muted);
@@ -574,14 +584,19 @@ table.legbook thead th {
   border-bottom: 1px solid var(--frame-line);
 }
 table.legbook tbody th {
-  width: 2ch;
+  width: 7%;
   color: var(--frame-muted);
   text-align: left;
 }
-table.legbook .sym { width: 9ch; text-align: left; color: var(--frame-muted); }
-table.legbook td { width: 10ch; }
-table.legbook td.w { width: 8ch; }
-table.legbook td.age { width: 6ch; color: var(--frame-muted); }
+table.legbook .sym {
+  width: 27%;
+  text-align: left;
+  color: var(--frame-muted);
+  text-overflow: ellipsis;
+}
+table.legbook .c-bid, table.legbook .c-ask { width: 21%; }
+table.legbook .c-width { width: 14%; }
+table.legbook .c-age { width: 10%; color: var(--frame-muted); }
 table.legbook td.age.bad { color: #b03030; font-weight: 700; }
 table.legbook tr.spread th,
 table.legbook tr.spread td {

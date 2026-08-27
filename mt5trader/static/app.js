@@ -892,38 +892,43 @@
     if (!market || market.leg_a_bid === undefined) {
       return '<span class="bad">no quote from either leg yet</span>';
     }
-    function cell(value, digits) {
-      return '<td>' + fmt(value, digits === undefined ? 4 : digits) +
-        '</td>';
+    function cell(value, klass, digits) {
+      return '<td class="' + klass + '">' +
+        fmt(value, digits === undefined ? 4 : digits) + '</td>';
     }
     function width(bid, ask) {
       if (bid === null || bid === undefined ||
-          ask === null || ask === undefined) { return '<td>' + DASH + '</td>'; }
-      return '<td class="w">' + fmt(ask - bid, 4) + '</td>';
+          ask === null || ask === undefined) {
+        return '<td class="c-width">' + DASH + '</td>';
+      }
+      return '<td class="c-width">' + fmt(ask - bid, 4) + '</td>';
     }
     function age(seconds) {
       if (seconds === null || seconds === undefined) {
-        return '<td class="age">' + DASH + '</td>';
+        return '<td class="age c-age">' + DASH + '</td>';
       }
-      return '<td class="age' + (seconds > 5 ? ' bad' : '') + '">' +
+      return '<td class="age c-age' + (seconds > 5 ? ' bad' : '') + '">' +
         seconds.toFixed(1) + 's</td>';
     }
     function line(label, symbol, bid, ask, seconds) {
-      return '<tr><th>' + label + '</th><td class="sym">' +
-        (symbol || '?') + '</td>' + cell(bid) + cell(ask) +
+      return '<tr><th>' + label + '</th><td class="sym" title="' +
+        (symbol || '?') + '">' + (symbol || '?') + '</td>' +
+        cell(bid, 'c-bid') + cell(ask, 'c-ask') +
         width(bid, ask) + age(seconds) + '</tr>';
     }
     var html = '<table class="legbook"><thead><tr>' +
-      '<th></th><th class="sym">leg</th><th>Bid</th><th>Ask</th>' +
-      '<th>Width</th><th>Age</th></tr></thead><tbody>';
+      '<th></th><th class="sym">leg</th><th class="c-bid">Bid</th>' +
+      '<th class="c-ask">Ask</th><th class="c-width">Width</th>' +
+      '<th class="c-age">Age</th></tr></thead><tbody>';
     html += line('A', row.symbol_a, market.leg_a_bid, market.leg_a_ask,
                  market.leg_a_quote_age_sec);
     html += line('B', row.symbol_b, market.leg_b_bid, market.leg_b_ask,
                  market.leg_b_quote_age_sec);
     html += '<tr class="spread"><th></th><td class="sym">spread</td>' +
-      cell(market.short_spread) + cell(market.long_spread) +
+      cell(market.short_spread, 'c-bid') +
+      cell(market.long_spread, 'c-ask') +
       width(market.short_spread, market.long_spread) +
-      '<td class="age"></td></tr>';
+      '<td class="age c-age"></td></tr>';
     return html + '</tbody></table>';
   }
 

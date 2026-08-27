@@ -1514,3 +1514,35 @@ def test_an_order_the_broker_refused_is_said_out_loud_and_kept_on_screen(page):
             .dead_orders;
         window.MT5Trader.closePanel('monitor:');
     }""")
+
+
+def test_the_leg_panel_never_runs_off_the_edge_of_the_ladder(page):
+    """It was laid out in `ch` units, which is fine until the prices are
+    four digits and a symbol is long — then it ran off the right-hand
+    edge and the AGE column went first, which is the column that says
+    which leg stopped."""
+    open_ladder(page)
+    tidy(page)
+    page.evaluate("""() => {
+        const market = window.MT5Trader.state.snapshot
+            .pairs['XAUUSD_|GC1226'].market;
+        market.leg_a_bid = 4609.79; market.leg_a_ask = 4609.99;
+        market.leg_b_bid = 4662.75; market.leg_b_ask = 4663.14;
+        market.leg_a_quote_age_sec = 0.9;
+        market.leg_b_quote_age_sec = 0.6;
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('table.legbook', timeout=5000)
+
+    fits = page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        const table = node.querySelector('table.legbook');
+        const win = node.getBoundingClientRect();
+        const box = table.getBoundingClientRect();
+        const age = table.querySelector('td.c-age').getBoundingClientRect();
+        return {inside: box.right <= win.right + 1 && box.left >= win.left - 1,
+                ageVisible: age.right <= win.right + 1 && age.width > 0};
+    }""")
+
+    assert fits['inside'], 'the leg panel is wider than the ladder'
+    assert fits['ageVisible'], 'the Age column fell off the edge'
