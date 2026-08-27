@@ -238,12 +238,16 @@ def test_bid_is_blue_and_ask_is_red_everywhere():
         assert 'var(--' + rule[0] in rule[1], rule
 
 
-def test_the_inside_market_rule_is_drawn_crisply():
-    """The single most important mark on the ladder: a rule across the
-    full width, between the best bid and the best ask."""
+def test_the_market_is_marked_by_ONE_rule_and_it_is_the_mid():
+    """A rule at the inside AND a rule at the mid meant neither read as
+    "the market is here". The mid keeps the rule — it is also what the
+    ladder centres on — and the inside is drawn by the two bands
+    meeting, which carries the same information."""
     css = (STATIC / 'ladder.css').read_text(encoding='utf-8')
-    assert re.search(r'tr\.market-line\s*>\s*td\s*\{\s*border-top:\s*2px '
-                     r'solid var\(--inside\)', css)
+    assert re.search(r'tr\.mid-line\s*>\s*td\s*\{\s*\n?\s*'
+                     r'border-top:\s*3px solid', css)
+    assert not re.search(r'tr\.market-line\s*>\s*td\s*\{\s*border-top',
+                         css)
     assert '--inside: #000000' in css
 
 

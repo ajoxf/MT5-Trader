@@ -104,6 +104,10 @@ def test_two_accounts_that_are_secretly_one_terminal_refuse_an_entry(
     from mt5trader.coordinator import Coordinator
     from mt5trader.models import SpreadSide
     coordinator = Coordinator(config, legs)
+    # Refusing is OFF by default — one account carrying both legs is an
+    # ordinary spread, and only the desk knows which of the two this
+    # is. A desk that wants it refused turns this on.
+    coordinator.config.settings['REFUSE_SHARED_ACCOUNT'] = True
     for leg in legs.values():
         leg.broker.login = 100006             # one terminal, both legs
     coordinator.poll_once()
@@ -113,10 +117,7 @@ def test_two_accounts_that_are_secretly_one_terminal_refuse_an_entry(
 
     assert answer['ok'] is False and answer['refused']
     assert '#100006' in answer['reason']
-    # Both readings, and the fix for each: two terminals were meant, or
-    # this is one account and should be configured as one.
-    assert 'terminal_path' in answer['reason']
-    assert 'same account' in answer['reason']
+    assert 'REFUSE_SHARED_ACCOUNT' in answer['reason']
     # Nothing was sent to either broker.
     for leg in legs.values():
         assert not [entry for entry in leg.broker.sent
@@ -177,3 +178,25 @@ def test_one_account_trading_both_legs_is_ordinary_and_allowed(config, pair,
 
     assert answer.get('ok'), answer
     assert coordinator.book.orders(pair.key) or coordinator.book.positions()
+
+
+def test_by_default_it_is_said_and_not_refused(config, pair, legs):
+    """The banner names the login and both readings; the trade still
+    goes. Which of the two situations this is, is the desk's to say —
+    and a screen that refuses on its own guess would have stopped a
+    legitimate spread from trading at all."""
+    from mt5trader.coordinator import Coordinator
+    from mt5trader.models import SpreadSide
+    coordinator = Coordinator(config, legs)
+    for leg in legs.values():
+        leg.broker.login = 100006
+    coordinator.poll_once()
+
+    answer = coordinator.click(pair.key, SpreadSide.BUY,
+                               coordinator.market[pair.key]['long_spread'])
+
+    assert answer.get('ok'), answer
+    # ...and it is still on the screen, named.
+    assert coordinator.account_health()['same_login'] == {
+        '100006': sorted(legs)} or list(
+            coordinator.account_health()['same_login']) == ['100006']

@@ -38,6 +38,9 @@
     // click clicks again.
     pending: [],
     help: false,
+    // Banners the trader has put away, by what they were ABOUT: the
+    // same banner returns when the situation behind it changes.
+    dismissed: {},
     // The one-key shortcuts, which a desk may not want at all: B and S
     // are orders, and a keyboard nobody meant to touch is a click
     // nobody meant to make.
@@ -1933,7 +1936,12 @@
       banner.classList.add('hidden');
       return;
     }
-    banner.innerHTML = logins.map(function (login) {
+    var signature = logins.sort().join(',');
+    if (state.dismissed['same-login'] === signature) {
+      banner.classList.add('hidden');
+      return;
+    }
+    banner.innerHTML = closeButton() + logins.map(function (login) {
       return '<b>' + same[login].join(' and ') + ' are configured as two ' +
         'accounts but are both attached to MT5 login #' + login + '.</b> ' +
         'Two terminals were intended: give each account its own ' +
@@ -1944,7 +1952,17 @@
         'Until one or the other, entries on the affected pairs are ' +
         'refused. Closing what is already open still works.';
     }).join('<br>');
+    banner.dataset.signature = signature;
     banner.classList.remove('hidden');
+  }
+
+  function closeButton() {
+    /* Every banner can be put away. This one is an FYI: it names a
+     * thing worth knowing and does not stop the trader working. It
+     * comes BACK if what it is about changes — a dismissal is for the
+     * situation the trader read, not for the banner. */
+    return '<button class="banner-close" title="Dismiss — it returns if ' +
+      'this changes">&times;</button>';
   }
 
   function renderUnclaimed() {
@@ -2217,6 +2235,12 @@
           'Cancel all + flatten', function () {
             send('kill', {flatten: true});
           });
+    });
+    el('same-login-banner').addEventListener('click', function (e) {
+      if (!e.target.closest('.banner-close')) { return; }
+      state.dismissed['same-login'] =
+        el('same-login-banner').dataset.signature;
+      el('same-login-banner').classList.add('hidden');
     });
     el('unclaimed-banner').addEventListener('click', function (e) {
       var button = e.target.closest('.close-unclaimed');

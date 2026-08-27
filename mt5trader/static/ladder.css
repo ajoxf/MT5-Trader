@@ -11,23 +11,23 @@
  */
 
 :root {
-  --chrome: #e4e4e4;          /* the button/input furniture grey */
-  --chrome-dark: #b8b8b8;
-  --panel: #f4f4f4;
-  --grid-line: #9a9a9a;
-  --text: #1f1f1f;
+  --chrome: #d4d0c8;          /* the button/input furniture grey */
+  --chrome-dark: #a9a9a9;
+  --panel: #f0f0f0;
+  --grid-line: #808080;
+  --text: #1a1a1a;
   --muted: #5a5a5a;
   /* The window FRAME: light grey, with dark text on it. Title bar,
    * quote strip, rail, column headers, footer and the taskbar are all
-   * this. A trading screen is looked at for eight hours at a time, and
-   * the two things that must stand out are the two coloured columns —
-   * everything else gets out of the way rather than competing. */
-  --frame: #d6d6d6;
-  --frame-dark: #c2c2c2;
-  --frame-line: #a9a9a9;
-  --frame-text: #1f1f1f;
-  --frame-muted: #5f5f5f;
-  --price-cell: #efefef;      /* the price column */
+   * this — the reference screen's dark frame, which is what makes the
+   * two coloured columns read as the only live things on the window.
+   * The BANDS are the softened ones: dark frame, quiet colours. */
+  --frame: #4a4a4a;
+  --frame-dark: #3a3a3a;
+  --frame-line: #5f5f5f;
+  --frame-text: #e8e8e8;
+  --frame-muted: #b6b6b6;
+  --price-cell: #d5d5d5;      /* the price column */
   --price-line: #ffffff;
 
   /* Softened, deliberately. The saturated pair was right for a dark
@@ -59,7 +59,7 @@
 body {
   margin: 0;
   padding: 0 0 30px 0;
-  background: #9aa4b1;
+  background: #6b7a8f;
   color: var(--text);
   font: 12px/1.35 var(--font);
   overflow: hidden;
@@ -74,6 +74,16 @@ body {
   font-weight: 600;
   background: #e8dcc0;
   border-bottom: 1px solid #9c8850;
+}
+.banner-close {
+  float: right;
+  margin-left: 12px;
+  padding: 0 7px;
+  background: rgba(255, 255, 255, .25);
+  border: 1px solid rgba(255, 255, 255, .6);
+  color: inherit;
+  font-weight: 700;
+  cursor: pointer;
 }
 .banner.critical {
   background: var(--ask);
@@ -172,7 +182,7 @@ body {
   color: var(--frame-text);
   font-size: 11px;
 }
-.window.inactive .titlebar { background: #cfcfcf; color: #4a4a4a; }
+.window.inactive .titlebar { background: #6a6a6a; }
 .titlebar .swatch {
   width: 9px; height: 9px;
   background: var(--bid);
@@ -248,7 +258,16 @@ body {
 
 /* -- the body: control rail + grid ---------------------------------- */
 
-.body { display: flex; min-height: 0; }
+.body {
+  display: flex;
+  /* The ONLY part of the window that flexes. The quote strip and the
+   * footer are fixed height, so a window sized shorter than its
+   * content crops neither of them — it scrolls the ladder instead. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.footer, .quotestrip, .titlebar { flex: 0 0 auto; }
 
 .rail {
   display: flex;
@@ -256,6 +275,11 @@ body {
   gap: 3px;
   width: 92px;
   padding: 4px;
+  /* The rail is taller than a short window. It scrolls; it is never
+   * cut off, because the overnight selector and the Fair box live at
+   * the bottom of it. */
+  overflow-y: auto;
+  min-height: 0;
   background: var(--frame);
   color: var(--frame-text);
   border-right: 1px solid var(--frame-line);
@@ -385,7 +409,7 @@ body {
   /* The empty ladder is the frame's grey, not white: the Work and LTQ
    * columns either side of the coloured bands are part of the window,
    * not paper. */
-  background: #f7f7f7;
+  background: #e9e9e9;
 }
 .grid table {
   border-collapse: collapse;
@@ -425,10 +449,11 @@ tr.in-ask td.ask { background: var(--ask); color: #3a0f0f; }
 td.bid.has-qty { background: var(--bid-cell); color: #10263a; }
 td.ask.has-qty { background: var(--ask-cell); color: #3d1010; }
 
-/* THE INSIDE MARKET. The single most important mark on the ladder: a
- * crisp rule across the full width, between the best bid and the best
- * ask. Never anti-aliased into a smudge, never between rows. */
-tr.market-line > td { border-top: 2px solid var(--inside); }
+/* The inside market is drawn by the two BANDS meeting — the blue ends
+ * where the bids end and the red begins at the offers, which is the
+ * same information the old rule carried. One black line on the ladder,
+ * not two: with a rule at the inside AND one at the mid, neither reads
+ * as "the market is here". */
 
 /* THE MID. On a wide spread the two touches are many rows apart, and
  * "where is the market" is then a question the inside rule alone
@@ -526,6 +551,10 @@ tr:hover td.price { outline: 1px solid #333; }
 .footer .pnl.up { color: var(--traded); }
 .footer .pnl.down { color: var(--down); }
 .footer .errors { color: var(--ask); font-weight: 600; }
+/* The two legs' own quotes, in ONE place. The strip above carries the
+ * session figures and the net change; these are the raw books, and the
+ * same numbers in two corners of one window is two things to check
+ * against each other for no reason. */
 .footer .legs { font-family: var(--mono); color: var(--frame-muted); }
 .footer .legs .bad { color: #ff8787; font-weight: 700; }
 

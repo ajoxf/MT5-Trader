@@ -212,6 +212,7 @@ class CommandRunner:
         'ROW_HEIGHT_PX': lambda v: max(12, min(40, int(v))),
         'MARKET_PROTECTION_TICKS': float,
         'CLICK_AWAY_RESTS': lambda v: bool(v),
+        'REFUSE_SHARED_ACCOUNT': lambda v: bool(v),
         'RECENTRE_SEC': lambda v: max(0.0, min(300.0, float(v))),
         'REPEG_DEAD_BAND_TICKS': float,
         'MAX_QUOTE_AGE_SEC': float,

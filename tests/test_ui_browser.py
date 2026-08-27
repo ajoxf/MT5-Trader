@@ -192,19 +192,22 @@ def test_the_ladder_draws_the_reference_screens_columns(page):
     assert page.locator('.ladder tbody tr').count() == 41
 
 
-def test_the_inside_market_rule_is_drawn_between_the_two_touches(page):
-    line = page.locator('.ladder tr.market-line')
+def test_one_rule_marks_the_market_and_it_is_at_the_mid(page):
+    """Two black rules — one at the inside, one at the mid — meant
+    neither read as "the market is here"."""
+    line = page.locator('.ladder tr.mid-line')
     assert line.count() == 1
-    border = line.first.locator('td').first.evaluate(
-        'node => getComputedStyle(node).borderTopWidth')
-    assert border == '2px'
-    # And it sits between the best bid and the best ask, not on top of
-    # one of them.
-    bid = float(line.first.get_attribute('data-level'))
-    ask_row = page.locator('.ladder tbody tr').nth(
-        page.locator('.ladder tbody tr').count() - 1)
-    assert bid < 59.11 and bid >= 59.09 - 0.011
-    assert ask_row is not None
+    assert page.evaluate(
+        "() => getComputedStyle(document.querySelector("
+        "'.ladder tr.mid-line td')).borderTopWidth") == '3px'
+    # The inside market is still marked — by the two bands meeting, not
+    # by a second line: the best-bid row carries the ordinary 1px grid
+    # rule and nothing heavier.
+    assert page.evaluate(
+        "() => getComputedStyle(document.querySelector("
+        "'.ladder tr.market-line td')).borderTopWidth") == '1px'
+    assert page.locator('.ladder tr.in-bid td.bid').count() > 0
+    assert page.locator('.ladder tr.in-ask td.ask').count() > 0
 
 
 def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
@@ -1381,3 +1384,61 @@ def test_any_size_from_0_01_can_be_typed_into_the_qty_box(page):
     page.click('.ladder .sell-touch')
     page.wait_for_timeout(250)
     assert last_command(page)['payload'].get('quantity') in (None, 1)
+
+
+def test_the_shared_account_notice_can_be_put_away_and_comes_back(page):
+    """It is an FYI, not a blocker: it names something worth knowing and
+    the trader keeps working. Dismissing it is for the SITUATION they
+    read — a different one brings it back."""
+    page.evaluate("""() => {
+        const state = window.MT5Trader.state;
+        state.dismissed = {};
+        state.snapshot.account_health.same_login = {'100006': ['a', 'b']};
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('#same-login-banner:not(.hidden)', timeout=5000)
+    assert '#100006' in page.text_content('#same-login-banner')
+    assert 'one pool' in page.text_content('#same-login-banner')
+
+    page.click('#same-login-banner .banner-close')
+    page.evaluate('() => window.MT5Trader.render()')
+    assert page.locator('#same-login-banner.hidden').count() == 1
+
+    # A DIFFERENT login is a different situation, and it is said again.
+    page.evaluate("""() => {
+        window.MT5Trader.state.snapshot.account_health.same_login =
+            {'200007': ['a', 'b']};
+        window.MT5Trader.render();
+    }""")
+    assert page.locator('#same-login-banner:not(.hidden)').count() == 1
+    page.evaluate("""() => {
+        window.MT5Trader.state.snapshot.account_health.same_login = {};
+        window.MT5Trader.render();
+    }""")
+
+
+def test_nothing_in_the_window_is_cropped_when_it_is_made_short(page):
+    """The rail is taller than a short window, and the footer carries
+    the feed badge and the position. Neither may be cut off: the ladder
+    scrolls instead."""
+    open_ladder(page)
+    tidy(page)
+    page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        node.classList.add('sized');
+        node.style.height = '320px';
+    }""")
+    page.wait_for_timeout(200)
+
+    fits = page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        const box = node.getBoundingClientRect();
+        const footer = node.querySelector('.footer').getBoundingClientRect();
+        const rail = node.querySelector('.rail');
+        return {footerInside: footer.bottom <= box.bottom + 1,
+                railScrolls: rail.scrollHeight > rail.clientHeight
+                    ? getComputedStyle(rail).overflowY === 'auto' : true};
+    }""")
+    assert fits['footerInside']
+    assert fits['railScrolls']
+    tidy(page)

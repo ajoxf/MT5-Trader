@@ -508,20 +508,18 @@ class Coordinator:
         if pair is None:
             return {'ok': False, 'reason': f'no pair {pair_key}'}
         shared = self.legs_share_an_account(pair)
-        if shared:
-            # Not a hedge at all: both orders would land on ONE account.
-            # Refused before anything is sent, and named — this is the
-            # fault that looks perfectly normal on the screen.
+        if shared and self.config.get('REFUSE_SHARED_ACCOUNT', False):
+            # OFF by default. Two accounts on one terminal is usually a
+            # misconfiguration, but "both legs on one account" is also
+            # an ordinary spread, and which of the two it is, is the
+            # trader's to say — so the screen says it loudly and this
+            # refuses only when the desk has asked it to.
             return {'ok': False, 'refused': True,
                     'reason': (
                         f"'{pair.account_a}' and '{pair.account_b}' are "
-                        f"configured as two accounts but are BOTH attached "
-                        f"to MT5 login #{shared}. If they are meant to be "
-                        f"two terminals, give each one its own "
-                        f"terminal_path on the Exchanges page. If this pair "
-                        f"really is one account trading both legs, point "
-                        f"both legs at the same account there — that is "
-                        f"supported, and margin is then one pool.")}
+                        f"both attached to MT5 login #{shared}, and "
+                        f"REFUSE_SHARED_ACCOUNT is on.")}
+
         md = self.market.get(pair_key)
         quantity = pair.default_quantity if quantity is None else quantity
 

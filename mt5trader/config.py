@@ -69,6 +69,13 @@ DEFAULT_SETTINGS = {
     #: clicking there — refusing it made the whole far side of the
     #: ladder dead. Turn this off to have such a click refused instead.
     'CLICK_AWAY_RESTS': True,
+    #: Refuse to trade a pair whose two accounts turn out to be one MT5
+    #: login. OFF: one account carrying both legs is an ordinary spread
+    #: (spot and the future at one broker), and only the desk knows
+    #: whether that is what was meant. It is always SAID — a banner
+    #: names the login and both readings — but it is not refused unless
+    #: this is turned on.
+    'REFUSE_SHARED_ACCOUNT': False,
     #: How often the ladder re-centres itself on the mid, in seconds.
     #: 0 re-centres only when the market leaves the visible window; the
     #: Lock tick on the rail stops it entirely. A ladder that re-centres
