@@ -16,7 +16,7 @@ writing any code.
 
 ## What is built so far
 
-The build order in §14 of the spec, in order. Steps 1-4 are in:
+The spec's build order, in order. Steps 1-8 are in:
 
 | Module | What it does |
 |---|---|
@@ -30,11 +30,13 @@ The build order in §14 of the spec, in order. Steps 1-4 are in:
 | `mt5trader/executor.py` | MARKET entry both legs, the 2.0s escalation, unwind by ticket, ticket-based closes |
 | `mt5trader/book.py` | Synthetic orders one-per-click, positions, net and average |
 | `mt5trader/coordinator.py` | The poll loop, the guards, the sweeps, one status snapshot for every panel |
+| `mt5trader/quoter.py` | The synthetic LIMIT path: quote one leg, re-peg off the OTHER leg by MODIFY, cross on fill |
+| `mt5trader/reconcile.py` | Orphans and ghosts, three strikes, contract-size-correct P&L |
+| `mt5trader/session.py` | The one cutoff: DAY orders die, each ladder's overnight rule decides |
 | `mt5trader/shutdown.py` | An unanswered prompt means NO |
 
-Still to come: the synthetic LIMIT path (quote one leg, cross the other,
-re-peg by MODIFY), reconciliation, the ladder UI, the positions monitor
-(§16) and the Market Grid (§17).
+Still to come: the ladder UI against the reference screen (§3.3), the
+positions monitor (§16) and the Market Grid (§17).
 
 ## Running it
 

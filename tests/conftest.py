@@ -181,7 +181,7 @@ class FakeBroker:
             return {'ok': True, 'filled_volume': position['volume'],
                     'price': position['price_open'],
                     'position_tickets': [position['ticket']],
-                    'still_open': False, 'error': None}
+                    'still_open': pending is not None, 'error': None}
         return {'ok': True, 'filled_volume': 0.0, 'price': None,
                 'position_tickets': [], 'still_open': pending is not None,
                 'error': None}
@@ -225,6 +225,36 @@ class FakeBroker:
         self._record({'action': 'pending', 'symbol': symbol,
                       'side': side.value, 'volume': volume, 'price': price})
         return {'ok': True, 'ticket': ticket, 'error': None, 'price': price}
+
+    def part_fill_pending(self, ticket, volume):
+        """A partial fill: some volume becomes a position, the rest of
+        the pending keeps resting — which is what MT5 does, and what a
+        naive 'the pending is gone' model hides."""
+        pending = self.pendings[int(ticket)]
+        pending['volume'] -= volume
+        self.positions[int(ticket)] = {
+            'ticket': int(ticket), 'symbol': pending['symbol'],
+            'side': pending['side'], 'volume': volume,
+            'price_open': pending['price'], 'magic': MAGIC_NUMBER,
+            'comment': pending['comment'], 'profit': 0.0}
+        return int(ticket)
+
+    def fill_pending(self, ticket, volume=None):
+        """The broker fills a resting order.
+
+        MT5 turns a filled pending into a POSITION carrying the ORDER's
+        ticket, and `positions_get` shows it BEFORE deal history does —
+        so the fake does the same, because reading deals alone once
+        called a real fill "no fill".
+        """
+        pending = self.pendings.pop(int(ticket))
+        filled = pending['volume'] if volume is None else volume
+        self.positions[int(ticket)] = {
+            'ticket': int(ticket), 'symbol': pending['symbol'],
+            'side': pending['side'], 'volume': filled,
+            'price_open': pending['price'], 'magic': MAGIC_NUMBER,
+            'comment': pending['comment'], 'profit': 0.0}
+        return int(ticket)
 
     def pending_orders_by_magic(self, symbol=None):
         return [dict(p) for p in self.pendings.values()

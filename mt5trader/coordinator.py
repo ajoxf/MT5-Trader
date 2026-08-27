@@ -22,9 +22,12 @@ import time
 from . import hedgeratio, sizing
 from .book import Book
 from .executor import PairExecutor, mark_position
-from .models import MAGIC_NUMBER, SpreadSide
+from .models import MAGIC_NUMBER, OrderType
+from .quoter import Quoter
+from .reconcile import Reconciler
+from .session import SessionClock, day_orders, overnight_action
 from .spread import (LevelSigma, QuoteAgeTracker, SpreadJumpTracker,
-                     compute_spread, executable_spread, stale_quote)
+                     compute_spread, stale_quote)
 
 
 class Coordinator:
@@ -38,6 +41,13 @@ class Coordinator:
         self.sleep = sleep
         self.book = Book()
         self.executor = PairExecutor(config, legs, clock=clock, sleep=sleep)
+        self.quoter = Quoter(config, legs, self.executor, self.book)
+        self.reconciler = Reconciler(config, legs, self.book, self.executor,
+                                     clock=clock)
+        self._last_reconcile = None
+        self.session_clock = SessionClock(config)
+        #: What the cutoff did, per day, for the monitor to show.
+        self.session_events = []
         # The guards measure on a MONOTONIC clock and the quote's own
         # identity, never on the broker's timestamp — a clock offset
         # would poison a guard that gates real orders.
@@ -220,6 +230,10 @@ class Coordinator:
             md['feed_badge'] = _badge(md, stale, jumped)
             self._observe_session(key, md)
             self.market[key] = md
+            # LIMIT-mode orders are worked on the SAME pass that priced
+            # them: a peg re-priced off a snapshot older than the one on
+            # screen is a peg holding a level nobody is showing.
+            self.quoter.work(pair, md)
         return self.market
 
     def _read_ticks(self):
@@ -263,6 +277,63 @@ class Coordinator:
         md['session'] = dict(session)
         md['net_change'] = (spread - session['open']
                             if session['open'] is not None else None)
+
+    # -- what a click does ---------------------------------------------------
+
+    def click(self, pair_key, side, level, quantity=None):
+        """One click on one row. One click is ONE order.
+
+        MARKET crosses both legs now with the clicked price as the
+        slippage guard; LIMIT creates a synthetic working order at that
+        level, backed by a real pending on the quoting leg. Three clicks
+        at one price are three orders, individually cancellable, however
+        they are aggregated at the broker.
+
+        The Market Grid and the ladder both come through here, so a grid
+        click and a ladder click at the same price are the same order.
+        """
+        pair = self.config.pairs.get(pair_key)
+        if pair is None:
+            return {'ok': False, 'reason': f'no pair {pair_key}'}
+        md = self.market.get(pair_key)
+        quantity = pair.default_quantity if quantity is None else quantity
+
+        if pair.order_type is OrderType.MARKET:
+            result = self.executor.market_entry(pair, side, md, quantity,
+                                                level)
+            if result.ok and result.position:
+                self.book.add_position(result.position)
+            return result.to_dict()
+
+        refusal = self.executor.precheck(pair, side, md, quantity)
+        if refusal is not None and md is None:
+            # No price at all is a refusal either way. A guard reason is
+            # NOT: a resting order simply waits for a quote it can rest
+            # on (spec §8), which is what the quoter does.
+            return {'ok': False, 'refused': True, 'reason': refusal}
+        order = self.book.add_order(pair, side, level, quantity)
+        self.quoter.group_for(pair, order)
+        return {'ok': True, 'order': order.to_dict()}
+
+    def cancel_order(self, order_id):
+        order = self.book.order(order_id)
+        if order is None or not order.is_working:
+            return {'ok': False, 'reason': 'that order is not working'}
+        self.quoter.cancel(order)
+        return {'ok': True, 'order': order.to_dict()}
+
+    def cancel_where(self, pair_key=None, side=None, reason='cancelled'):
+        """`CXL B` / `CXL S` / `CXL All`, and the global kill.
+
+        The real pendings behind them are re-sized or pulled on the next
+        pass, which is also where a fill that raced the cancel is
+        caught.
+        """
+        pulled = self.book.cancel_where(pair_key, side, reason)
+        for key, pair in self.config.pairs.items():
+            if pair_key in (None, key):
+                self.quoter.work(pair, self.market.get(key))
+        return pulled
 
     def account_info(self, name):
         """Cached ~5s. Fetching this three times a second is three IPC
@@ -318,6 +389,10 @@ class Coordinator:
                 'long_spread': (md or {}).get('long_spread'),
                 'errors': self.errors.get(key) or [],
                 'orders': [o.to_dict() for o in self.book.orders(key)],
+                'quotes': self.quoter.snapshot(key),
+                'quoting_leg': pair.quoting_leg,
+                'leg_a_width': (pair.meta_a or {}).get('width'),
+                'leg_b_width': (pair.meta_b or {}).get('width'),
                 'working_buys': buys, 'working_sells': sells,
                 'positions': positions,
                 'net_position': net, 'avg_entry': avg_entry,
@@ -331,6 +406,10 @@ class Coordinator:
             'loop_interval_sec': self._loop_interval,
             'poll_target_sec': self.config.get('POLL_INTERVAL_SEC'),
             'accounts': {name: self.account_info(name) for name in self.legs},
+            'reconciler': self.reconciler.snapshot(),
+            'session_events': self.session_events[-50:],
+            'hedge_times_ms': list(self.quoter.hedge_times[-50:]),
+            'click_to_on_ms': list(self.executor.timings[-50:]),
             'pairs': pairs,
             'magic': MAGIC_NUMBER,
         }
@@ -357,8 +436,65 @@ class Coordinator:
                 self.publish()
             except Exception as e:                     # never die on one poll
                 logging.exception("poll failed: %s", e)
+            self.run_session_cutoff()
+            self.reconcile_if_due()
             elapsed = self.clock() - began
             self.sleep(max(0.0, interval - elapsed))
+
+    def run_session_cutoff(self):
+        """At the cutoff: cancel DAY orders, then apply each ladder's
+        overnight rule. Once a day, per pair.
+
+        Working orders and positions are governed by DIFFERENT settings
+        (spec §3.1 and §3.2) and this is the one place both are read, so
+        a trader configures a single time.
+        """
+        events = []
+        for key, pair in self.config.pairs.items():
+            if not self.session_clock.due(key):
+                continue
+            self.session_clock.mark(key)
+            expired = day_orders(self.book.orders(key))
+            for order in expired:
+                self.cancel_order(order.order_id)
+            if expired:
+                events.append({'pair': key, 'action': 'day_orders_cancelled',
+                               'count': len(expired)})
+            md = self.market.get(key)
+            for position in self.book.positions(key):
+                _gross, net_pnl, _closing = mark_position(
+                    position, md, self.config.settings)
+                verdict = overnight_action(
+                    pair.overnight, net_pnl, self.session_clock.now(),
+                    self.config.get('OVERNIGHT_CLOSE_HOUR'),
+                    self.config.get('OVERNIGHT_CLOSE_MINUTE'))
+                if verdict is None:
+                    continue
+                # Urgent: market, by ticket, never resting. And no guard
+                # withholds it.
+                result = self.executor.close_position(pair, position, md,
+                                                      reason=verdict)
+                events.append({'pair': key, 'action': 'overnight_close',
+                               'position': position.position_id,
+                               'mode': pair.overnight.value,
+                               'net_pnl': net_pnl, 'ok': result['ok']})
+        self.session_events.extend(events)
+        return events
+
+    def reconcile_if_due(self):
+        """Every ~20s in LIVE. Assume you will lose track."""
+        every = float(self.config.get('RECONCILE_INTERVAL_SEC', 20.0) or 0.0)
+        if every <= 0:
+            return None
+        now = self.clock()
+        if self._last_reconcile is not None and now - self._last_reconcile < every:
+            return None
+        self._last_reconcile = now
+        try:
+            return self.reconciler.run()
+        except Exception as e:                      # never die on a pass
+            logging.exception("reconcile failed: %s", e)
+            return None
 
     def stop(self):
         """Sweep before anything else, then stop.
@@ -464,25 +600,3 @@ def _at(level, price, increment):
     return abs(level - round(price / increment) * increment) < increment / 2
 
 
-def click_level(pair, md, side, level, book, executor):
-    """One click on a ladder row. One click is one order.
-
-    In MARKET mode it crosses both legs now, with the clicked price as
-    the slippage guard. In LIMIT mode it creates a synthetic working
-    order at that level. Either way it is exactly ONE order of the
-    current default quantity — three clicks at one price are three
-    orders, individually cancellable.
-    """
-    side = SpreadSide(getattr(side, 'value', side))
-    quantity = pair.default_quantity
-    if pair.order_type.value == 'MARKET':
-        result = executor.market_entry(pair, side, md, quantity, level)
-        if result.ok and result.position:
-            book.add_position(result.position)
-        return result
-    return book.add_order(pair, side, level, quantity)
-
-
-def executable_now(md, side):
-    """What this side can be done at right now — never the mid."""
-    return executable_spread(md, side)
