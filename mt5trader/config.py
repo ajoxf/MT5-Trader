@@ -22,6 +22,7 @@ import logging
 import os
 import re
 
+from . import atomicfile
 from .models import OrderType, OvernightMode, TimeInForce
 
 try:
@@ -411,11 +412,11 @@ def save_raw(path, raw, allow_shrink=False):
         tmp_bak = path + '.bak.tmp'
         with open(tmp_bak, 'w', encoding='utf-8') as f:
             json.dump(current, f, indent=2)
-        os.replace(tmp_bak, path + '.bak')
+        atomicfile.replace(tmp_bak, path + '.bak')
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(raw, f, indent=2)
-    os.replace(tmp, path)
+    atomicfile.replace(tmp, path)
 
 
 # --- the three clashes, refused at SAVE time ---------------------------
@@ -539,7 +540,7 @@ def write_env_value(path, key, value):
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write('\n'.join(out) + '\n')
-    os.replace(tmp, path)
+    atomicfile.replace(tmp, path)
     os.environ[key] = str(value or '')
     try:
         os.chmod(path, 0o600)

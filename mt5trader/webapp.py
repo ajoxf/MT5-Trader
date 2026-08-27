@@ -59,6 +59,15 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             logging.error('the journal could not be opened: %s', e)
             return None
 
+    #: The snapshot is re-read only when the FILE has changed. The
+    #: browser polls three times a second and every tab polls
+    #: separately; on Windows each open of `status.json` is a moment the
+    #: coordinator's own `os.replace` cannot land, and that collision
+    #: failed its whole poll (WinError 5). `os.stat` does not hold the
+    #: file against a rename, so asking "has it changed?" is free where
+    #: opening it is not.
+    cache = {'stamp': None, 'body': None, 'path': None}
+
     def read_json(path, default=None):
         try:
             with open(path, 'r', encoding='utf-8') as f:
@@ -66,8 +75,21 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         except (OSError, ValueError):
             return default
 
+    def read_status_file():
+        try:
+            stat = os.stat(status_path)
+            stamp = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+        if cache['path'] == status_path and cache['stamp'] == stamp \
+                and stamp is not None:
+            return cache['body']
+        body = read_json(status_path)
+        cache.update({'stamp': stamp, 'body': body, 'path': status_path})
+        return body
+
     def status():
-        snapshot = read_json(status_path)
+        snapshot = read_status_file()
         if snapshot is None:
             return {'engine': 'down',
                     'engine_note': ('the coordinator is not running — no '

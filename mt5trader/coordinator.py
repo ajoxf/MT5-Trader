@@ -20,8 +20,8 @@ import threading
 import time
 from datetime import datetime
 
-from . import depth as depth_book, fairvalue, hedgeratio, sizing, \
-    takeprofit
+from . import atomicfile, depth as depth_book, fairvalue, hedgeratio, \
+    sizing, takeprofit
 from .book import Book
 from .database import Store
 from .executor import PairExecutor, mark_position
@@ -1059,13 +1059,19 @@ class Coordinator:
         The web process reads this file while we write it; a plain
         `open(path, 'w')` means it eventually reads half a JSON
         document.
+
+        The replace is RETRIED, because on Windows it fails outright
+        while any other process has the destination open — and the web
+        process opens it several times a second. Unretried, that
+        collision failed the whole poll and froze the screen with the
+        market moving (WinError 5).
         """
         with self.lock:
             payload = self.snapshot()
         tmp = self.status_path + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(payload, f, default=str)
-        os.replace(tmp, self.status_path)
+        atomicfile.replace(tmp, self.status_path)
 
     def serve_commands(self):
         """Drain clicks on their OWN thread, far faster than the poll.

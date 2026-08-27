@@ -23,6 +23,7 @@ import os
 import time
 import uuid
 
+from . import atomicfile
 from .models import OrderType, OvernightMode, TimeInForce
 
 
@@ -138,7 +139,7 @@ class CommandRunner:
             # Bounded: this is a UI convenience, not the audit trail.
             recent = dict(list(self.results.items())[-200:])
             json.dump(recent, f, default=str)
-        os.replace(tmp, self.results_path)
+        atomicfile.replace(tmp, self.results_path)
 
     # -- the commands themselves --------------------------------------------
 

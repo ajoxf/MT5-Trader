@@ -22,9 +22,9 @@
    * The BANDS stay the softened ones — on a light frame the saturated
    * pair shouts, and a band that shouts makes the size printed in it
    * harder to read. */
-  --frame: #e3e3e3;
-  --frame-dark: #d5d5d5;
-  --frame-line: #bcbcbc;
+  --frame: #d2d2d2;
+  --frame-dark: #c2c2c2;
+  --frame-line: #ababab;
   --frame-text: #1c1c1c;
   --frame-muted: #6a6a6a;
   --price-cell: #ffffff;      /* the price column */
@@ -427,7 +427,7 @@ table.exits td:nth-child(3) { color: #a33; }
   /* The Work and LTQ columns either side of the coloured bands: near
    * white, as on the reference screen, so the two bands are the only
    * colour on the ladder. */
-  background: #fbfbfb;
+  background: #f4f4f4;
 }
 .grid table {
   border-collapse: collapse;

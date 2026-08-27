@@ -676,3 +676,40 @@ def test_the_page_stamps_its_css_and_js_so_a_stale_cache_cannot_mix(client):
     # And the page itself must never be the cached thing: it carries the
     # stamp.
     assert 'no-store' in client.get('/').headers.get('Cache-Control', '')
+
+
+def test_the_snapshot_is_only_re_read_when_it_has_actually_changed(client,
+                                                                   paths):
+    """Every open of the status file on Windows is a moment the
+    coordinator's own os.replace cannot land — and that collision
+    failed its whole poll. Asking "has it changed?" costs nothing;
+    opening it does."""
+    import time as clock
+    write_status(paths)
+    first = client.get('/api/status').get_json()
+
+    opened = {'n': 0}
+    real_open = open
+
+    def counting_open(path, *args, **kwargs):
+        mode = kwargs.get('mode', args[0] if args else 'r')
+        if str(path) == paths['status'] and 'r' in mode:
+            opened['n'] += 1          # READS only; the test writes too
+        return real_open(path, *args, **kwargs)
+
+    import builtins
+    builtins.open = counting_open
+    try:
+        for _ in range(5):
+            client.get('/api/status')
+        assert opened['n'] == 0, 'an unchanged snapshot was re-read'
+
+        # ...and a NEW snapshot is picked up at once, not on a timer.
+        clock.sleep(0.01)
+        write_status(paths, loop_interval_sec=0.9)
+        body = client.get('/api/status').get_json()
+        assert body['loop_interval_sec'] == 0.9
+        assert opened['n'] == 1
+    finally:
+        builtins.open = real_open
+    assert first['pairs']
