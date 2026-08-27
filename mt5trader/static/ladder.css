@@ -591,6 +591,46 @@ table.grid-form tr.new td { background: #f4f9ff; }
 table.grid-form td.actions { white-space: nowrap; width: 1%; }
 table.grid-form td.actions .btn { margin-right: 3px; }
 
+/* Is the system connected — the first thing on the page, and the one
+ * question the operator is actually asking. */
+.conn {
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--chrome-dark);
+  font: 12px var(--font);
+}
+.conn.up { background: #ebfbee; border-color: #2f9e44; }
+.conn.down { background: #fff4e6; border-color: #e8590c; }
+.conn.checking { background: var(--panel); color: var(--muted); }
+.conn b { margin-right: 6px; letter-spacing: .5px; }
+.conn ul { margin: 4px 0 0 18px; padding: 0; }
+
+/* The checklist behind Connect / Test / Diagnose. */
+.checklist-head { font: 600 11px var(--font); padding: 3px 0; }
+.checklist-head.pass { color: #1b6b32; }
+.checklist-head.warn { color: #b8860b; }
+.checklist-head.fail { color: var(--ask); }
+table.checks { border-collapse: collapse; width: 100%; }
+table.checks td {
+  border-top: 1px solid #e6e6e6;
+  padding: 2px 6px;
+  font: 11px var(--font);
+  vertical-align: top;
+}
+table.checks td.status {
+  width: 46px;
+  font: 700 10px var(--mono);
+  text-align: center;
+}
+table.checks td.what { width: 190px; font-weight: 600; }
+tr.c-pass td.status { color: #1b6b32; }
+tr.c-warn td.status { color: #b8860b; }
+tr.c-fail td.status { color: var(--ask); }
+tr.c-info td.status { color: var(--muted); }
+ul.fix { margin: 2px 0 2px 16px; padding: 0; color: var(--muted); }
+ul.fix li { margin: 1px 0; }
+tr.checklist td { background: #fbfbfb; }
+
 /* A refusal, on the row it belongs to. Not in a log, and not in a toast
  * that vanishes before it is read. */
 tr.problem td {

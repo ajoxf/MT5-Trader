@@ -47,7 +47,11 @@ class Coordinator:
         self.reconciler = Reconciler(config, legs, self.book, self.executor,
                                      clock=clock)
         self._last_reconcile = None
-        self.session_clock = SessionClock(config)
+        self.session_clock = SessionClock(config, offset=self.broker_offset)
+        #: The measured broker clock, per account: (measured at, offset).
+        #: Re-measured slowly — a broker's clock does not drift on the
+        #: scale of a poll, and it is a round trip per account.
+        self._offsets = {}
         #: The local database: crash-safe position state, and the fill
         #: journal. None means run without one — the tests that do not
         #: care, and nothing else.
@@ -565,6 +569,53 @@ class Coordinator:
         for position in self.book.positions(open_only=False):
             self.remember(position)
 
+    def broker_offset(self):
+        """Seconds the BROKER's clock runs ahead of this machine's.
+
+        Measured from the terminals, never configured: a typed-in time
+        zone goes stale at every daylight-saving change. Both accounts
+        should agree; when they do not, the WORSE case is not meaningful
+        here, so leg A's is used and the disagreement is published for
+        the screen — two brokers on different clocks is a fact the
+        operator needs, not something to average away.
+
+        None when it has not been measured. The session cutoff then does
+        not fire, and says so.
+        """
+        ttl = float(self.config.get('BROKER_CLOCK_TTL_SEC', 300.0))
+        now = self.clock()
+        offsets = []
+        for name, leg in self.legs.items():
+            cached = self._offsets.get(name)
+            if cached is None or now - cached[0] > ttl:
+                try:
+                    measured = leg.server_offset()
+                except Exception:                    # a leg mid-restart
+                    measured = None
+                if measured is not None or cached is None:
+                    self._offsets[name] = (now, measured)
+                    cached = self._offsets[name]
+            if cached and cached[1] is not None:
+                offsets.append(cached[1])
+        if not offsets:
+            return None
+        return offsets[0]
+
+    def broker_clock(self):
+        """What the screen shows about which clock we are on."""
+        block = self.session_clock.describe()
+        block['per_account'] = {
+            name: (cached[1] if cached else None)
+            for name, cached in self._offsets.items()}
+        measured = [value for value in block['per_account'].values()
+                    if value is not None]
+        # Two accounts whose clocks disagree by more than a minute is
+        # worth saying out loud: it usually means two different brokers,
+        # and the cutoff can only be on one of them.
+        block['accounts_disagree'] = bool(
+            measured and max(measured) - min(measured) > 60)
+        return block
+
     def account_info(self, name):
         """Cached ~5s. Fetching this three times a second is three IPC
         round trips a second for a number that moves slowly."""
@@ -648,6 +699,7 @@ class Coordinator:
             'poll_target_sec': self.config.get('POLL_INTERVAL_SEC'),
             'accounts': {name: self.account_info(name) for name in self.legs},
             'reconciler': self.reconciler.snapshot(),
+            'broker_clock': self.broker_clock(),
             'recovery': dict(self.recovery),
             'session_events': self.session_events[-50:],
             'hedge_times_ms': list(self.quoter.hedge_times[-50:]),

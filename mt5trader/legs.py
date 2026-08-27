@@ -148,6 +148,20 @@ class LocalLeg:
     def terminal_report(self):
         return dict(self.broker.terminal_report(), account=self.name)
 
+    def server_offset(self):
+        """Seconds the BROKER's clock runs ahead of ours, or None.
+
+        Everything on a session clock — the DAY cancel, the overnight
+        rule — has to be measured against the broker's day, not this
+        machine's. A box in one time zone and a broker in another is the
+        normal case, not the exception, and a cutoff on the wrong clock
+        fires hours early or late.
+
+        None when it cannot be established. A guess here would be worse
+        than an honest blank.
+        """
+        return self.broker.server_time_offset_sec()
+
     def symbol_report(self, symbol):
         return dict(self.broker.symbol_report(symbol), account=self.name)
 
@@ -319,6 +333,12 @@ class RemoteLeg:
             return dict(reply['report'], account=self.name)
         return {'account': self.name, 'library': None, 'terminal': False,
                 'error': 'leg runner not reachable'}
+
+    def server_offset(self):
+        reply = self._request({'cmd': 'server_offset'})
+        if reply and reply.get('ok'):
+            return reply.get('offset')
+        return None       # unknown, which is NOT zero
 
     def symbol_report(self, symbol):
         reply = self._request({'cmd': 'symbol_report', 'symbol': symbol})

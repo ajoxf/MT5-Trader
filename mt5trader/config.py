@@ -80,8 +80,13 @@ DEFAULT_SETTINGS = {
     'SIGMA_WINDOW_QUOTES': 600,
 
     # --- the session clock (spec §3.1, §3.2) --------------------------
-    #: One cutoff, broker-session local, shared by the DAY cancel and
-    #: the overnight rule, so the trader configures a single time.
+    #: One cutoff, on the BROKER's clock, shared by the DAY cancel and
+    #: the overnight rule, so the trader configures a single time — and
+    #: configures it in the broker's terms, which is how a trading day
+    #: is actually reckoned.
+    #: How often the broker's clock offset is re-measured. It does not
+    #: drift on the scale of a poll, and it is a round trip per account.
+    'BROKER_CLOCK_TTL_SEC': 300.0,
     'OVERNIGHT_CLOSE_HOUR': 16,
     'OVERNIGHT_CLOSE_MINUTE': 55,
     'OVERNIGHT_DEFAULT': OvernightMode.ALLOW.value,

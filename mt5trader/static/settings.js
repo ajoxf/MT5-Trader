@@ -28,7 +28,9 @@
     symbols: {},            // account -> last search result
     tests: {},              // account -> last connectivity answer
     settings: null,         // the engine's tunables, with their defaults
-    hot: []                 // ...and which of them apply without a restart
+    hot: [],                // ...and which of them apply without a restart
+    connection: null,       // is the SYSTEM connected, in one answer
+    timer: null
   };
 
   function el(id) { return document.getElementById(id); }
@@ -71,7 +73,7 @@
     panel.className = 'window settings';
     panel.innerHTML =
       '<div class="titlebar"><span class="swatch"></span>' +
-      '<span class="title">Settings — accounts and pairs</span>' +
+      '<span class="title">Exchanges — accounts, pairs and settings</span>' +
       '<span class="winbtns"><button class="winbtn close">&times;</button>' +
       '</span></div>' +
       '<div class="settings-body">' +
@@ -91,6 +93,16 @@
     panel.addEventListener('change', onChange);
     document.getElementById('desktop').appendChild(panel);
     refresh();
+    refreshConnection();
+    // The connection state is the one thing on this page that changes
+    // without the operator doing anything.
+    if (!local.timer) {
+      local.timer = window.setInterval(function () {
+        if (document.querySelector('.window.settings')) {
+          refreshConnection();
+        }
+      }, 5000);
+    }
     return panel;
   }
 
@@ -185,8 +197,9 @@
   // -- accounts -----------------------------------------------------------
 
   function accountsHtml() {
-    var html = '<h3>MT5 accounts <small>one login, one terminal, one ' +
-      'port — the three things that cannot be shared</small></h3>';
+    var html = '<h3>Exchanges <small>one login, one terminal, one port — ' +
+      'the three things that cannot be shared</small></h3>';
+    html += connectionHtml();
     html += '<table class="grid-form"><thead><tr><th>Name</th>' +
       '<th>Terminal (terminal64.exe)</th><th>Login</th><th>Server</th>' +
       '<th>Runner endpoint</th><th>Password</th><th></th></tr></thead><tbody>';
@@ -225,7 +238,15 @@
     html += '<td class="actions">' +
       '<button class="btn save-account">Save</button>' +
       (account.isNew ? '' :
-        '<button class="btn test-account">Test</button>' +
+        // The three questions an operator actually asks, in the order
+        // they ask them.
+        '<button class="btn connect-account" title="Is the leg runner ' +
+        'there, and is its terminal logged in?">Connect</button>' +
+        '<button class="btn test-account" title="Can this account ' +
+        'trade — Algo Trading, permissions, hedging?">Test</button>' +
+        '<button class="btn diagnose-account" title="Everything: the ' +
+        'account, its symbols, and whether the two legs fit">Diagnose' +
+        '</button>' +
         '<button class="btn danger delete-account">Delete</button>') +
       '</td></tr>';
 
@@ -234,29 +255,66 @@
         clashes.map(escape).join('<br>') + '</td></tr>';
     }
     if (test) {
-      html += '<tr class="' + (test.ok ? 'good' : 'problem') +
-        '"><td colspan="7">' + escape(testText(test)) + '</td></tr>';
+      html += '<tr class="checklist"><td colspan="7">' +
+        checklistHtml(test) + '</td></tr>';
     }
     return html;
   }
 
-  function testText(test) {
-    if (test.error) { return test.error; }
-    var terminal = test.terminal || {};
-    var account = test.account || {};
-    var parts = [];
-    parts.push(terminal.logged_in
-      ? 'logged in as ' + terminal.login + ' on ' + terminal.server
-      : 'terminal reachable, not logged in');
-    if (account && account.balance !== undefined) {
-      // Equity, not balance: brokers often fund a demo with CREDIT, and
-      // balance alone then reads as an empty account.
-      parts.push('equity ' + UI.money(account.equity) +
-                 ' (balance ' + UI.money(account.balance) + ')');
+  function checklistHtml(result) {
+    // The answer, as a checklist with a FIX on every failure.
+    if (result.error && !result.checks) {
+      return '<div class="problem-text">' + escape(result.error) + '</div>';
     }
-    parts.push(terminal.hedging ? 'hedging mode' : 'NETTING mode');
-    (test.problems || []).forEach(function (problem) { parts.push(problem); });
-    return parts.join(' · ');
+    var overall = result.overall || (result.ok ? 'PASS' : 'FAIL');
+    var html = '<div class="checklist-head ' + overall.toLowerCase() + '">' +
+      escape(result.ran || '') + '<b>' + overall + '</b> — ' +
+      result.passed + ' passed, ' + result.warnings + ' warning(s), ' +
+      result.failed + ' failed' +
+      (result.connected ? ' · CONNECTED' : '') + '</div>';
+    html += '<table class="checks"><tbody>';
+    (result.checks || []).forEach(function (check) {
+      html += '<tr class="c-' + check.status.toLowerCase() + '">';
+      html += '<td class="status">' + check.status + '</td>';
+      html += '<td class="what">' + escape(check.name) + '</td>';
+      html += '<td>' + escape(check.message);
+      // A warning nobody can act on is not a fix: every failure carries
+      // the step that makes it pass.
+      if ((check.fix || []).length) {
+        html += '<ul class="fix">';
+        check.fix.forEach(function (step) {
+          html += '<li>' + escape(step) + '</li>';
+        });
+        html += '</ul>';
+      }
+      html += '</td></tr>';
+    });
+    return html + '</tbody></table>';
+  }
+
+  function connectionHtml() {
+    // Is the system connected — plainly, at the top, in one line.
+    var state = local.connection;
+    if (!state) { return '<div class="conn checking">checking…</div>'; }
+    var html = '<div class="conn ' + (state.connected ? 'up' : 'down') +
+      '"><b>' + (state.connected ? 'CONNECTED' : 'NOT READY') + '</b> ' +
+      escape(state.summary);
+    if ((state.blockers || []).length > 1) {
+      html += '<ul>';
+      state.blockers.forEach(function (blocker) {
+        html += '<li>' + escape(blocker) + '</li>';
+      });
+      html += '</ul>';
+    }
+    var clock = state.broker_clock || {};
+    if (clock.broker_time) {
+      html += '<div class="hint">Broker time ' + escape(clock.broker_time) +
+        ' · ' + escape(clock.note) + '</div>';
+    } else if (clock.note) {
+      html += '<div class="hint problem-text">' + escape(clock.note) +
+        '</div>';
+    }
+    return html + '</div>';
   }
 
   // -- pairs ---------------------------------------------------------------
@@ -456,13 +514,14 @@
     if (button.classList.contains('save-account')) {
       return saveAccount(row);
     }
+    if (button.classList.contains('connect-account')) {
+      return runCheck(row.dataset.account, 'connect', button);
+    }
     if (button.classList.contains('test-account')) {
-      var name = row.dataset.account;
-      return api('/api/accounts/' + encodeURIComponent(name) + '/test')
-        .then(function (result) {
-          local.tests[name] = result.body;
-          render();
-        });
+      return runCheck(row.dataset.account, 'test', button);
+    }
+    if (button.classList.contains('diagnose-account')) {
+      return runCheck(row.dataset.account, 'diagnose', button);
     }
     if (button.classList.contains('delete-account')) {
       var target = row.dataset.account;
@@ -535,6 +594,41 @@
     }
     if (button.classList.contains('derive-pair')) { return derive(); }
     if (button.classList.contains('save-pair')) { return savePair(); }
+  }
+
+  function runCheck(name, kind, button) {
+    var label = button.textContent;
+    button.textContent = '…';
+    button.disabled = true;
+    return api('/api/accounts/' + encodeURIComponent(name) + '/' + kind)
+      .then(function (result) {
+        var body = result.body || {};
+        body.ran = kind.charAt(0).toUpperCase() + kind.slice(1) + ': ';
+        local.tests[name] = body;
+        button.textContent = label;
+        button.disabled = false;
+        render(false);
+        refreshConnection();
+      })
+      .catch(function (error) {
+        button.textContent = label;
+        button.disabled = false;
+        UI.toast(kind + ' could not run: ' + error.message);
+      });
+  }
+
+  function refreshConnection() {
+    return api('/api/connection').then(function (result) {
+      var was = local.connection && local.connection.connected;
+      local.connection = result.body;
+      // Say it ONCE when it becomes true, rather than every poll: a
+      // banner that never changes is a banner nobody reads.
+      if (local.connection.connected && was === false) {
+        UI.toast('Connected — both accounts logged in, Algo Trading on, ' +
+                 'prices arriving. You can trade.', 'ok');
+      }
+      render(false);
+    });
   }
 
   function saveSettings() {

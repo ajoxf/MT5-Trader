@@ -107,6 +107,8 @@ def main():
     parser.add_argument('--web-port', type=int, default=8000)
     parser.add_argument('--no-web', action='store_true',
                         help='engine only, no browser UI')
+    parser.add_argument('--open-browser', action='store_true',
+                        help='open the ladders once the engine is up')
     args = parser.parse_args()
 
     problems = check_config(args.config)
@@ -149,7 +151,19 @@ def main():
                             '--port', str(args.web_port)])
         web.start()
         children.append(web)
-        print(f'[launcher] ladders at http://127.0.0.1:{args.web_port}/')
+        url = f'http://127.0.0.1:{args.web_port}/'
+        print(f'[launcher] ladders at {url}')
+        if args.open_browser:
+            # Give the web process a moment to bind, then put the
+            # ladders on screen. The operator should not have to know
+            # what a port is.
+            time.sleep(2.0)
+            try:
+                import webbrowser
+                webbrowser.open(url)
+            except Exception as e:                 # a headless box
+                print(f'[launcher] could not open a browser ({e}) — '
+                      f'browse to {url}')
 
     try:
         while True:

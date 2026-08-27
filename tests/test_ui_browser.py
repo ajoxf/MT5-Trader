@@ -495,6 +495,101 @@ def test_a_clash_already_in_the_config_is_shown_on_the_row(page):
     assert 'One terminal serves ONE login' in page.evaluate('() => window.__clash')
 
 
+def test_the_exchanges_page_carries_connect_test_and_diagnose(page):
+    """The three questions an operator asks, in the order they ask them."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+    page.wait_for_selector('tr[data-account] .connect-account', timeout=5000)
+
+    row = page.locator('tr[data-account]').first
+    for name in ('connect-account', 'test-account', 'diagnose-account'):
+        assert row.locator('.' + name).count() == 1
+    assert 'Exchanges' in page.text_content('.window.settings .accounts h3')
+
+
+def test_a_check_shows_its_answer_as_a_checklist_with_fixes(page):
+    """A checklist that only says FAIL is one that sends the operator
+    to a forum."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+    page.evaluate("""() => {
+        window.__realFetch = window.__realFetch || window.fetch;
+        window.fetch = function (url, options) {
+            if (String(url).indexOf('/connect') >= 0) {
+                return Promise.resolve(new Response(JSON.stringify({
+                    ok: false, overall: 'FAIL', passed: 1, warnings: 0,
+                    failed: 1, connected: false,
+                    checks: [
+                        {scope: 'CFI Spot', name: 'MT5 terminal',
+                         status: 'PASS', message: 'attached', fix: []},
+                        {scope: 'CFI Spot', name: 'Algo Trading',
+                         status: 'FAIL',
+                         message: 'OFF — MT5 will refuse every order with '
+                             + '"10027 AutoTrading disabled by client"',
+                         fix: ['Press the Algo Trading button in THIS '
+                               + "terminal's toolbar (it turns green)"]}
+                    ]}), {status: 200,
+                          headers: {'Content-Type': 'application/json'}}));
+            }
+            return window.__realFetch(url, options);
+        };
+    }""")
+
+    page.locator('tr[data-account] .connect-account').first.click()
+    page.wait_for_selector('tr.checklist', timeout=5000)
+
+    text = page.text_content('tr.checklist')
+    assert '10027' in text                       # the broker's own words
+    assert 'turns green' in text                 # ...and what to do
+    assert page.locator('tr.c-fail').count() == 1
+    assert page.locator('tr.c-pass').count() == 1
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+
+
+def test_the_operator_is_told_when_the_system_is_connected(page):
+    """Said once, when it becomes true — a banner that never changes is
+    a banner nobody reads."""
+    page.click('#open-settings')
+    page.wait_for_selector('.conn', timeout=5000)
+    # Nothing is really connected in this fixture, and it says so
+    # plainly rather than showing a green light.
+    assert 'NOT READY' in page.text_content('.conn')
+
+    page.evaluate("""() => {
+        window.__realFetch = window.__realFetch || window.fetch;
+        window.fetch = function (url, options) {
+            if (String(url).indexOf('/api/connection') >= 0) {
+                return Promise.resolve(new Response(JSON.stringify({
+                    ok: true, connected: true, blockers: [],
+                    accounts: [], feeds: [],
+                    broker_clock: {broker_time: '19:55:02', offset_sec: 10800,
+                                   cutoff: '16:55',
+                                   note: "broker time, +3.0h from this "
+                                       + "machine — the 16:55 cutoff is on "
+                                       + "the broker's clock"},
+                    summary: 'Connected — both accounts logged in, Algo '
+                        + 'Trading on, and prices arriving. You can trade.'
+                }), {status: 200,
+                     headers: {'Content-Type': 'application/json'}}));
+            }
+            return window.__realFetch(url, options);
+        };
+        window.MT5Settings.refresh();
+    }""")
+    page.wait_for_selector('.conn.up', timeout=6000)
+
+    assert 'CONNECTED' in page.text_content('.conn.up')
+    assert 'You can trade' in page.text_content('.conn.up')
+    # And which clock the session cutoff is on.
+    assert 'Broker time 19:55:02' in page.text_content('.conn.up')
+    assert "the 16:55 cutoff is on the broker's clock" in \
+        page.text_content('.conn.up')
+    # It is also said once, out loud.
+    page.wait_for_selector('.toast.ok', timeout=4000)
+    assert 'You can trade' in page.text_content('.toast.ok')
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+
+
 def test_the_pair_form_offers_the_number_it_derived_as_a_click(page):
     """A warning nobody can act on is not a fix — but nothing is
     corrected silently either. The derived value is offered as a

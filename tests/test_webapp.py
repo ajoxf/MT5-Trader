@@ -288,9 +288,13 @@ class FakeRemoteLeg:
                         'error': f'{symbol} does not exist on this broker'})
 
     def terminal_report(self):
-        return {'library': True, 'terminal': True, 'logged_in': True,
-                'algo_trading': True, 'hedging': True, 'login': 5001,
-                'server': 'FakeServer'}
+        return {'library': True, 'terminal': True, 'terminal_connected': True,
+                'logged_in': True, 'algo_trading': True, 'hedging': True,
+                'trade_allowed': True, 'login': 5001, 'server': 'FakeServer',
+                'terminal_path': 'C:/MT5-A/terminal64.exe', 'ping_ms': 12.0}
+
+    def server_offset(self):
+        return 3 * 3600
 
     def account_info(self):
         return {'account': self.name, 'balance': 0.0, 'equity': 5000.0,
@@ -309,28 +313,130 @@ def wired(client, paths, monkeypatch):
     return client
 
 
-def test_testing_an_account_names_the_switch_that_is_off(wired, monkeypatch):
+def test_connect_answers_the_first_question_and_says_what_to_do(wired,
+                                                                monkeypatch):
+    """Is the runner there, and is its terminal logged in? When it is
+    not, the answer is an instruction, not a status code."""
+    body = wired.get('/api/accounts/spot/connect').get_json()
+    assert body['connected'] is True and body['ok'] is True
+    names = [check['name'] for check in body['checks']]
+    assert 'MT5 terminal' in names and 'Account login' in names
+
+    monkeypatch.setattr(FakeRemoteLeg, 'connected', False)
+    response = wired.get('/api/accounts/spot/connect')
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body['connected'] is False
+    assert any('run_leg.py' in step
+               for check in body['checks'] for step in check['fix'])
+
+
+def test_test_names_the_switch_that_is_off_and_how_to_turn_it_on(wired,
+                                                                 monkeypatch):
     """`10027 AutoTrading disabled by client` is a button in THAT
     terminal, and nothing else on the screen will say so."""
     body = wired.get('/api/accounts/spot/test').get_json()
     assert body['ok'] and body['problems'] == []
-    assert body['terminal']['hedging'] is True
+    assert body['failed'] == 0
 
     monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
-                        lambda self: {'logged_in': True, 'algo_trading': False,
+                        lambda self: {'library': True, 'terminal': True,
+                                      'logged_in': True, 'algo_trading': False,
                                       'hedging': True})
     body = wired.get('/api/accounts/spot/test').get_json()
     assert body['ok'] is False
-    assert '10027' in body['problems'][0]
+    assert any('10027' in problem for problem in body['problems'])
+    algo = [check for check in body['checks']
+            if check['name'] == 'Algo Trading'][0]
+    assert 'turns green' in algo['fix'][0]
 
 
 def test_a_netting_account_is_called_out_before_it_is_traded(wired,
                                                              monkeypatch):
     monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
-                        lambda self: {'logged_in': True, 'algo_trading': True,
+                        lambda self: {'library': True, 'terminal': True,
+                                      'logged_in': True, 'algo_trading': True,
                                       'hedging': False})
     body = wired.get('/api/accounts/spot/test').get_json()
-    assert any('NETTING' in problem for problem in body['problems'])
+    margin = [check for check in body['checks']
+              if check['name'] == 'Margin mode'][0]
+    assert margin['status'] == 'WARN'
+    assert 'NETTING' in margin['message']
+
+
+def test_diagnose_checks_the_symbols_and_whether_the_two_legs_fit(wired,
+                                                                  paths):
+    """The checks that only make sense across a pair: a beta stamped for
+    THIS pair, a spread that is a difference, a clip both legs carry."""
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
+                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'pairs': {'XAUUSD_|GC1226': {
+            'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+            'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
+            'hedge_ratio': 1.0, 'hedge_ratio_for': 'XAUUSD_|GC1226'}}})
+
+    body = wired.get('/api/accounts/spot/diagnose').get_json()
+
+    names = [check['name'] for check in body['checks']]
+    assert 'Symbol XAUUSD_ (leg A)' in names
+    assert 'Hedge ratio' in names and 'One spread' in names
+    spread = [check for check in body['checks'] if check['name'] == 'Spread'][0]
+    assert spread['status'] == 'PASS'
+    clip = [check for check in body['checks']
+            if check['name'] == 'One spread'][0]
+    assert 'per 1.00 of spread' in clip['message']
+    assert body['ok'] is True
+
+
+def test_diagnose_catches_a_beta_left_behind_by_another_instrument(wired,
+                                                                   paths):
+    """A stale beta defines a spread that does not exist — the fault
+    that turned a +3.30 oil spread into -0.05."""
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
+                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'pairs': {'XAUUSD_|GC1226': {
+            'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+            'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
+            'hedge_ratio': 66.93, 'hedge_ratio_for': 'XAGUSD|XAUUSD'}}})
+
+    body = wired.get('/api/accounts/spot/diagnose').get_json()
+
+    beta = [check for check in body['checks']
+            if check['name'] == 'Hedge ratio'][0]
+    assert beta['status'] == 'FAIL'
+    assert 'XAGUSD|XAUUSD' in beta['message']
+    spread = [check for check in body['checks'] if check['name'] == 'Spread'][0]
+    assert spread['status'] == 'FAIL'
+    assert 'is not a difference between' in spread['message']
+    assert body['ok'] is False
+
+
+def test_the_system_says_plainly_whether_it_is_connected(wired, paths):
+    """The operator's question is never "is endpoint 9101 bound"; it is
+    "can I trade right now"."""
+    write_status(paths)
+    body = wired.get('/api/connection').get_json()
+
+    # The engine is up in the fixture status, but that fabricated pair
+    # has no price — so it is honestly NOT ready, and it says which.
+    assert body['connected'] is False
+    assert 'Not ready to trade' in body['summary']
+    assert any('no price yet' in blocker for blocker in body['blockers'])
+    assert [row['account'] for row in body['accounts']] == ['spot', 'fut']
+    assert all(row['connected'] and row['trading'] for row in body['accounts'])
+
+
+def test_a_terminal_that_is_not_logged_in_is_the_named_blocker(wired, paths,
+                                                               monkeypatch):
+    write_status(paths)
+    monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
+                        lambda self: {'library': True, 'terminal': True,
+                                      'logged_in': False})
+    body = wired.get('/api/connection').get_json()
+    assert body['connected'] is False
+    assert 'not logged in' in body['summary']
 
 
 def test_a_symbols_contract_specs_come_from_mt5_not_from_a_form(wired):

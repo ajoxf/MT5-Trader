@@ -1064,7 +1064,7 @@
         ? ((state.snapshot.pairs[parts.slice(1).join(':')] || {}).name ||
            parts.slice(1).join(':'))
         : parts[0] === 'grid' ? 'Market Grid'
-          : parts[0] === 'settings' ? 'Settings' : 'Positions';
+          : parts[0] === 'settings' ? 'Exchanges' : 'Positions';
       var badge = '';
       if (parts[0] === 'ladder') {
         var row = state.snapshot.pairs[parts.slice(1).join(':')] || {};

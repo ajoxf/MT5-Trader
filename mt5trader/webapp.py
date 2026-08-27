@@ -25,7 +25,7 @@ import time
 
 from flask import Flask, jsonify, render_template, request
 
-from . import config as cfg, hedgeratio, sizing
+from . import config as cfg, diagnostics, hedgeratio, sizing
 from .commands import CommandLog
 from .legs import RemoteLeg
 
@@ -353,37 +353,194 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return jsonify({'ok': True, 'symbols': found or [],
                         'terminal': report})
 
-    @app.get('/api/accounts/<path:name>/test')
-    def api_test_account(name):
-        """Is this account reachable, logged in, and allowed to trade?
+    @app.get('/api/accounts/<path:name>/connect')
+    def api_connect_account(name):
+        """Is the leg runner there, and is its terminal attached?
 
-        Answers the three questions in the operator's words rather than
-        as a checklist of booleans: `10027 AutoTrading disabled by
-        client` is a switch in that terminal, and nothing else will say
-        so.
+        The first question, and the one whose answer is usually an
+        instruction: start the runner, open the terminal, log in.
         """
         leg, error, code = open_leg(name)
+        checklist = diagnostics.Checklist()
         if leg is None:
-            return jsonify({'ok': False, 'error': error}), code
+            diagnostics.check_account(checklist, name, {'error': error})
+            return jsonify(dict(checklist.result(), connected=False,
+                                account=name)), code
+        try:
+            terminal = leg.terminal_report()
+            offset = leg.server_offset()
+        finally:
+            leg.close()
+        diagnostics.check_account(checklist, name, terminal, offset=offset)
+        result = checklist.result()
+        return jsonify(dict(result, account=name,
+                            connected=bool(terminal.get('logged_in')),
+                            terminal=terminal))
+
+    @app.get('/api/accounts/<path:name>/test')
+    def api_test_account(name):
+        """Can this account TRADE?
+
+        Everything Connect asks, plus the switches that decide whether
+        an order will be accepted — in the operator's words, because
+        `10027 AutoTrading disabled by client` is a button in that
+        terminal and nothing else on the screen will say so.
+        """
+        leg, error, code = open_leg(name)
+        checklist = diagnostics.Checklist()
+        if leg is None:
+            diagnostics.check_account(checklist, name, {'error': error})
+            return jsonify(dict(checklist.result(), account=name)), code
         try:
             terminal = leg.terminal_report()
             account = leg.account_info()
+            offset = leg.server_offset()
         finally:
             leg.close()
-        problems = []
-        if not terminal.get('logged_in'):
-            problems.append('the terminal is open but not logged in')
-        if not terminal.get('algo_trading'):
-            problems.append('Algo Trading is OFF in this terminal — MT5 will '
-                            'refuse every order with 10027 until the button '
-                            'is on')
-        if terminal.get('hedging') is False:
-            problems.append('this account is NETTING, not hedging. Closes '
-                            'here target a position ticket, which a netting '
-                            'account handles differently — check with the '
-                            'broker before trading it')
-        return jsonify({'ok': not problems, 'problems': problems,
-                        'terminal': terminal, 'account': account})
+        diagnostics.check_account(checklist, name, terminal, account, offset)
+        result = checklist.result()
+        return jsonify(dict(result, account=name, terminal=terminal,
+                            connected=bool(terminal.get('logged_in')),
+                            problems=[check['message'] for check in
+                                      result['checks']
+                                      if check['status'] == 'FAIL']))
+
+    @app.get('/api/accounts/<path:name>/diagnose')
+    def api_diagnose_account(name):
+        """Everything — the account, every symbol it carries, and every
+        pair that routes through it.
+
+        This is the one to run before the first trade of the day, and
+        the one to read when something is refusing and nobody can say
+        why.
+        """
+        raw = cfg.load_raw(config_path)
+        leg, error, code = open_leg(name)
+        checklist = diagnostics.Checklist()
+        if leg is None:
+            diagnostics.check_account(checklist, name, {'error': error})
+            return jsonify(dict(checklist.result(), account=name)), code
+
+        pairs = {key: cfg.PairConfig.from_dict(key, row)
+                 for key, row in (raw.get('pairs') or {}).items()}
+        reports = {}
+        try:
+            terminal = leg.terminal_report()
+            account_info = leg.account_info()
+            offset = leg.server_offset()
+            diagnostics.check_account(checklist, name, terminal, account_info,
+                                      offset)
+            for key, pair in pairs.items():
+                for symbol, role in ((pair.symbol_a, 'leg A'),
+                                     (pair.symbol_b, 'leg B')):
+                    account = (pair.account_a if role == 'leg A'
+                               else pair.account_b)
+                    if account != name or not symbol:
+                        continue
+                    if symbol not in reports:
+                        reports[symbol] = leg.symbol_report(symbol)
+                    diagnostics.check_symbol(checklist, name,
+                                             reports[symbol], role)
+        finally:
+            leg.close()
+
+        # The pair checks need BOTH legs, so the other account's runner
+        # is opened too — and its absence is reported rather than
+        # silently skipping the check.
+        for key, pair in pairs.items():
+            if name not in (pair.account_a, pair.account_b):
+                continue
+            other = pair.account_b if pair.account_a == name else pair.account_a
+            other_leg, other_error, _code = open_leg(other)
+            if other_leg is None:
+                checklist.add(f'Pair {key}', 'Other leg', diagnostics.FAIL,
+                              other_error,
+                              ['Start that account\'s leg runner too — a '
+                               'pair needs both'])
+                continue
+            try:
+                report_a = (reports.get(pair.symbol_a)
+                            or (other_leg.symbol_report(pair.symbol_a)
+                                if pair.account_a == other else {}))
+                report_b = (reports.get(pair.symbol_b)
+                            or (other_leg.symbol_report(pair.symbol_b)
+                                if pair.account_b == other else {}))
+            finally:
+                other_leg.close()
+            diagnostics.check_pair(checklist, pair, report_a or {},
+                                   report_b or {})
+
+        return jsonify(dict(checklist.result(), account=name,
+                            terminal=terminal,
+                            connected=bool(terminal.get('logged_in'))))
+
+    @app.get('/api/connection')
+    def api_connection():
+        """Is the SYSTEM connected — plainly, in one answer.
+
+        The operator's real question is never "is endpoint 9101 bound";
+        it is "can I trade right now". This answers that, and when the
+        answer is no it names the one thing to fix.
+        """
+        raw = cfg.load_raw(config_path)
+        snapshot = status()
+        accounts = []
+        blockers = []
+        for name in (raw.get('accounts') or {}):
+            leg, error, _code = open_leg(name)
+            row = {'account': name, 'connected': False, 'trading': False,
+                   'error': error}
+            if leg is not None:
+                try:
+                    terminal = leg.terminal_report()
+                finally:
+                    leg.close()
+                row.update({
+                    'connected': bool(terminal.get('logged_in')),
+                    'trading': bool(terminal.get('algo_trading')),
+                    'login': terminal.get('login'),
+                    'server': terminal.get('server'),
+                    'error': None})
+                if not row['connected']:
+                    blockers.append(f'{name}: the terminal is not logged in')
+                elif not row['trading']:
+                    blockers.append(f'{name}: Algo Trading is off in that '
+                                    f'terminal')
+            else:
+                blockers.append(f'{name}: {error}')
+            accounts.append(row)
+
+        if not accounts:
+            blockers.append('no accounts are configured yet')
+        if snapshot.get('engine') != 'up':
+            blockers.append(snapshot.get('engine_note') or
+                            'the coordinator is not running')
+
+        feeds = []
+        for key, pair in (snapshot.get('pairs') or {}).items():
+            if not pair.get('enabled'):
+                continue
+            market = pair.get('market') or {}
+            feeds.append({'pair': key, 'name': pair.get('name'),
+                          'priced': market.get('spread') is not None,
+                          'badge': market.get('feed_badge'),
+                          'errors': pair.get('errors') or []})
+            if market.get('spread') is None:
+                blockers.append(f'{key}: no price yet')
+
+        return jsonify({
+            'ok': not blockers,
+            'connected': not blockers,
+            'accounts': accounts,
+            'feeds': feeds,
+            'engine': snapshot.get('engine'),
+            'broker_clock': snapshot.get('broker_clock'),
+            'blockers': blockers,
+            'summary': ('Connected — both accounts logged in, Algo Trading '
+                        'on, and prices arriving. You can trade.'
+                        if not blockers else
+                        'Not ready to trade: ' + blockers[0]),
+        })
 
     @app.get('/api/accounts/<path:name>/symbol/<path:symbol>')
     def api_symbol(name, symbol):

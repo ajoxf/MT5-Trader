@@ -1,5 +1,9 @@
-"""The session cutoff: DAY orders die, and each ladder's overnight rule
-decides what happens to its position.
+"""The session cutoff — on the BROKER's clock.
+
+A box in one time zone and a broker in another is the normal case, and
+a cutoff read off the local clock fires hours early or late. On
+EXIT_ALWAYS that means flattening in the middle of the session, or not
+at all.
 """
 
 from datetime import datetime
@@ -19,6 +23,9 @@ def engine(config, pair, legs):
     coordinator = Coordinator(config, legs, sleep=lambda s: None)
     coordinator.start()
     coordinator.poll_once()
+    # These tests drive the clock directly, so the two clocks are the
+    # same one here; the broker-clock behaviour has its own tests below.
+    coordinator.session_clock.offset = lambda: 0
     return coordinator
 
 
@@ -110,6 +117,87 @@ def test_no_guard_withholds_an_overnight_close(engine, pair, legs):
 
     assert events[0]['ok']
     assert legs['acct_a'].broker.open_positions() == []
+
+
+def test_the_cutoff_is_the_brokers_1655_not_this_machines(config, pair,
+                                                          legs):
+    """The broker is three hours ahead: its 16:55 is 13:55 here, and
+    that is when the rule belongs."""
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+    assert coordinator.broker_offset() == 3 * 3600     # measured, not typed
+
+    coordinator.session_clock.now = lambda: datetime(2026, 8, 27, 13, 54)
+    assert coordinator.session_clock.due(pair.key) is False
+
+    coordinator.session_clock.now = lambda: datetime(2026, 8, 27, 13, 55)
+    assert coordinator.session_clock.due(pair.key) is True
+    # ...and the local 16:55, which is 19:55 at the broker, is well past
+    # it rather than at it — the same day, already fired.
+    coordinator.session_clock.mark(pair.key)
+    coordinator.session_clock.now = lambda: datetime(2026, 8, 27, 16, 55)
+    assert coordinator.session_clock.due(pair.key) is False
+
+
+def test_the_cutoff_does_not_fire_at_all_on_an_unmeasured_clock(config, pair,
+                                                                legs):
+    """Unmeasured is not zero. A session rule on the wrong clock is
+    worse than one that waits for the right one — and it says so."""
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.session_clock.offset = lambda: None
+    coordinator.session_clock.now = lambda: AFTER
+
+    assert coordinator.session_clock.due(pair.key) is False
+    assert coordinator.session_clock.broker_now() is None
+    described = coordinator.session_clock.describe()
+    assert described['broker_time'] is None
+    assert 'will not fire until it is' in described['note']
+
+
+def test_the_screen_says_which_clock_the_cutoff_is_on(config, pair, legs):
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+
+    block = coordinator.snapshot()['broker_clock']
+
+    assert block['offset_sec'] == 3 * 3600
+    assert block['cutoff'] == '16:55'
+    assert '+3.0h from this machine' in block['note']
+    assert block['per_account'] == {'acct_a': 10800, 'acct_b': 10800}
+    assert block['accounts_disagree'] is False
+
+
+def test_two_brokers_on_different_clocks_is_said_out_loud(config, pair, legs):
+    """Two accounts whose clocks differ usually means two brokers — and
+    the cutoff can only be on one of them."""
+    legs['acct_b'].broker.server_offset_sec = 0
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+
+    block = coordinator.snapshot()['broker_clock']
+    assert block['accounts_disagree'] is True
+    assert set(block['per_account'].values()) == {0, 10800}
+
+
+def test_the_brokers_clock_is_not_re_measured_on_every_poll(config, pair,
+                                                             legs):
+    """It does not drift on the scale of a poll, and it is a round trip
+    per account."""
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    calls = []
+    real = legs['acct_a'].server_offset
+    legs['acct_a'].server_offset = lambda: (calls.append(1), real())[1]
+
+    for _ in range(5):
+        coordinator.broker_offset()
+    assert len(calls) == 1
+
+    coordinator._offsets['acct_a'] = (coordinator.clock() - 301.0, 10800)
+    coordinator.broker_offset()
+    assert len(calls) == 2
 
 
 def test_gtc_says_what_it_can_and_cannot_promise():

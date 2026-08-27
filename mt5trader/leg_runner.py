@@ -88,6 +88,8 @@ class LegServer:
             if cmd == 'order_log':
                 return {'ok': True,
                         'orders': self.leg.order_log(msg.get('hours', 24))}
+            if cmd == 'server_offset':
+                return {'ok': True, 'offset': self.leg.server_offset()}
             if cmd == 'terminal_report':
                 return {'ok': True, 'report': self.leg.terminal_report()}
             if cmd == 'symbol_report':

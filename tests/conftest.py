@@ -149,6 +149,11 @@ class FakeBroker:
             'trade_allowed': info.trade_allowed, 'expiry': 0,
         }
 
+    def server_time_offset_sec(self):
+        """Seconds this broker's clock runs ahead of ours — measured
+        from a tick, as the real one does."""
+        return self.server_offset_sec
+
     def terminal_report(self):
         return {'library': True, 'terminal': True, 'logged_in': True,
                 'algo_trading': True, 'hedging': True,

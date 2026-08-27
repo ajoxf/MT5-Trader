@@ -71,6 +71,20 @@ overwrite each other. It carries the trader's own terminal clicks too,
 marked as not ours, with the broker's commission, swap and P&L and the
 broker's own clock beside the offset from ours. Exportable as CSV.
 
+**Exchanges** is the setup page: each account with **Connect** (is the
+runner there and the terminal logged in), **Test** (can it trade — Algo
+Trading, permissions, hedging) and **Diagnose** (everything, including
+whether the two legs fit each other: symbols, contract sizes, expiry,
+and a beta stamped for the pair it is actually used on). Every failure
+carries the step that fixes it. At the top, one line says whether the
+system is **CONNECTED** or names the single thing standing in the way,
+and it is said out loud once when it becomes true.
+
+**Times are the broker's.** The session cutoff runs on the broker's
+clock, measured from the terminal rather than configured, and the page
+shows the broker's time and its offset from the machine. Unmeasured is
+not zero: with no measurement the cutoff does not fire, and says so.
+
 Still to come: per-account margin on the monitor, and the slippage
 report over a real session.
 
@@ -100,7 +114,19 @@ That is the product, so it is the default and it is fast:
 Flatten and the global kill still ask once — they are irreversible and
 they are the buttons pressed in a hurry.
 
-## Running it
+## Running it (for whoever sits in front of it)
+
+On the trading box: check both MT5 terminals are open, logged in and
+have **Algo Trading** green, then double-click **START-TRADING**. It
+checks Python, the terminals, the dependencies and the test suite —
+refusing to start the engine on a failing suite — then starts
+everything and opens the ladders.
+
+`deploy/bootstrap.ps1` prepares a fresh Windows box and puts that
+shortcut on the desktop. `deploy/RUNBOOK.md` is the page to hand to
+whoever runs it day to day.
+
+## Running it (the pieces)
 
 The terminals and the leg runners live on the Windows box; everything
 else runs anywhere.
