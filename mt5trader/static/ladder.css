@@ -11,31 +11,42 @@
  */
 
 :root {
-  --chrome: #d4d0c8;          /* the button/input furniture grey */
-  --chrome-dark: #a9a9a9;
-  /* The reference screen's window FRAME: dark grey, with light text on
-   * it. Title bar, quote strip, rail, column headers, footer and the
-   * taskbar are all this — it is what makes the coloured columns read
-   * as bright as they do. */
-  --frame: #4a4a4a;
-  --frame-dark: #3a3a3a;
-  --frame-line: #5f5f5f;
-  --frame-text: #e8e8e8;
-  --frame-muted: #b6b6b6;
-  --price-cell: #d5d5d5;      /* the grey price column */
-  --price-line: #ffffff;
-  --panel: #f0f0f0;
-  --grid-line: #808080;
-  --text: #1a1a1a;
+  --chrome: #e4e4e4;          /* the button/input furniture grey */
+  --chrome-dark: #b8b8b8;
+  --panel: #f4f4f4;
+  --grid-line: #9a9a9a;
+  --text: #1f1f1f;
   --muted: #5a5a5a;
+  /* The window FRAME: light grey, with dark text on it. Title bar,
+   * quote strip, rail, column headers, footer and the taskbar are all
+   * this. A trading screen is looked at for eight hours at a time, and
+   * the two things that must stand out are the two coloured columns —
+   * everything else gets out of the way rather than competing. */
+  --frame: #d6d6d6;
+  --frame-dark: #c2c2c2;
+  --frame-line: #a9a9a9;
+  --frame-text: #1f1f1f;
+  --frame-muted: #5f5f5f;
+  --price-cell: #efefef;      /* the price column */
+  --price-line: #ffffff;
 
-  --bid: #1a6fb5;             /* the solid blue bid band */
-  --bid-cell: #4aa8e0;        /* a quantity inside it */
-  --ask: #b01c1c;             /* the solid red ask band */
-  --ask-cell: #d84a4a;
-  --traded: #2f9e44;          /* LTQ print, positive change */
-  --down: #c92a2a;
-  --last-trade: #d9d2f0;      /* the tinted last-traded price cell */
+  /* Softened, deliberately. The saturated pair was right for a dark
+   * frame and is loud on a light one — and a band that shouts makes
+   * the SIZE printed in it harder to read, which is the number being
+   * traded off. The hues are unchanged: bid is blue, ask is red, and
+   * that convention is global. */
+  --bid: #6ea3d0;             /* the solid blue bid band */
+  --bid-cell: #a9cdea;        /* a quantity inside it */
+  --ask: #cd7b7b;             /* the solid red ask band */
+  --ask-cell: #e6afaf;
+  /* One step deeper, for BUTTONS only. A band is data and gets out of
+   * the way; a button is an action and has white text on it, which
+   * needs the contrast. */
+  --bid-strong: #4a7fae;
+  --ask-strong: #b45f5f;
+  --traded: #4a9c5d;          /* LTQ print, positive change */
+  --down: #c0504d;
+  --last-trade: #e6e0f5;      /* the tinted last-traded price cell */
   --inside: #000000;          /* the inside-market rule */
 
   --row-h: 17px;
@@ -48,7 +59,7 @@
 body {
   margin: 0;
   padding: 0 0 30px 0;
-  background: #6b7a8f;
+  background: #9aa4b1;
   color: var(--text);
   font: 12px/1.35 var(--font);
   overflow: hidden;
@@ -61,8 +72,8 @@ body {
 .banner {
   padding: 6px 12px;
   font-weight: 600;
-  background: #ffe066;
-  border-bottom: 1px solid #b8860b;
+  background: #e8dcc0;
+  border-bottom: 1px solid #9c8850;
 }
 .banner.critical {
   background: var(--ask);
@@ -133,7 +144,7 @@ body {
 
 /* A window that was just opened, said once so the eye finds it. */
 @keyframes reveal-flash {
-  from { box-shadow: 0 0 0 3px #ffd43b; }
+  from { box-shadow: 0 0 0 3px #6ea3d0; }
   to { box-shadow: 1px 1px 0 rgba(0, 0, 0, .3); }
 }
 .window.revealed { animation: reveal-flash .9s ease-out; }
@@ -161,7 +172,7 @@ body {
   color: var(--frame-text);
   font-size: 11px;
 }
-.window.inactive .titlebar { background: #6a6a6a; }
+.window.inactive .titlebar { background: #cfcfcf; color: #4a4a4a; }
 .titlebar .swatch {
   width: 9px; height: 9px;
   background: var(--bid);
@@ -283,7 +294,8 @@ body {
 }
 /* Armed is a DIFFERENT state from the ladder's default size, and one
  * click sends it — so it does not look the same. Teal rather than
- * yellow: yellow is the MARKET-mode mark on the touch rows, and two
+ * bright: the market-mode mark on the touch rows is the other accent
+ * on this window, and two
  * different meanings in one colour is one meaning nobody reads. */
 .rail .armed.on {
   background: #0c8599;
@@ -338,8 +350,8 @@ body {
  * spread lifts the offer, which is the red Asks side; selling hits the
  * bid, which is the blue Bids side. A button coloured the other way is
  * a button that reads as the opposite trade. */
-.buy-touch { background: var(--ask); }
-.sell-touch { background: var(--bid); }
+.buy-touch { background: var(--ask-strong); }
+.sell-touch { background: var(--bid-strong); }
 .flatten { background: #444; }
 .quick:hover { filter: brightness(1.15); }
 
@@ -373,7 +385,7 @@ body {
   /* The empty ladder is the frame's grey, not white: the Work and LTQ
    * columns either side of the coloured bands are part of the window,
    * not paper. */
-  background: #e9e9e9;
+  background: #f7f7f7;
 }
 .grid table {
   border-collapse: collapse;
@@ -406,10 +418,12 @@ body {
 
 /* The solid bands. Everything at or below the best bid is the bid side;
  * everything at or above the best ask is the ask side. */
-tr.in-bid td.bid { background: var(--bid); }
-tr.in-ask td.ask { background: var(--ask); }
-td.bid.has-qty { background: var(--bid-cell); color: #fff; }
-td.ask.has-qty { background: var(--ask-cell); color: #fff; }
+/* The bands, and the implied SIZE printed in them — dark on the softer
+ * colour, because the number is what is being traded off. */
+tr.in-bid td.bid { background: var(--bid); color: #0d2135; }
+tr.in-ask td.ask { background: var(--ask); color: #3a0f0f; }
+td.bid.has-qty { background: var(--bid-cell); color: #10263a; }
+td.ask.has-qty { background: var(--ask-cell); color: #3d1010; }
 
 /* THE INSIDE MARKET. The single most important mark on the ladder: a
  * crisp rule across the full width, between the best bid and the best
@@ -424,7 +438,7 @@ tr.mid-line > td {
   border-top: 3px solid #111;
   border-bottom: 3px solid #111;
 }
-tr.mid-line > td.price { background: #fff3bf; font-weight: 700; }
+tr.mid-line > td.price { background: #dcdcdc; font-weight: 700; }
 
 td.price {
   text-align: center;
@@ -475,7 +489,7 @@ tr:hover td.price { outline: 1px solid #333; }
 .window.mode-market tr.market-line td.ask,
 .window.mode-market tr.best-ask td.bid,
 .window.mode-market tr.best-ask td.ask {
-  box-shadow: inset 0 0 0 2px #ffd43b;
+  box-shadow: inset 0 0 0 2px #6b5a2b;
 }
 /* Away from the touch a market-mode click RESTS, and the cursor says
  * so rather than promising a cross. */
@@ -507,7 +521,7 @@ tr:hover td.price { outline: 1px solid #333; }
   font-size: 10px;
 }
 .footer .feed.ok { color: var(--traded); }
-.footer .feed.warn { color: #b8860b; font-weight: 600; }
+.footer .feed.warn { color: #8a6b1f; font-weight: 600; }
 .footer .feed.bad { color: var(--ask); font-weight: 700; }
 .footer .pnl.up { color: var(--traded); }
 .footer .pnl.down { color: var(--down); }
@@ -552,7 +566,7 @@ tr:hover td.price { outline: 1px solid #333; }
 .market-grid select { font: 10px var(--font); width: 96px; }
 .market-grid input { font: 10px var(--mono); width: 64px; text-align: right; }
 .window.mode-market .market-grid td.bid,
-.window.mode-market .market-grid td.ask { box-shadow: inset 0 0 0 1px #ffd43b; }
+.window.mode-market .market-grid td.ask { box-shadow: inset 0 0 0 1px #6b5a2b; }
 
 /* -- the positions monitor ------------------------------------------ */
 
@@ -589,7 +603,7 @@ tr:hover td.price { outline: 1px solid #333; }
 .monitor .down { color: var(--down); font-weight: 600; }
 .monitor .note {
   padding: 4px 6px;
-  background: #fff9db;
+  background: #edeae0;
   border-top: 1px solid var(--chrome-dark);
   font: 10px var(--font);
 }
@@ -679,7 +693,7 @@ table.unclaimed th, table.unclaimed td {
   cursor: help;
 }
 .link.ok { background: #1b7a35; }
-.link.warn { background: #b8860b; }
+.link.warn { background: #8a6b1f; }
 .link.bad { background: var(--ask); }
 .link.unknown { background: #6a6a6a; }
 .tab.off { opacity: .6; text-decoration: line-through; }
@@ -822,7 +836,7 @@ table.grid-form td.actions .btn { margin-right: 3px; }
 /* The checklist behind Connect / Test / Diagnose. */
 .checklist-head { font: 600 11px var(--font); padding: 3px 0; }
 .checklist-head.pass { color: #1b6b32; }
-.checklist-head.warn { color: #b8860b; }
+.checklist-head.warn { color: #8a6b1f; }
 .checklist-head.fail { color: var(--ask); }
 table.checks { border-collapse: collapse; width: 100%; }
 table.checks td {
@@ -844,7 +858,7 @@ td.pair-status.c-pass { color: #1b6b32; }
 td.pair-status.c-fail { color: var(--ask); font-weight: 400; }
 td.pair-status.c-info { color: var(--muted); font-weight: 400; }
 tr.c-pass td.status { color: #1b6b32; }
-tr.c-warn td.status { color: #b8860b; }
+tr.c-warn td.status { color: #8a6b1f; }
 tr.c-fail td.status { color: var(--ask); }
 tr.c-info td.status { color: var(--muted); }
 ul.fix { margin: 2px 0 2px 16px; padding: 0; color: var(--muted); }
@@ -901,8 +915,8 @@ tr.good td { background: #ebfbee; color: #1b6b32; font: 11px var(--font); }
 .derived {
   margin-top: 8px;
   padding: 6px;
-  background: #fff9db;
-  border: 1px solid #e0c860;
+  background: #edeae0;
+  border: 1px solid #c4bda4;
   font: 11px var(--font);
 }
 .pair-form .actions { margin-top: 8px; display: flex; gap: 6px; }

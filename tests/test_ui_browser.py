@@ -214,10 +214,12 @@ def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
     page.wait_for_selector('.ladder tr.in-ask td.ask')
     bid = page.locator('.ladder tr.in-bid td.bid').first
     ask = page.locator('.ladder tr.in-ask td.ask').first
+    # Softened for a light frame, but the CONVENTION is what is being
+    # pinned: bid is blue, ask is red, in every table on the screen.
     assert bid.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(26, 111, 181)'
+        'rgb(110, 163, 208)'
     assert ask.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(176, 28, 28)'
+        'rgb(205, 123, 123)'
 
 
 def test_a_limit_click_places_one_order_and_asks_nothing(page):
@@ -249,10 +251,12 @@ def test_the_asks_column_buys_the_spread_and_the_bids_column_sells_it(page):
     # ...and the buttons carry the colour of the column they act on.
     buy = page.locator('.ladder .buy-touch')
     sell = page.locator('.ladder .sell-touch')
+    # One step deeper than the bands: a button carries white text and
+    # needs the contrast, while a band is data and gets out of the way.
     assert buy.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(176, 28, 28)'
+        'rgb(180, 95, 95)'
     assert sell.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(26, 111, 181)'
+        'rgb(74, 127, 174)'
 
 
 def test_three_clicks_at_one_price_send_three_orders(page):
@@ -1281,10 +1285,10 @@ def test_the_journal_colours_what_was_made_and_what_was_lost(page):
     assert page.locator('.monitor td.down').count() == 1      # the loser
     made = page.locator('.monitor td.up').first
     assert made.evaluate('n => getComputedStyle(n).color') == \
-        'rgb(47, 158, 68)'
+        'rgb(74, 156, 93)'
     lost = page.locator('.monitor td.down').first
     assert lost.evaluate('n => getComputedStyle(n).color') == \
-        'rgb(201, 42, 42)'
+        'rgb(192, 80, 77)'
     page.evaluate("""() => {
         window.fetch = window.__realFetch;
         window.MT5Trader.state.fills = null;

@@ -227,8 +227,11 @@ def test_bid_is_blue_and_ask_is_red_everywhere():
     """The reference screen's convention, global: a price must not change
     colour depending on which table it sits in."""
     css = (STATIC / 'ladder.css').read_text(encoding='utf-8')
-    assert '--bid: #1a6fb5' in css
-    assert '--ask: #b01c1c' in css
+    # The exact shades are a comfort decision and have been softened
+    # once already; what must not move is that there is ONE blue and ONE
+    # red, defined here, and that every table takes them from here.
+    assert re.search(r'--bid: #[0-9a-f]{6}', css)
+    assert re.search(r'--ask: #[0-9a-f]{6}', css)
     # Every place a bid or ask cell is painted uses those variables.
     for rule in re.findall(r'td\.(bid|ask)[^{]*\{[^}]*background:\s*([^;]+);',
                            css):
