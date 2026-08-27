@@ -55,7 +55,10 @@
   function money(value) {
     if (value === null || value === undefined || !isFinite(value)) return DASH;
     var sign = value < 0 ? '-' : '';
-    return sign + '$' + Math.abs(value).toFixed(2);
+    // Grouped: an account equity of 100000.00 is a number nobody reads
+    // at a glance, and this column is read at a glance.
+    return sign + '$' + Math.abs(value).toLocaleString('en-US', {
+      minimumFractionDigits: 2, maximumFractionDigits: 2});
   }
 
   function toast(message, kind) {
@@ -640,8 +643,12 @@
         '<button data-tab="positions">Positions</button>' +
         '<button data-tab="orders">Working Orders</button>' +
         '<button data-tab="fills">Fills</button>' +
+        '<button data-tab="accounts">Accounts</button>' +
         '<button data-tab="reconcile">Reconciler</button></div>' +
-        '<div class="pane"></div><div class="note"></div>';
+        // `monitor-note`, not `note`: the panes have notes of their own,
+        // and a bare `.note` selector reaches into them and overwrites
+        // the first one it finds.
+        '<div class="pane"></div><div class="note monitor-note"></div>';
       node.querySelector('.close').addEventListener('click', function () {
         closePanel(panelId('monitor'));
       });
@@ -671,8 +678,11 @@
       loadFills();
       pane.innerHTML = fillsTable();
     }
+    else if (state.monitorTab === 'accounts') {
+      pane.innerHTML = accountsTable();
+    }
     else { pane.innerHTML = reconcileTable(); }
-    node.querySelector('.note').textContent =
+    node.querySelector('.monitor-note').textContent =
       'Marked at the touches these would actually CLOSE at, less ' +
       'commission only — so a position shows a loss the instant it ' +
       'opens, equal to one round turn of both legs’ bid-ask. That is ' +
@@ -918,6 +928,78 @@
     return '<tr><td>' + label + '</td><td>median ' + Math.round(median) +
       'ms, worst ' + Math.round(worst) + 'ms over ' + values.length +
       ' — ' + note + '</td></tr>';
+  }
+
+  function accountsTable() {
+    // Margin is posted PER ACCOUNT with two brokers. There is no
+    // combined figure worth showing: the pair can only be carried by
+    // the WEAKER of the two, and a total would read comfortable while
+    // one side sits at its stop-out.
+    var health = state.snapshot.account_health || {};
+    var rows = health.accounts || {};
+    var names = Object.keys(rows);
+    var html = '';
+
+    if (health.weakest) {
+      var weakest = rows[health.weakest] || {};
+      html += '<div class="note' + (weakest.tight ? ' mismatch' : '') + '">' +
+        'The weakest account governs: <b>' + health.weakest + '</b> at ' +
+        fmt(health.weakest_level, 1) + '% margin level' +
+        (weakest.tight
+          ? ' — under the ' + fmt(health.warn_level, 0) + '% you set, and ' +
+            'it is this account that stops the pair, not the pair\'s total.'
+          : '.') + '</div>';
+    }
+    if ((health.unknown || []).length) {
+      html += '<div class="note mismatch">' + health.unknown.join(', ') +
+        ' could not be read — UNKNOWN, not flat and not funded.</div>';
+    }
+
+    html += '<table><thead><tr><th>Account</th><th>Login</th>' +
+      '<th>Equity</th><th>Balance</th><th>Credit</th><th>Open P&amp;L</th>' +
+      '<th>Margin used</th><th>Free</th><th>Level</th><th>Call / Stop</th>' +
+      '<th>Leverage</th><th>Our legs</th><th>Our lots</th><th>Our units</th>' +
+      '</tr></thead><tbody>';
+    names.forEach(function (name) {
+      var row = rows[name];
+      html += '<tr class="' + (row.tight ? 'mismatch' : '') + '">';
+      html += '<td>' + name + '</td>';
+      html += '<td>' + (row.login || DASH) +
+        (row.server ? '<div class="hint">' + row.server + '</div>' : '') +
+        '</td>';
+      // Equity first, then balance and credit beside it: a demo funded
+      // with credit shows a balance of 0.00 against real equity.
+      html += '<td>' + money(row.equity) + '</td>';
+      html += '<td>' + money(row.balance) + '</td>';
+      html += '<td>' + money(row.credit) + '</td>';
+      html += '<td class="' + (row.profit > 0 ? 'up' : row.profit < 0
+                               ? 'down' : '') + '">' + money(row.profit) +
+        '</td>';
+      html += '<td>' + money(row.margin) + '</td>';
+      html += '<td>' + money(row.margin_free) + '</td>';
+      html += '<td>' + (row.margin_level === null ||
+                        row.margin_level === undefined
+                        ? DASH : fmt(row.margin_level, 1) + '%') + '</td>';
+      html += '<td>' + (row.so_call === null || row.so_call === undefined
+                        ? DASH : fmt(row.so_call, 0) + '% / ' +
+                          fmt(row.so_so, 0) + '%') + '</td>';
+      html += '<td>' + (row.leverage ? row.leverage + 'x' : DASH) + '</td>';
+      html += '<td>' + row.our_legs + '</td>';
+      html += '<td>' + fmt(row.our_lots, 2) + '</td>';
+      html += '<td>' + fmt(row.our_units, 2) + '</td>';
+      html += '</tr>';
+    });
+    if (!names.length) {
+      html += '<tr><td colspan="14">no accounts connected</td></tr>';
+    }
+    html += '</tbody></table>';
+    html += '<div class="note">Equity is what the broker actually has ' +
+      'of yours: balance plus credit plus open P&amp;L. Brokers often ' +
+      'fund a demo with CREDIT, so a balance of 0.00 against real ' +
+      'equity is normal rather than alarming. "Our lots" and "our ' +
+      'units" are this system\'s own legs on that account — what is ' +
+      'left is somebody else\'s, or the trader\'s own.</div>';
+    return html;
   }
 
   function reconcileTable() {

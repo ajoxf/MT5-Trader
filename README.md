@@ -85,8 +85,15 @@ clock, measured from the terminal rather than configured, and the page
 shows the broker's time and its offset from the machine. Unmeasured is
 not zero: with no measurement the cutoff does not fire, and says so.
 
-Still to come: per-account margin on the monitor, and the slippage
-report over a real session.
+**Accounts** is the fifth monitor tab: equity, balance, credit, open
+P&L, margin used and free, margin level against the broker's own call
+and stop-out levels, and this system's own lots and units on each
+account. With two brokers there is no combined margin — each posts its
+own and the pair can only be carried by the **weaker** of the two, so
+that account is named rather than averaged into a total that reads
+comfortable.
+
+Still to come: the slippage report over a real session.
 
 ## One click is one order
 
@@ -114,17 +121,36 @@ That is the product, so it is the default and it is fast:
 Flatten and the global kill still ask once — they are irreversible and
 they are the buttons pressed in a hurry.
 
-## Running it (for whoever sits in front of it)
+## Running it — one file
 
-On the trading box: check both MT5 terminals are open, logged in and
-have **Algo Trading** green, then double-click **START-TRADING**. It
-checks Python, the terminals, the dependencies and the test suite —
-refusing to start the engine on a failing suite — then starts
-everything and opens the ladders.
+```
+py -3.11 start.py
+```
 
-`deploy/bootstrap.ps1` prepares a fresh Windows box and puts that
-shortcut on the desktop. `deploy/RUNBOOK.md` is the page to hand to
-whoever runs it day to day.
+That is the whole thing. No arguments, nothing to copy, nothing to
+edit: it creates `config.json` and `.env` on a first run, brings up the
+web UI **first** (the accounts are entered on that screen, so it has to
+be reachable before there are any), starts a leg runner per account and
+the coordinator, opens the browser, and restarts a crashed child with
+backoff.
+
+Save an account on the Exchanges page and the launcher notices within a
+few seconds and restarts the engine to pick it up — accounts, symbols
+and β are read at startup, so it has to come back to see them, and that
+should not be the operator's job to remember. It watches only those
+fields: changing a display setting or a per-ladder knob does not
+interrupt trading.
+
+**Credentials are entered in the UI**, never in a file. The password
+goes to `.env` under a sanitised key; `config.json` holds only the name
+of that key.
+
+On the trading box, double-clicking **START-TRADING** does the same
+thing with a few guard rails first (Python present, a terminal running,
+the test suite passing — it refuses to start the engine on a failing
+suite). `deploy/bootstrap.ps1` prepares a fresh Windows box and puts
+that shortcut on the desktop; `deploy/RUNBOOK.md` is the page to hand
+to whoever runs it day to day.
 
 ## Running it (the pieces)
 

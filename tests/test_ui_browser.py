@@ -93,6 +93,24 @@ def snapshot(order_type='LIMIT', confirm=False):
         'confirm_market_clicks': confirm, 'row_height_px': 17,
         'command_poll_sec': 0.02,
         'accounts': {'acct_a': {'profit': 0.0}, 'acct_b': {'profit': 0.0}},
+        'account_health': {
+            'warn_level': 200.0, 'weakest': 'acct_b', 'weakest_level': 125.0,
+            'unknown': [],
+            'accounts': {
+                'acct_a': {'account': 'acct_a', 'known': True, 'login': 5001,
+                           'server': 'CFI-Live', 'currency': 'USD',
+                           'leverage': 100, 'balance': 0.0, 'credit': 5000.0,
+                           'equity': 5000.0, 'profit': 0.0, 'margin': 500.0,
+                           'margin_free': 4500.0, 'margin_level': 1000.0,
+                           'so_call': 100.0, 'so_so': 50.0, 'our_lots': 0.1,
+                           'our_units': 10.0, 'our_legs': 1, 'tight': False},
+                'acct_b': {'account': 'acct_b', 'known': True, 'login': 5002,
+                           'server': 'CFI-Live', 'currency': 'USD',
+                           'leverage': 100, 'balance': 1000.0, 'credit': 0.0,
+                           'equity': 1000.0, 'profit': -20.0, 'margin': 800.0,
+                           'margin_free': 200.0, 'margin_level': 125.0,
+                           'so_call': 100.0, 'so_so': 50.0, 'our_lots': 0.1,
+                           'our_units': 10.0, 'our_legs': 1, 'tight': True}}},
         'reconciler': {'untracked_closes': [], 'escalated': [],
                        'unknown_accounts': []},
         'hedge_times_ms': [], 'click_to_on_ms': [],
@@ -437,6 +455,37 @@ def test_flatten_says_so_when_there_is_nothing_to_flatten(page):
     assert 'already flat' in page.text_content('.toast')
     assert command_count(page) == before
     page.click('.toast')
+
+
+def test_the_monitor_shows_margin_per_account_and_names_the_weakest(page):
+    """With two brokers there is no combined margin: the pair can only
+    be carried by the weaker of the two, and a total would read
+    comfortable while one side sits at its stop-out."""
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.open = ['monitor:'];
+        s.monitorTab = 'accounts';
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('.monitor .pane table', timeout=5000)
+
+    text = page.text_content('.monitor .pane')
+    assert 'The weakest account governs' in text
+    assert 'acct_b' in text and '125.0%' in text
+    assert 'it is this account that stops the pair' in text
+    # The tight account is marked, the comfortable one is not.
+    assert page.locator('.monitor tr.mismatch').count() >= 1
+    # Equity, balance and credit side by side: a demo funded with CREDIT
+    # shows a balance of 0.00 against real equity.
+    assert '$5,000.00' in text and '$0.00' in text
+    assert 'fund a demo with CREDIT' in text
+    # And our own exposure on each account, in the units it was sized in.
+    assert 'Our lots' in text and 'Our units' in text
+
+    page.evaluate("""() => {
+        window.MT5Trader.state.monitorTab = 'positions';
+        window.MT5Trader.render();
+    }""")
 
 
 def test_the_settings_page_edits_accounts_and_pairs(page):

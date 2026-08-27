@@ -91,6 +91,11 @@ DEFAULT_SETTINGS = {
     'OVERNIGHT_CLOSE_MINUTE': 55,
     'OVERNIGHT_DEFAULT': OvernightMode.ALLOW.value,
 
+    #: Margin level (%) below which the monitor calls an account tight.
+    #: Margin is posted PER ACCOUNT with two brokers, so the WEAKEST
+    #: account governs what the pair can carry — not the total.
+    'MARGIN_WARN_LEVEL': 200.0,
+
     # --- costs --------------------------------------------------------
     'SPREAD_COST_FACTOR': 1.0,
     'COMMISSION_PER_LOT_A': 0.0,

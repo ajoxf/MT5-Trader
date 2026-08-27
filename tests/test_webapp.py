@@ -582,3 +582,66 @@ def test_the_engine_publishes_what_a_click_will_do(config, legs, tmp_path):
 
     config.settings['CONFIRM_MARKET_CLICKS'] = True
     assert coordinator.snapshot()['confirm_market_clicks'] is True
+
+
+def test_margin_is_reported_per_account_and_the_weakest_one_is_named(
+        config, legs, tmp_path):
+    """With two brokers there is no combined margin: each posts its own,
+    and a pair can only be carried by the WEAKER of the two."""
+    from mt5trader.coordinator import Coordinator
+    from mt5trader.models import SpreadSide
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+    pair = list(config.pairs.values())[0]
+    pair.order_type = type(pair.order_type)('MARKET')
+    coordinator.click(pair.key, SpreadSide.SELL, None)
+
+    health = coordinator.snapshot()['account_health']
+
+    assert set(health['accounts']) == {'acct_a', 'acct_b'}
+    row = health['accounts']['acct_a']
+    assert row['equity'] == pytest.approx(100_000.0)
+    assert row['credit'] == pytest.approx(0.0)
+    # Our own exposure, in the units the operator sized in.
+    assert row['our_legs'] == 1
+    assert row['our_lots'] == pytest.approx(0.1)
+    assert row['our_units'] == pytest.approx(10.0)
+    # Nothing is levered here, so no account is tight and none is weakest
+    # by margin level — and that reads as unmeasured, not as healthy.
+    assert row['margin_level'] is None
+    assert health['weakest'] is None
+
+
+def test_a_tight_account_is_flagged_against_the_level_you_set(config, legs):
+    from types import SimpleNamespace
+    from mt5trader.coordinator import Coordinator
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    # Leg B is nearly out of margin; leg A is fine.
+    legs['acct_b'].broker.account_info = lambda: SimpleNamespace(
+        login=2, server='S', name='b', currency='USD', leverage=100,
+        balance=1000.0, credit=0.0, equity=1000.0, margin=800.0,
+        margin_free=200.0, margin_level=125.0, margin_so_call=100.0,
+        margin_so_so=50.0, profit=0.0)
+    coordinator.poll_once()
+
+    health = coordinator.snapshot()['account_health']
+
+    assert health['weakest'] == 'acct_b'
+    assert health['weakest_level'] == pytest.approx(125.0)
+    assert health['accounts']['acct_b']['tight'] is True
+    assert health['accounts']['acct_a']['tight'] is False
+
+
+def test_an_account_that_cannot_be_read_is_unknown_not_funded(config, legs):
+    from mt5trader.coordinator import Coordinator
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    legs['acct_a'].account_info = lambda: None
+    coordinator._account_cache.clear()
+
+    health = coordinator.snapshot()['account_health']
+
+    assert health['unknown'] == ['acct_a']
+    assert health['accounts']['acct_a']['equity'] is None

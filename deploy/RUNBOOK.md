@@ -2,13 +2,36 @@
 
 Written for whoever sits in front of it, not for whoever built it.
 
+## Getting the software onto the machine
+
+Once:
+
+```
+cd C:\
+git clone https://github.com/ajoxf/MT5-Trader.git
+cd MT5-Trader
+git checkout claude/monitoring-positions-market-grid-17nyys
+powershell -ExecutionPolicy Bypass -File deploy\bootstrap.ps1
+```
+
+To update it later:
+
+```
+cd C:\MT5-Trader
+git pull
+```
+
+`git pull` never touches `config.json`, `.env` or `mt5trader.db` —
+those are yours and are not in the repository.
+
 ## Every day
 
 1. Connect to the machine (RDP, or your usual shortcut).
 2. Check **both MetaTrader 5 terminals** are open and logged in, and
    that the **Algo Trading** button in each is green. If a terminal is
    closed, open it — it logs itself in.
-3. Double-click **START-TRADING** on the desktop.
+3. Double-click **START TRADING** on the desktop. (Or, in a terminal:
+   `py -3.11 start.py` — same thing, one file, no arguments.)
 4. Wait for the browser to open by itself. At the top of the Exchanges
    page it says either **CONNECTED — you can trade** or **NOT READY**
    with the one thing to fix.
@@ -45,6 +68,19 @@ refusal appears on the ladder in the broker's own words.
   checked both accounts, it will not close anything by itself.
 - **Anything at the broker it cannot explain is left alone** and listed
   on a red banner for you to adopt or close by hand.
+
+## Margin
+
+The **Accounts** tab of the Positions window shows each account's
+equity, margin used and free, and its margin level against the broker's
+own margin-call and stop-out levels. Two brokers means two separate
+margin pools: the pair can only be carried by the **weaker** of the
+two, so that account is named at the top. A level under the level you
+set is marked in red.
+
+Equity, not balance, is what the broker actually holds of yours —
+brokers often fund a demo with credit, so a balance of 0.00 against
+real equity is normal.
 
 ## Times
 

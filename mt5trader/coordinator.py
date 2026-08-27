@@ -569,6 +569,74 @@ class Coordinator:
         for position in self.book.positions(open_only=False):
             self.remember(position)
 
+    def account_health(self):
+        """The margin picture, per account, and which one is weakest.
+
+        With two brokers there is no such thing as combined margin: each
+        posts its own, and a pair can only be carried by the WEAKER of
+        the two. A total would read comfortable while one side is at its
+        stop-out level.
+
+        Our own exposure is stated beside the broker's numbers in the
+        units the operator sized in — leg lots and units — because a
+        margin figure with nothing to compare it against is a number
+        nobody can act on.
+        """
+        warn_at = float(self.config.get('MARGIN_WARN_LEVEL', 200.0) or 0.0)
+        rows = {}
+        for name in self.legs:
+            info = self.account_info(name) or {}
+            equity = info.get('equity')
+            margin = info.get('margin') or 0.0
+            level = info.get('margin_level')
+            if level is None and margin and equity is not None:
+                level = 100.0 * equity / margin
+            lots = units = 0.0
+            positions = 0
+            for position in self.book.positions():
+                for fill in (position.leg_a, position.leg_b):
+                    if not fill or fill.account != name:
+                        continue
+                    lots += fill.volume
+                    units += fill.volume * (fill.contract_size or 0.0)
+                    positions += 1
+            rows[name] = {
+                'account': name,
+                'known': bool(info),
+                'login': info.get('login'), 'server': info.get('server'),
+                'currency': info.get('currency'),
+                'leverage': info.get('leverage'),
+                'balance': info.get('balance'),
+                'credit': info.get('credit'),
+                'equity': equity,
+                'profit': info.get('profit'),
+                'margin': margin,
+                'margin_free': info.get('margin_free'),
+                'margin_level': level,
+                'so_call': info.get('margin_so_call'),
+                'so_so': info.get('margin_so_so'),
+                'our_lots': lots, 'our_units': units,
+                'our_legs': positions,
+                # A level under the warn threshold, or under the
+                # broker's own margin-call level, whichever is higher.
+                'tight': bool(level is not None
+                              and level < max(warn_at,
+                                              info.get('margin_so_call') or 0)),
+            }
+        measured = [row for row in rows.values()
+                    if row['margin_level'] is not None]
+        weakest = min(measured, key=lambda row: row['margin_level']) \
+            if measured else None
+        return {
+            'accounts': rows,
+            'warn_level': warn_at,
+            # The weakest account governs. Named, not averaged.
+            'weakest': weakest['account'] if weakest else None,
+            'weakest_level': weakest['margin_level'] if weakest else None,
+            'unknown': [name for name, row in rows.items()
+                        if not row['known']],
+        }
+
     def broker_offset(self):
         """Seconds the BROKER's clock runs ahead of this machine's.
 
@@ -700,6 +768,7 @@ class Coordinator:
             'accounts': {name: self.account_info(name) for name in self.legs},
             'reconciler': self.reconciler.snapshot(),
             'broker_clock': self.broker_clock(),
+            'account_health': self.account_health(),
             'recovery': dict(self.recovery),
             'session_events': self.session_events[-50:],
             'hedge_times_ms': list(self.quoter.hedge_times[-50:]),

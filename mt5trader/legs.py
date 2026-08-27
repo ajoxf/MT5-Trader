@@ -56,6 +56,10 @@ class LocalLeg:
             'currency': getattr(info, 'currency', 'USD'),
             'leverage': getattr(info, 'leverage', None),
             'balance': getattr(info, 'balance', 0.0),
+            # Brokers often fund a demo with CREDIT rather than balance,
+            # which makes balance alone read as an empty account —
+            # 0.00 against 5,000 of equity, live.
+            'credit': getattr(info, 'credit', 0.0),
             'equity': equity,
             'margin': margin,
             'margin_free': getattr(info, 'margin_free', 0.0),
