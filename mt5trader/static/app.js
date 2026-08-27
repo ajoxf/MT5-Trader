@@ -41,6 +41,9 @@
     // Banners the trader has put away, by what they were ABOUT: the
     // same banner returns when the situation behind it changes.
     dismissed: {},
+    // Dead orders already said out loud, by id: a refusal is said once
+    // and then stays in the Working Orders tab.
+    reported: {},
     // The one-key shortcuts, which a desk may not want at all: B and S
     // are orders, and a keyboard nobody meant to touch is a click
     // nobody meant to make.
@@ -874,49 +877,53 @@
   }
 
   function legFeed(row, market) {
-    /* The two books, laid out: bid, ask, and the width each leg is
-     * charging — plus the same three for the spread itself.
+    /* The two books, and the spread they make, as a small aligned
+     * panel: bid, ask, and the WIDTH each leg is charging.
      *
-     * As a table rather than a run of numbers, because these are read
-     * by COMPARING them: a spread that is not moving is one leg that is
-     * not moving, and a leg whose width has doubled is the leg that is
-     * about to cost money. Neither is visible in a sentence.
+     * Aligned in fixed columns because these numbers are read by
+     * comparing them down the column — a leg whose width has doubled is
+     * the leg about to cost money, and that is invisible in a ragged
+     * row of figures. The spread's own width is the round turn, which
+     * is what the whole ladder is about, so it sits under a rule.
      *
-     * The spread row is the executable pair — sell at `bid B - beta x
-     * ask A`, buy at `ask B - beta x bid A` — so its width IS the round
-     * turn, which is the number the ladder is really about.
+     * Staleness marks the AGE cell only. Painting the whole line red
+     * made a quiet market look like a fault.
      */
     if (!market || market.leg_a_bid === undefined) {
       return '<span class="bad">no quote from either leg yet</span>';
     }
+    function cell(value, digits) {
+      return '<td>' + fmt(value, digits === undefined ? 4 : digits) +
+        '</td>';
+    }
     function width(bid, ask) {
       if (bid === null || bid === undefined ||
-          ask === null || ask === undefined) { return DASH; }
-      return fmt(ask - bid, 4);
+          ask === null || ask === undefined) { return '<td>' + DASH + '</td>'; }
+      return '<td class="w">' + fmt(ask - bid, 4) + '</td>';
     }
     function age(seconds) {
-      if (seconds === null || seconds === undefined) { return DASH; }
-      return seconds.toFixed(1) + 's';
+      if (seconds === null || seconds === undefined) {
+        return '<td class="age">' + DASH + '</td>';
+      }
+      return '<td class="age' + (seconds > 5 ? ' bad' : '') + '">' +
+        seconds.toFixed(1) + 's</td>';
     }
     function line(label, symbol, bid, ask, seconds) {
-      var stale = seconds !== null && seconds !== undefined && seconds > 5;
-      return '<tr' + (stale ? ' class="bad"' : '') + '><th>' + label +
-        '</th><td class="sym">' + (symbol || '?') + '</td>' +
-        '<td>' + fmt(bid, 4) + '</td><td>' + fmt(ask, 4) + '</td>' +
-        '<td>' + width(bid, ask) + '</td><td>' + age(seconds) + '</td></tr>';
+      return '<tr><th>' + label + '</th><td class="sym">' +
+        (symbol || '?') + '</td>' + cell(bid) + cell(ask) +
+        width(bid, ask) + age(seconds) + '</tr>';
     }
-    var html = '<table class="legbook"><thead><tr><th></th><th></th>' +
-      '<th>Bid</th><th>Ask</th><th>Width</th><th>Age</th></tr></thead>' +
-      '<tbody>';
+    var html = '<table class="legbook"><thead><tr>' +
+      '<th></th><th class="sym">leg</th><th>Bid</th><th>Ask</th>' +
+      '<th>Width</th><th>Age</th></tr></thead><tbody>';
     html += line('A', row.symbol_a, market.leg_a_bid, market.leg_a_ask,
                  market.leg_a_quote_age_sec);
     html += line('B', row.symbol_b, market.leg_b_bid, market.leg_b_ask,
                  market.leg_b_quote_age_sec);
-    html += '<tr class="spread"><th>=</th><td class="sym">spread</td>' +
-      '<td>' + fmt(market.short_spread, 4) + '</td>' +
-      '<td>' + fmt(market.long_spread, 4) + '</td>' +
-      '<td>' + width(market.short_spread, market.long_spread) + '</td>' +
-      '<td></td></tr>';
+    html += '<tr class="spread"><th></th><td class="sym">spread</td>' +
+      cell(market.short_spread) + cell(market.long_spread) +
+      width(market.short_spread, market.long_spread) +
+      '<td class="age"></td></tr>';
     return html + '</tbody></table>';
   }
 
@@ -1401,6 +1408,26 @@
         html += '</tr>';
       });
     });
+    // What stopped working recently, and why — in the broker's own
+    // words. Without this a rejected order simply vanished.
+    Object.keys(state.snapshot.pairs || {}).forEach(function (key) {
+      var row = state.snapshot.pairs[key];
+      (row.dead_orders || []).forEach(function (order) {
+        any = true;
+        html += '<tr class="dead">';
+        html += '<td>' + (row.name || key) + '</td>';
+        html += '<td>' + order.side + '</td>';
+        html += '<td>' + fmt(order.level, 4) + '</td>';
+        html += '<td>' + order.quantity + '</td>';
+        html += '<td>' + order.time_in_force + '</td>';
+        html += '<td class="mismatch">' + order.state + '</td>';
+        html += '<td>' + (order.pending_ticket || DASH) + '</td>';
+        html += '<td>' + DASH + '</td><td>' + DASH + '</td><td>' + DASH +
+          '</td>';
+        html += '<td class="reason">' + (order.reason || '') + '</td>';
+        html += '<td></td></tr>';
+      });
+    });
     if (!any) { html += '<tr><td colspan="12">nothing working</td></tr>'; }
     html += '</tbody></table>';
     html += '<div class="note">GTC here means: until cancelled, or until ' +
@@ -1859,6 +1886,28 @@
     badge.title = link.detail;
   }
 
+  function reportDeadOrders() {
+    /* A working order that STOPPED working, said out loud once.
+     *
+     * The broker can refuse the pending behind a synthetic — invalid
+     * price, stops level, trading disabled — and the order then leaves
+     * the book in the same instant the click was accepted. What the
+     * trader saw was a green toast and an empty Work column, with the
+     * refusal nowhere on the screen. This is that refusal, in the
+     * broker's own words, on the screen, once.
+     */
+    var pairs = state.snapshot.pairs || {};
+    Object.keys(pairs).forEach(function (key) {
+      (pairs[key].dead_orders || []).forEach(function (order) {
+        if (state.reported[order.order_id]) { return; }
+        state.reported[order.order_id] = true;
+        toast((pairs[key].name || key) + ': ' + order.side + ' ' +
+              order.quantity + ' at ' + fmt(order.level, 4) + ' — ' +
+              order.state.toLowerCase() + '. ' + order.reason);
+      });
+    });
+  }
+
   function renderStatusLine() {
     /* The two things that change on every poll whether or not the
      * coordinator published anything: whether it is alive, and how old
@@ -1888,6 +1937,7 @@
 
     renderNaked();
     renderUnclaimed();
+    reportDeadOrders();
     renderSameLogin();
 
     var wanted = {};

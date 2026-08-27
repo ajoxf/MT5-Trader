@@ -939,6 +939,16 @@ class Coordinator:
                 'rows': ladder_rows(pair, md, self.book, sizes=sizes),
                 'depth_published': sizes['published'],
                 'orders': [o.to_dict() for o in self.book.orders(key)],
+                # Orders that STOPPED working recently, with the reason.
+                # A rejected pending used to vanish from the ladder in
+                # the same instant the click was accepted: the trader
+                # saw a green toast and then an empty Work column, with
+                # the broker's refusal nowhere on the screen.
+                'dead_orders': [
+                    o.to_dict() for o in self.book.orders(key,
+                                                          working_only=False)
+                    if not o.is_working and o.reason
+                    and self.clock() - o.created_at < DEAD_ORDER_MEMORY_SEC],
                 'quotes': self.quoter.snapshot(key),
                 'quoting_leg': pair.quoting_leg,
                 'leg_a_width': (pair.meta_a or {}).get('width'),
@@ -1226,6 +1236,10 @@ def _badge(md, stale, jumped):
 #: this many rows the increment is simply wrong for the pair, and
 #: drawing 10,000 of them helps nobody.
 MAX_LADDER_ROWS = 400
+#: How long a DEAD order keeps its place on the screen. A rejection has
+#: to outlive the poll that discovered it, or the trader sees a green
+#: toast, an empty Work column, and no reason anywhere.
+DEAD_ORDER_MEMORY_SEC = 90.0
 
 
 def _same_login(rows):

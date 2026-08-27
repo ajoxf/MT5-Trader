@@ -1463,9 +1463,54 @@ def test_each_legs_book_is_laid_out_with_its_width(page):
     assert rows.count() == 3                       # A, B, and the spread
     assert '0.2500' in rows.nth(0).text_content()  # leg A's own width
     assert '0.4000' in rows.nth(1).text_content()
-    # A leg that has stopped is marked, and it is the leg that matters:
-    # a spread is only as good as its worse leg.
-    assert 'bad' in (rows.nth(1).get_attribute('class') or '')
+    # A leg that has stopped is marked — on its AGE cell, not down the
+    # whole line: painting the row red made a quiet market look like a
+    # fault.
+    assert page.locator('table.legbook td.age.bad').count() == 1
     spread = rows.nth(2).text_content()
     assert '59.0900' in spread and '59.1100' in spread
     assert '0.0200' in spread                      # one round turn
+
+
+def test_an_order_the_broker_refused_is_said_out_loud_and_kept_on_screen(page):
+    """The failure this was built for: the broker refuses the pending
+    behind a synthetic, the order leaves the book in the same instant
+    the click was accepted, and the trader is left with a green toast
+    and an empty Work column."""
+    open_ladder(page)
+    page.evaluate("""() => {
+        const state = window.MT5Trader.state;
+        state.reported = {};
+        state.snapshot.pairs['XAUUSD_|GC1226'].dead_orders = [{
+            order_id: 'SO-DEAD', pair_key: 'XAUUSD_|GC1226', side: 'BUY',
+            level: 59.05, quantity: 2, filled_quantity: 0,
+            order_type: 'LIMIT', time_in_force: 'DAY', state: 'REJECTED',
+            pending_ticket: null,
+            reason: '10016 Invalid stops — the price is inside the ' +
+                    "broker's stops level"}];
+        window.MT5Trader.render();
+    }""")
+
+    # Said once, in the broker's own words, and errors do not auto-hide.
+    page.wait_for_selector('.toast', timeout=5000)
+    assert '10016' in page.text_content('.toast')
+    assert 'REJECTED' in page.text_content('.toast').upper()
+
+    # ...and it keeps its place in the Working Orders tab with the
+    # reason, rather than vanishing.
+    page.evaluate("""() => {
+        const UI = window.MT5Trader;
+        UI.state.open = [UI.panelId('monitor')];
+        UI.state.monitorTab = 'orders';
+        UI.render();
+    }""")
+    page.wait_for_selector('.monitor tr.dead', timeout=5000)
+    text = page.text_content('.monitor tr.dead')
+    assert 'REJECTED' in text and '10016' in text
+
+    page.click('.toast')
+    page.evaluate("""() => {
+        delete window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']
+            .dead_orders;
+        window.MT5Trader.closePanel('monitor:');
+    }""")
