@@ -783,13 +783,17 @@
     });
     if (wanted[panelId('grid')]) { renderGrid(); }
     if (wanted[panelId('monitor')]) { renderMonitor(); }
+    if (wanted[panelId('settings')] && window.MT5Settings) {
+      window.MT5Settings.render();
+    }
 
     // Remove the panels that are no longer open.
     Array.prototype.forEach.call(document.querySelectorAll('.window'),
       function (node) {
         var id = node.classList.contains('market-grid') ? panelId('grid')
           : node.classList.contains('monitor') ? panelId('monitor')
-            : panelId('ladder', node.dataset.pair);
+            : node.classList.contains('settings') ? panelId('settings')
+              : panelId('ladder', node.dataset.pair);
         if (!wanted[id]) { node.remove(); }
       });
 
@@ -829,7 +833,8 @@
       var label = parts[0] === 'ladder'
         ? ((state.snapshot.pairs[parts.slice(1).join(':')] || {}).name ||
            parts.slice(1).join(':'))
-        : (parts[0] === 'grid' ? 'Market Grid' : 'Positions');
+        : parts[0] === 'grid' ? 'Market Grid'
+          : parts[0] === 'settings' ? 'Settings' : 'Positions';
       var badge = '';
       if (parts[0] === 'ladder') {
         var row = state.snapshot.pairs[parts.slice(1).join(':')] || {};
@@ -876,6 +881,9 @@
       var button = e.target.closest('.tab');
       if (button) { state.active = button.dataset.panel; render(); }
     });
+    el('open-settings').addEventListener('click', function () {
+      openPanel(panelId('settings'));
+    });
     el('kill').addEventListener('click', function () {
       ask('Cancel everything, on every ladder?',
           'This pulls every working order across every pair. Tick nothing ' +
@@ -899,7 +907,8 @@
       if (!window_) { return; }
       state.active = window_.classList.contains('market-grid') ? panelId('grid')
         : window_.classList.contains('monitor') ? panelId('monitor')
-          : panelId('ladder', window_.dataset.pair);
+          : window_.classList.contains('settings') ? panelId('settings')
+            : panelId('ladder', window_.dataset.pair);
     });
     poll();
     window.setInterval(poll, REFRESH_MS);
@@ -911,5 +920,12 @@
     start();
   }
 
-  window.MT5Trader = {state: state, render: render};   // for the UI tests
+  // The settings panel lives in its own file and borrows these: one
+  // modal, one toast rack, one command path. A second copy of any of
+  // them is a second set of house rules to keep.
+  window.MT5Trader = {
+    state: state, render: render, toast: toast, ask: ask, send: send,
+    panelId: panelId, openPanel: openPanel, closePanel: closePanel,
+    fmt: fmt, money: money, DASH: DASH
+  };
 })();

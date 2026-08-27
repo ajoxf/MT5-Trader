@@ -36,7 +36,7 @@ The spec's build order, in order. Steps 1-8 are in:
 | `mt5trader/shutdown.py` | An unanswered prompt means NO |
 | `mt5trader/commands.py` | The web↔coordinator bridge, primed at startup so a restart never replays a command |
 | `mt5trader/webapp.py` | The Flask process: it renders and it asks; it never trades |
-| `mt5trader/static/`, `templates/` | The ladder, the Market Grid and the positions monitor — self-hosted, no CDN |
+| `mt5trader/static/`, `templates/` | The ladder, the Market Grid, the positions monitor and the settings page — self-hosted, no CDN |
 
 The UI is the reference TT screen: window chrome and a bottom taskbar,
 the quote strip, the left control rail, and the five-column grid
@@ -45,9 +45,17 @@ bid blue and ask red. MARKET mode re-tints the click columns and
 confirms through the one shared modal — there are no native dialogs
 anywhere, and a test fails the build if they come back.
 
-Still to come: per-account margin and the account/pair setup screens in
-the browser (the API is there), restart recovery of open positions, and
-the slippage report over a real session.
+Settings (accounts and pairs) is a page in the browser: it saves each
+account with the clash refusals on the row, tests a terminal (naming
+Algo Trading being off, or a netting account, in words), searches each
+broker's symbols, and derives β, the increment, the matched-minimum
+clip and the pair's minimum notional from what MT5 says — each shown
+with its derivation and offered as a one-click correction, never
+applied silently. It talks to the leg runners directly, so it works
+with the coordinator down.
+
+Still to come: restart recovery of open positions, per-account margin on
+the monitor, and the slippage report over a real session.
 
 ## Running it
 

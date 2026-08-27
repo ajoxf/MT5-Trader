@@ -28,6 +28,7 @@
   <button id="add-panel" class="tab plus" title="Open the Market Grid">+</button>
   <div id="tabs"></div>
   <div class="taskbar-right">
+    <button id="open-settings" class="tab" title="Accounts and pairs">Settings</button>
     <span id="loop-stat" class="stat" title="The coordinator's achieved loop interval, and how old this snapshot is">—</span>
     <button id="kill" class="kill">KILL ALL</button>
   </div>
@@ -132,5 +133,6 @@
 </template>
 
 <script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='settings.js') }}"></script>
 </body>
 </html>

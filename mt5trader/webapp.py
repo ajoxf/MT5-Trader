@@ -24,7 +24,7 @@ import time
 
 from flask import Flask, jsonify, render_template, request
 
-from . import config as cfg
+from . import config as cfg, hedgeratio, sizing
 from .commands import CommandLog
 from .legs import RemoteLeg
 
@@ -231,12 +231,196 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return jsonify({'ok': True, 'symbols': found or [],
                         'terminal': report})
 
+    @app.get('/api/accounts/<path:name>/test')
+    def api_test_account(name):
+        """Is this account reachable, logged in, and allowed to trade?
+
+        Answers the three questions in the operator's words rather than
+        as a checklist of booleans: `10027 AutoTrading disabled by
+        client` is a switch in that terminal, and nothing else will say
+        so.
+        """
+        leg, error, code = open_leg(name)
+        if leg is None:
+            return jsonify({'ok': False, 'error': error}), code
+        try:
+            terminal = leg.terminal_report()
+            account = leg.account_info()
+        finally:
+            leg.close()
+        problems = []
+        if not terminal.get('logged_in'):
+            problems.append('the terminal is open but not logged in')
+        if not terminal.get('algo_trading'):
+            problems.append('Algo Trading is OFF in this terminal — MT5 will '
+                            'refuse every order with 10027 until the button '
+                            'is on')
+        if terminal.get('hedging') is False:
+            problems.append('this account is NETTING, not hedging. Closes '
+                            'here target a position ticket, which a netting '
+                            'account handles differently — check with the '
+                            'broker before trading it')
+        return jsonify({'ok': not problems, 'problems': problems,
+                        'terminal': terminal, 'account': account})
+
+    @app.get('/api/accounts/<path:name>/symbol/<path:symbol>')
+    def api_symbol(name, symbol):
+        """One symbol's contract specs, read from MT5 — never typed in.
+
+        Contract size, volume minimum and step and tick size are what the
+        hedge arithmetic is built on; a typed-in contract size is a hedge
+        error waiting for a different instrument.
+        """
+        leg, error, code = open_leg(name)
+        if leg is None:
+            return jsonify({'ok': False, 'error': error}), code
+        try:
+            report = leg.symbol_report(symbol)
+        finally:
+            leg.close()
+        if not report.get('found'):
+            return jsonify({'ok': False, 'error': report.get('error'),
+                            'report': report}), 404
+        return jsonify({'ok': True, 'report': report})
+
+    def open_leg(name):
+        """A short-lived RemoteLeg to one account, or why there is none.
+
+        (leg, error, status) — the caller closes it. This is the path
+        that must work with the COORDINATOR down.
+        """
+        raw = cfg.load_raw(config_path)
+        account = (raw.get('accounts') or {}).get(name)
+        if not account or not account.get('endpoint'):
+            return None, (f"account '{name}' has no endpoint — give it one "
+                          f"(e.g. {cfg.next_free_port(raw)}), then start its "
+                          f"leg runner"), 400
+        leg = RemoteLeg(name, account['endpoint'], timeout=5.0)
+        if not leg.connect(retries=1, delay=0.0):
+            return None, (f"leg runner for '{name}' is not answering at "
+                          f"{account['endpoint']} — start it with: python "
+                          f"run_leg.py --config config.json --account "
+                          f"{name}"), 503
+        return leg, None, 200
+
+    @app.delete('/api/accounts/<path:name>')
+    def api_delete_account(name):
+        """Remove an account — but never one a pair is still routing to.
+
+        A pair pointing at an account that no longer exists is a ladder
+        that cannot trade and cannot say why.
+        """
+        raw = cfg.load_raw(config_path)
+        if name not in (raw.get('accounts') or {}):
+            return jsonify({'ok': False, 'error': f'no account {name}'}), 404
+        used_by = [key for key, pair in (raw.get('pairs') or {}).items()
+                   if name in ((pair.get('leg_a') or {}).get('account'),
+                               (pair.get('leg_b') or {}).get('account'))]
+        if used_by:
+            return jsonify({'ok': False,
+                            'error': f"'{name}' is still leg A or leg B of "
+                                     f"{', '.join(used_by)}. Point those "
+                                     f"pairs somewhere else (or delete them) "
+                                     f"first."}), 409
+        del raw['accounts'][name]
+        cfg.save_raw(config_path, raw, allow_shrink=True)
+        return jsonify({'ok': True, 'deleted': name,
+                        'note': 'the password stays in .env until you clear '
+                                'it there'})
+
     # -- pairs --------------------------------------------------------------
 
     @app.get('/api/pairs')
     def api_pairs():
         raw = cfg.load_raw(config_path)
         return jsonify({'pairs': raw.get('pairs') or {}})
+
+    @app.post('/api/pairs/<path:key>/derive')
+    def api_derive_pair(key):
+        """Read both legs out of MT5 and derive what follows from them.
+
+        Beta, the increment, the matched-minimum clip and the minimum
+        tradable notional are all consequences of the two symbols'
+        contract specs and live prices. Deriving them here means the
+        operator sees the numbers — and the DERIVATION — before saving,
+        instead of typing a beta that silently redefines the spread.
+        """
+        raw = cfg.load_raw(config_path)
+        payload = request.get_json(silent=True) or {}
+        pair = dict((raw.get('pairs') or {}).get(key) or {})
+        pair.update(payload)
+        legs = {}
+        specs = {}
+        for side in ('a', 'b'):
+            leg_cfg = pair.get(f'leg_{side}') or {}
+            name, symbol = leg_cfg.get('account'), leg_cfg.get('symbol')
+            if not name or not symbol:
+                return jsonify({'ok': False,
+                                'error': f'leg {side.upper()} needs an '
+                                         f'account and a symbol'}), 400
+            leg, error, code = open_leg(name)
+            if leg is None:
+                return jsonify({'ok': False, 'error': error}), code
+            legs[side] = leg
+            try:
+                specs[side] = leg.symbol_report(symbol)
+            finally:
+                leg.close()
+            if not specs[side].get('found'):
+                return jsonify({'ok': False,
+                                'error': specs[side].get('error')}), 404
+
+        price_a, price_b = _mid(specs['a']), _mid(specs['b'])
+        suggested, why = hedgeratio.suggest(
+            pair.get('pair_type', 'SPOT_FUTURE'), price_a, price_b)
+        beta = float(pair.get('hedge_ratio') or suggested or 1.0)
+        clip_a, clip_b = sizing.matched_minimum_lots(
+            specs['a'].get('volume_min'), specs['b'].get('volume_min'),
+            specs['a'].get('volume_step'), specs['b'].get('volume_step'),
+            beta, specs['a'].get('contract_size'),
+            specs['b'].get('contract_size'))
+        tick_a = specs['a'].get('tick_size') or 0.0
+        tick_b = specs['b'].get('tick_size') or 0.0
+        increment = max(tick_b, beta * tick_a) if (tick_a and tick_b) else None
+        floor = sizing.minimum_notional(
+            specs['a'].get('contract_size'), specs['b'].get('contract_size'),
+            price_a, price_b, beta, specs['a'].get('volume_min'),
+            specs['b'].get('volume_min'))
+        width_a = _width(specs['a'])
+        width_b = _width(specs['b'])
+        return jsonify({
+            'ok': True,
+            'specs': specs,
+            'suggested_beta': suggested,
+            'beta_reason': why,
+            'stamped_for': hedgeratio.pair_signature(
+                (pair.get('leg_a') or {}).get('symbol'),
+                (pair.get('leg_b') or {}).get('symbol')),
+            'increment': increment,
+            'increment_derivation': (
+                f'max(tick B {tick_b:g}, beta {beta:g} x tick A {tick_a:g})'
+                if increment else 'both legs need a tick size from MT5'),
+            'clip_lots_a': clip_a, 'clip_lots_b': clip_b,
+            'clip_derivation': (
+                f'1 spread = {clip_a:g} A / {clip_b:g} B — the smallest size '
+                f'at which BOTH legs clear their own minimum volume '
+                f'({specs["a"].get("volume_min")} and '
+                f'{specs["b"].get("volume_min")} lots)'),
+            'spread_units': sizing.spread_units(
+                clip_b, specs['b'].get('contract_size')),
+            'min_notional_usd': floor,
+            'spread_now': (price_b - beta * price_a
+                           if (price_a and price_b) else None),
+            'widths': {'a': width_a, 'b': width_b},
+            # Which leg SHOULD quote, from measurement rather than
+            # assumption — and the tension stated, not hidden.
+            'quoting_leg_suggestion': (
+                'b' if (width_b or 0) >= (width_a or 0) else 'a'),
+            'quoting_note': (
+                'Default is the wider bid-ask — that is the spread you earn '
+                'by quoting. It is usually also the less liquid leg, where '
+                'you queue longest and fill least.'),
+        })
 
     @app.post('/api/pairs/<path:key>')
     def api_save_pair(key):
@@ -284,6 +468,16 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return jsonify({'ok': True, 'deleted': key})
 
     return app
+
+
+def _mid(report):
+    bid, ask = report.get('bid'), report.get('ask')
+    return ((bid + ask) / 2.0) if (bid and ask) else None
+
+
+def _width(report):
+    bid, ask = report.get('bid'), report.get('ask')
+    return (ask - bid) if (bid and ask) else None
 
 
 def _open_position(snapshot, key):

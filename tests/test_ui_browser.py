@@ -287,3 +287,132 @@ def command_count(page):
 
 def last_command(page):
     return json.loads(commands(page)[-1])
+
+
+# -- the settings page ---------------------------------------------------
+
+def test_the_settings_page_edits_accounts_and_pairs(page):
+    """The one panel that must work with the ENGINE down: the
+    coordinator will not start until the symbols are right, and this is
+    where they get right."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+
+    # A new account, saved from the blank row at the bottom.
+    add_account(page, 'CFI Spot', '127.0.0.1:9101', login='5001')
+    page.wait_for_selector('tr[data-account="CFI Spot"]')
+
+    # And a second one that tries to take the same port.
+    add_account(page, 'CFI Futures', '127.0.0.1:9101')
+    # An ERROR toast, which is a different thing from the success one
+    # above: it has no timer on it and waits to be dismissed by hand.
+    page.wait_for_selector('.toast:not(.ok)')
+    toast = page.text_content('.toast:not(.ok)')
+    # The refusal names the account holding the port AND the one to use.
+    assert "belongs to account 'CFI Spot'" in toast
+    assert '9102' in toast
+    page.click('.toast:not(.ok)')
+
+    add_account(page, 'CFI Futures', '127.0.0.1:9102')
+    page.wait_for_selector('tr[data-account="CFI Futures"]')
+
+    assert page.locator('.window.settings tbody tr[data-account]').count() >= 2
+
+
+def test_a_clash_already_in_the_config_is_shown_on_the_row(page):
+    """A clash was once only discoverable by running a connectivity
+    check, so an operator could look straight at two rows holding one
+    terminal and see nothing wrong with either."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+    rows = page.locator('.window.settings tr[data-account]')
+    # Give both accounts the same terminal folder, through the API the
+    # page itself uses, then reopen.
+    page.evaluate("""async () => {
+        await fetch('/api/accounts/CFI Spot', {method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({terminal_path: 'C:/MT5/terminal64.exe'})});
+        await window.MT5Settings.refresh();
+    }""")
+    page.wait_for_timeout(200)
+    assert rows.count() >= 2
+    # The second account claiming it is refused at SAVE, with the reason
+    # on the row rather than in a log.
+    page.evaluate("""async () => {
+        const r = await fetch('/api/accounts/CFI Futures', {method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({terminal_path: 'C:/MT5/terminal64.exe'})});
+        window.__clash = (await r.json()).error;
+    }""")
+    assert 'One terminal serves ONE login' in page.evaluate('() => window.__clash')
+
+
+def test_the_pair_form_offers_the_number_it_derived_as_a_click(page):
+    """A warning nobody can act on is not a fix — but nothing is
+    corrected silently either. The derived value is offered as a
+    button."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+    page.click('.window.settings .new-pair')
+    page.wait_for_selector('.pair-form')
+
+    page.fill('.p-key', 'XAUUSD_|GC1226')
+    page.fill('.p-beta', '10')            # a beta from another instrument
+    page.evaluate("""() => {
+        // Stand in for the leg runners: this page talks to them
+        // directly, and there are none in a browser test.
+        window.__realFetch = window.fetch;
+        window.fetch = function (url, options) {
+            if (String(url).indexOf('/derive') >= 0) {
+                return Promise.resolve(new Response(JSON.stringify({
+                    ok: true, suggested_beta: 1.0,
+                    beta_reason: 'SPOT_FUTURE: the two legs are the same '
+                        + 'underlying, so the spread IS the basis and beta is 1',
+                    increment: 0.01,
+                    increment_derivation: 'max(tick B 0.01, beta 1 x tick A 0.01)',
+                    clip_lots_a: 0.1, clip_lots_b: 0.1,
+                    clip_derivation: '1 spread = 0.1 A / 0.1 B',
+                    spread_units: 10, min_notional_usd: 42921,
+                    spread_now: 59.1, widths: {a: 0.2, b: 0.4},
+                    quoting_leg_suggestion: 'b',
+                    quoting_note: 'the wider bid-ask is the spread you earn, '
+                        + 'and usually the less liquid leg',
+                    specs: {a: {contract_size: 100}, b: {contract_size: 100}},
+                    stamped_for: 'XAUUSD_|GC1226'
+                }), {status: 200, headers: {'Content-Type': 'application/json'}}));
+            }
+            return window.__realFetch(url, options);
+        };
+    }""")
+    page.click('.derive-pair')
+    page.wait_for_selector('.use-beta')
+
+    # The wrong beta is still in the field — nothing was changed for us.
+    assert page.input_value('.p-beta') == '10'
+    assert 'the spread IS the basis' in page.text_content('.pair-form')
+    page.click('.use-beta')
+    page.wait_for_timeout(150)
+    assert page.input_value('.p-beta') == '1'
+
+    # And the derivation is on the screen beside the number.
+    assert 'max(tick B 0.01' in page.text_content('.pair-form')
+    assert '$42,921' in page.text_content('.derived') or \
+        '42921' in page.text_content('.derived')
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+
+
+def add_account(page, name, endpoint, login=''):
+    """Fill the blank row at the bottom and save it.
+
+    The row is re-created on every refresh, so the fields are filled and
+    then CHECKED before the click — a value typed into a row that has
+    since been replaced is exactly the class of fault these browser
+    tests exist to catch.
+    """
+    row = page.locator('.window.settings tr.new')
+    row.locator('.f-name').fill(name)
+    row.locator('.f-endpoint').fill(endpoint)
+    if login:
+        row.locator('.f-login').fill(login)
+    assert row.locator('.f-name').input_value() == name
+    row.locator('.save-account').click()

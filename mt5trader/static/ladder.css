@@ -490,3 +490,84 @@ tr:hover td.price { outline: 1px solid #333; }
 }
 .toast.ok { border-left-color: var(--traded); }
 .toast .dismiss { float: right; color: var(--muted); }
+
+/* -- settings: accounts and pairs ------------------------------------ */
+
+.window.settings { width: 980px; max-width: 100%; }
+.settings-body { overflow: auto; max-height: 70vh; padding: 8px; background: #fff; }
+.settings-body h3 {
+  margin: 10px 0 4px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--chrome-dark);
+  padding-bottom: 2px;
+}
+.settings-body h3 small { font-weight: 400; color: var(--muted); margin-left: 8px; }
+.settings-body h4 { margin: 8px 0 6px; font-size: 12px; }
+
+table.grid-form { border-collapse: collapse; width: 100%; }
+table.grid-form th {
+  background: var(--chrome);
+  border: 1px solid var(--grid-line);
+  font: 600 10px var(--font);
+  padding: 2px 4px;
+  text-align: left;
+}
+table.grid-form td {
+  border: 1px solid #d5d5d5;
+  padding: 3px 4px;
+  font: 11px var(--font);
+  vertical-align: top;
+}
+table.grid-form input,
+table.grid-form select { font: 11px var(--font); width: 100%; padding: 1px 2px; }
+table.grid-form tr.new td { background: #f4f9ff; }
+table.grid-form td.actions { white-space: nowrap; width: 1%; }
+table.grid-form td.actions .btn { margin-right: 3px; }
+
+/* A refusal, on the row it belongs to. Not in a log, and not in a toast
+ * that vanishes before it is read. */
+tr.problem td {
+  background: #ffe3e3;
+  color: #7a1010;
+  font: 11px var(--font);
+}
+tr.good td { background: #ebfbee; color: #1b6b32; font: 11px var(--font); }
+.problem-text { color: var(--ask); }
+
+.hint { font: 10px var(--font); color: var(--muted); margin-top: 2px; }
+.hint .btn.tiny { margin-left: 4px; }
+.btn.tiny { font-size: 10px; padding: 0 5px; }
+
+.pair-form {
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid var(--chrome-dark);
+  background: var(--panel);
+}
+.pair-form .fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 8px 16px;
+}
+.field { display: flex; flex-direction: column; font: 11px var(--font); }
+.field > span { font-weight: 600; margin-bottom: 2px; }
+.field input, .field select { font: 11px var(--font); padding: 1px 3px; }
+.field .symbols { line-height: 1.8; }
+.field .symbol-row { display: flex; gap: 4px; }
+.field .symbol-row input { flex: 1; }
+
+/* The header stays put while the operator scrolls a long account list —
+ * a column whose name has scrolled away is a field being filled in
+ * blind. */
+.settings-body table.grid-form th { position: sticky; top: 0; z-index: 2; }
+
+/* What MT5 itself says, before anything is saved: the derivation beside
+ * every derived number. */
+.derived {
+  margin-top: 8px;
+  padding: 6px;
+  background: #fff9db;
+  border: 1px solid #e0c860;
+  font: 11px var(--font);
+}
+.pair-form .actions { margin-top: 8px; display: flex; gap: 6px; }

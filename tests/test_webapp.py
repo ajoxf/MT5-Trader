@@ -250,3 +250,169 @@ def test_market_mode_changes_the_click_columns():
     css = (STATIC / 'ladder.css').read_text(encoding='utf-8')
     assert '.window.mode-market td.bid' in css
     assert 'cursor: crosshair' in css
+
+
+# -- the settings endpoints: they must work with the ENGINE down --------
+
+class FakeRemoteLeg:
+    """A leg runner that answers, without a runner or an MT5."""
+
+    connected = True
+    symbols = {
+        'XAUUSD_': {'symbol': 'XAUUSD_', 'found': True, 'bid': 4292.00,
+                    'ask': 4292.20, 'contract_size': 100.0, 'tick_size': 0.01,
+                    'volume_min': 0.01, 'volume_step': 0.01,
+                    'volume_max': 100.0},
+        'GC1226': {'symbol': 'GC1226', 'found': True, 'bid': 4351.00,
+                   'ask': 4351.40, 'contract_size': 100.0, 'tick_size': 0.01,
+                   'volume_min': 0.10, 'volume_step': 0.10,
+                   'volume_max': 100.0},
+    }
+
+    def __init__(self, name, endpoint, timeout=5.0):
+        self.name = name
+
+    def connect(self, retries=1, delay=0.0):
+        return self.connected
+
+    def close(self):
+        pass
+
+    def find_symbols(self, pattern, limit=40):
+        return [dict(spec) for name, spec in self.symbols.items()
+                if (pattern or '').upper() in name.upper()]
+
+    def symbol_report(self, symbol):
+        return dict(self.symbols.get(symbol)
+                    or {'symbol': symbol, 'found': False,
+                        'error': f'{symbol} does not exist on this broker'})
+
+    def terminal_report(self):
+        return {'library': True, 'terminal': True, 'logged_in': True,
+                'algo_trading': True, 'hedging': True, 'login': 5001,
+                'server': 'FakeServer'}
+
+    def account_info(self):
+        return {'account': self.name, 'balance': 0.0, 'equity': 5000.0,
+                'profit': 0.0}
+
+
+@pytest.fixture
+def wired(client, paths, monkeypatch):
+    """Two accounts saved, and a leg runner that answers."""
+    from mt5trader import webapp
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
+                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'pairs': {}})
+    monkeypatch.setattr(webapp, 'RemoteLeg', FakeRemoteLeg)
+    return client
+
+
+def test_testing_an_account_names_the_switch_that_is_off(wired, monkeypatch):
+    """`10027 AutoTrading disabled by client` is a button in THAT
+    terminal, and nothing else on the screen will say so."""
+    body = wired.get('/api/accounts/spot/test').get_json()
+    assert body['ok'] and body['problems'] == []
+    assert body['terminal']['hedging'] is True
+
+    monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
+                        lambda self: {'logged_in': True, 'algo_trading': False,
+                                      'hedging': True})
+    body = wired.get('/api/accounts/spot/test').get_json()
+    assert body['ok'] is False
+    assert '10027' in body['problems'][0]
+
+
+def test_a_netting_account_is_called_out_before_it_is_traded(wired,
+                                                             monkeypatch):
+    monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
+                        lambda self: {'logged_in': True, 'algo_trading': True,
+                                      'hedging': False})
+    body = wired.get('/api/accounts/spot/test').get_json()
+    assert any('NETTING' in problem for problem in body['problems'])
+
+
+def test_a_symbols_contract_specs_come_from_mt5_not_from_a_form(wired):
+    body = wired.get('/api/accounts/fut/symbol/GC1226').get_json()
+    assert body['ok']
+    assert body['report']['contract_size'] == 100.0
+    assert body['report']['volume_min'] == 0.10
+
+    missing = wired.get('/api/accounts/fut/symbol/GCZ4')
+    assert missing.status_code == 404
+    assert 'does not exist' in missing.get_json()['error']
+
+
+def test_deriving_a_pair_shows_every_number_and_its_derivation(wired):
+    body = wired.post('/api/pairs/XAUUSD_|GC1226/derive', json={
+        'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+        'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
+        'pair_type': 'SPOT_FUTURE', 'hedge_ratio': 1.0}).get_json()
+
+    assert body['ok']
+    # Same underlying: beta is 1 and the spread IS the basis.
+    assert body['suggested_beta'] == 1.0
+    assert 'same' in body['beta_reason']
+    assert body['spread_now'] == pytest.approx(59.10, abs=0.01)
+    # max(tick B, beta x tick A), with the derivation beside it.
+    assert body['increment'] == pytest.approx(0.01)
+    assert 'max(tick B' in body['increment_derivation']
+    # The matched minimum: leg B's 0.10 binds, so leg A is walked up.
+    assert body['clip_lots_a'] == pytest.approx(0.10)
+    assert body['clip_lots_b'] == pytest.approx(0.10)
+    assert body['spread_units'] == pytest.approx(10.0)
+    # Leg B's 0.10-lot minimum binds, priced off leg A's MID.
+    assert body['min_notional_usd'] == pytest.approx(0.10 * 100 * 4292.10)
+    # Which leg should quote, from MEASURED widths.
+    assert body['widths']['b'] > body['widths']['a']
+    assert body['quoting_leg_suggestion'] == 'b'
+    assert 'less liquid' in body['quoting_note']
+    assert body['stamped_for'] == 'XAUUSD_|GC1226'
+
+
+def test_deriving_says_which_leg_is_wrong_rather_than_failing_blankly(wired):
+    response = wired.post('/api/pairs/x/derive', json={
+        'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+        'leg_b': {'account': 'fut', 'symbol': 'GCZ4'}})
+    assert response.status_code == 404
+    assert 'GCZ4' in response.get_json()['error']
+
+    response = wired.post('/api/pairs/x/derive',
+                          json={'leg_a': {'account': 'spot'}})
+    assert response.status_code == 400
+    assert 'leg A needs an account and a symbol' in response.get_json()['error']
+
+
+def test_deriving_with_the_runner_down_says_how_to_start_it(wired,
+                                                            monkeypatch):
+    monkeypatch.setattr(FakeRemoteLeg, 'connected', False)
+    response = wired.post('/api/pairs/x/derive', json={
+        'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+        'leg_b': {'account': 'fut', 'symbol': 'GC1226'}})
+    assert response.status_code == 503
+    assert 'run_leg.py' in response.get_json()['error']
+
+
+def test_an_account_still_carrying_a_pair_cannot_be_deleted(wired, paths):
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
+                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'pairs': {'A|B': {'leg_a': {'account': 'spot', 'symbol': 'X'},
+                          'leg_b': {'account': 'fut', 'symbol': 'Y'}}}})
+
+    response = wired.delete('/api/accounts/spot')
+    assert response.status_code == 409
+    assert 'A|B' in response.get_json()['error']
+
+    # The control: with the pair gone, the account goes.
+    wired.delete('/api/pairs/A|B')
+    assert wired.delete('/api/accounts/spot').status_code == 200
+    assert 'spot' not in cfg.load_raw(paths['config'])['accounts']
+
+
+def test_the_settings_panel_ships_no_native_dialogs_either():
+    script = strip_comments((STATIC / 'settings.js').read_text(encoding='utf-8'))
+    native = re.compile(r'(?<![\w.$])(confirm|alert|prompt)\s*\(')
+    found = native.search(script)
+    assert found is None, found.group(0)
