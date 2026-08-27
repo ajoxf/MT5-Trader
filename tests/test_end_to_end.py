@@ -369,3 +369,67 @@ def test_the_closed_trade_is_in_the_record_after_everything(desk):
     # The audit trail answers "what happened" without being the place
     # the operator was ever SENT to.
     assert store.events('recovery')
+
+
+def test_the_slippage_report_covers_the_session_that_was_just_traded(
+        desk, browser_page):
+    """The report, over a REAL session: the one this module just traded.
+
+    Nothing here is modelled. The entry was measured against the price
+    the browser clicked, the exit against the touch the close was taken
+    at, and both came back through the broker, the journal and the
+    database before this test read them.
+    """
+    page = browser_page
+    body = page.evaluate("""async () => {
+        const response = await fetch('/api/slippage');
+        return await response.json();
+    }""")
+
+    assert body['ok']
+    assert body['counts']['positions'] == 1
+    assert body['counts']['closed'] == 1
+    entry = body['overall']['entry']
+    assert entry['measured'] == 1 and entry['unmeasured'] == 0
+    assert entry['points_mean'] is not None
+    # A market click that crosses the touch costs money at both ends;
+    # the round turn is the two added, never one of them doubled.
+    exit_ = body['overall']['exit']
+    assert exit_['measured'] == 1
+    assert body['overall']['round_trip']['points_mean'] == pytest.approx(
+        entry['points_mean'] + exit_['points_mean'])
+    # The window is cut on the broker's clock, and the journal is
+    # counted over the same stretch as a check on coverage.
+    assert body['window']['clock'] == 'broker'
+    assert body['journal']['fills'] >= 4
+
+    page.evaluate("""() => {
+        window.MT5Trader.state.open = ['monitor:'];
+        window.MT5Trader.state.monitorTab = 'slippage';
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_function(
+        "() => document.querySelector('.monitor .pane').textContent"
+        ".includes('Round turn')", timeout=8000)
+    text = page.text_content('.monitor .pane')
+    assert 'Entries by ladder' in text and 'XAUUSD_|GC1226' in text
+    assert 'MARKET' in text                      # by order type
+    assert 'Round turn' in text
+    assert page.errors == []
+
+
+def test_a_session_with_nothing_traded_is_not_a_slippage_of_zero(desk,
+                                                                  tmp_path):
+    """The report opens on an account that has done nothing, and says
+    there is nothing to measure — rather than a table of 0.0000, which
+    reads as a session of perfect fills."""
+    paths = dict(desk.paths, db=str(tmp_path / 'empty.db'))
+    app = create_app(paths['status'], paths['commands'], paths['results'],
+                     paths['config'], paths['db'])
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get('/api/slippage').get_json()
+
+    assert body['ok'] and body['counts']['positions'] == 0
+    assert body['overall']['entry']['measured'] == 0
+    assert body['overall']['entry']['points_mean'] is None

@@ -394,9 +394,23 @@ class PairExecutor:
         if ok:
             position.closed_at = self.clock()
             position.close_reason = reason
-            exit_spread = executable_spread(md, position.side, closing=True) \
-                if md else None
+            # The price the exit was DECIDED at: the touch this position
+            # would have closed at when the close was sent.
+            decision_spread = executable_spread(md, position.side,
+                                                closing=True) if md else None
+            # ...and the price it actually got, from the closing fills.
+            # Anchored on the EXECUTED fills for the same reason the
+            # entry is: the touch is what we aimed at, not what we got.
+            # Where the broker reported no close price there is nothing
+            # to anchor on, and the touch is the honest second best —
+            # the SLIPPAGE, which is the difference between the two,
+            # then stays None rather than becoming a flattering zero.
+            filled_spread = closed_spread(results, pair.hedge_ratio)
+            exit_spread = (decision_spread if filled_spread is None
+                           else filled_spread)
             position.exit_spread = exit_spread
+            position.exit_slippage = slippage(decision_spread, filled_spread,
+                                              position.side, closing=True)
             gross = position.mark(exit_spread)
             fees = costs.mark_fees(
                 position.leg_a.volume if position.leg_a else 0.0,
@@ -447,6 +461,26 @@ class PairExecutor:
         position.click_to_on_ms = elapsed_ms
         position.entry_slippage = slippage(decision_spread, entry_spread, side)
         return position
+
+
+def closed_spread(results, hedge_ratio):
+    """`B - beta x A` of the prices the CLOSE actually filled at.
+
+    Volume-weighted, because a ticket can be closed in pieces. None when
+    either leg reported no price: half a spread is not a spread, and a
+    number built from one leg would be reported as an exit price nobody
+    traded.
+    """
+    prices = {}
+    for leg in ('a', 'b'):
+        fills = [fill for fill in (results.get(leg) or {}).get('closed') or ()
+                 if fill.get('price') is not None]
+        volume = sum(float(fill.get('volume') or 0.0) for fill in fills)
+        if not fills or volume <= 0:
+            return None
+        prices[leg] = sum(float(fill['price']) * float(fill['volume'] or 0.0)
+                          for fill in fills) / volume
+    return prices['b'] - float(hedge_ratio) * prices['a']
 
 
 def slippage(expected, filled, side, closing=False):

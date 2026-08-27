@@ -33,6 +33,7 @@ The spec's build order, in order. Steps 1-8 are in:
 | `mt5trader/quoter.py` | The synthetic LIMIT path: quote one leg, re-peg off the OTHER leg by MODIFY, cross on fill |
 | `mt5trader/reconcile.py` | Orphans and ghosts, three strikes, contract-size-correct P&L |
 | `mt5trader/session.py` | The one cutoff: DAY orders die, each ladder's overnight rule decides |
+| `mt5trader/slippage.py` | The session window on the broker's clock, and the slippage report over it |
 | `mt5trader/database.py` | SQLite (WAL, 30s busy timeout): crash-safe positions, the fill journal, the audit trail |
 | `mt5trader/shutdown.py` | An unanswered prompt means NO |
 | `mt5trader/commands.py` | The web↔coordinator bridge, primed at startup so a restart never replays a command |
@@ -93,7 +94,20 @@ own and the pair can only be carried by the **weaker** of the two, so
 that account is named rather than averaged into a total that reads
 comfortable.
 
-Still to come: the slippage report over a real session.
+**Slippage — the report over a real session.** The sixth monitor tab
+reports the session you are in, cut at the cutoff on the **broker's**
+clock so it lines up with the day MT5 stamps its deals in. Entries are
+measured against the touch the click was taken at, exits against the
+touch the close was sent at — and the exit is now anchored on the
+CLOSING fills rather than on the touch it aimed at, which is what makes
+an exit's slippage measurable at all. Positive is a cost at both ends,
+in spread points and in money through the same `k`. MARKET and LIMIT
+are reported side by side, because that is the split the peg has to
+justify itself against, and the worst entries are ranked in money
+rather than points. A fill that could not be priced is counted as
+**unmeasured**, never averaged in as zero, and the journal is counted
+over the same window as a check on coverage. Exportable as CSV, with
+empty cells rather than zeros where nothing was measured.
 
 ## One click is one order
 
@@ -124,8 +138,14 @@ they are the buttons pressed in a hurry.
 ## Running it — one file
 
 ```
-py -3.11 start.py
+python start.py
 ```
+
+Or `py -3.11 start.py` where the python.org launcher is installed — a
+conda or venv prompt has `python` and usually no launcher at all, so
+use whichever of the two answers on your box. (`python -3.11` is not a
+thing: `-3.11` is the LAUNCHER's argument, and `python` reads it as an
+option and exits.)
 
 That is the whole thing. No arguments, nothing to copy, nothing to
 edit: it creates `config.json` and `.env` on a first run, brings up the

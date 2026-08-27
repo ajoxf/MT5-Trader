@@ -182,6 +182,32 @@ class Store:
                 'ORDER BY closed_at DESC LIMIT ?', (limit,)).fetchall()
         return [_position_row(row) for row in rows]
 
+    def positions_between(self, start=None, end=None, pair_key=None):
+        """Positions OPENED inside a window, open ones included.
+
+        Anchored on `opened_at`, not on the close: a position belongs to
+        the session it was PUT ON in, which is the session whose click
+        the entry slippage was measured against. Anchoring on the close
+        would move a trade carried overnight into the next day's report
+        and credit its entry to a click nobody made that day.
+        """
+        where, params = [], []
+        if start is not None:
+            where.append('opened_at >= ?')
+            params.append(start)
+        if end is not None:
+            where.append('opened_at <= ?')
+            params.append(end)
+        if pair_key:
+            where.append('pair_key = ?')
+            params.append(pair_key)
+        clause = ('WHERE ' + ' AND '.join(where)) if where else ''
+        with self._connect() as connection:
+            rows = connection.execute(
+                f'SELECT * FROM positions {clause} ORDER BY opened_at',
+                params).fetchall()
+        return [_position_row(row) for row in rows]
+
     # -- the journal --------------------------------------------------------
 
     def record_fills(self, account, rows, resolve=None):
@@ -265,6 +291,36 @@ class Store:
         """
         clause = 'WHERE pair_key = ?' if pair_key else ''
         params = (pair_key,) if pair_key else ()
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""SELECT COUNT(*) AS fills,
+                           COALESCE(SUM(volume), 0) AS volume,
+                           COALESCE(SUM(commission), 0) AS commission,
+                           COALESCE(SUM(swap), 0) AS swap,
+                           COALESCE(SUM(profit), 0) AS profit
+                    FROM fills {clause}""", params).fetchone()
+        return dict(row)
+
+    def fills_between(self, from_ms=None, to_ms=None, ours_only=True):
+        """What the BROKER filled in a window, on the broker's stamps.
+
+        The counterweight to the slippage report: the report is built
+        from OUR positions, and this says how many deals the account
+        actually saw over the same stretch. Two numbers that disagree
+        mean fills the report is blind to — a manual click in the
+        terminal, or a leg we never paired — and that is worth showing
+        rather than reconciling away.
+        """
+        where, params = [], []
+        if ours_only:
+            where.append('is_ours = 1')
+        if from_ms is not None:
+            where.append('broker_time_ms >= ?')
+            params.append(from_ms)
+        if to_ms is not None:
+            where.append('broker_time_ms <= ?')
+            params.append(to_ms)
+        clause = ('WHERE ' + ' AND '.join(where)) if where else ''
         with self._connect() as connection:
             row = connection.execute(
                 f"""SELECT COUNT(*) AS fills,

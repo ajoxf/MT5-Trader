@@ -25,7 +25,8 @@ import time
 
 from flask import Flask, jsonify, render_template, request
 
-from . import config as cfg, diagnostics, hedgeratio, sizing
+from . import config as cfg, diagnostics, hedgeratio, sizing, \
+    slippage
 from .commands import CommandLog
 from .legs import RemoteLeg
 
@@ -218,6 +219,94 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return (buffer.getvalue(), 200,
                 {'Content-Type': 'text/csv',
                  'Content-Disposition': 'attachment; filename=fills.csv'})
+
+    # -- the slippage report, over a real session --------------------------
+
+    def slippage_report():
+        """Build the report, or say why it cannot be built.
+
+        Everything it needs is already recorded: the positions table
+        holds the measured slippage at both ends, the status snapshot
+        holds the measured broker offset that cuts the session, and the
+        journal holds what the broker filled over the same stretch. This
+        assembles them; it computes no price of its own.
+        """
+        db = store()
+        if db is None:
+            return None, ('the database could not be opened — the session '
+                          'report is built from recorded positions, and '
+                          'there are none to read')
+        raw = cfg.load_raw(config_path)
+        settings = dict(cfg.DEFAULT_SETTINGS)
+        settings.update(raw.get('settings') or {})
+        snapshot = status()
+        offset = ((snapshot.get('broker_clock') or {}).get('offset_sec'))
+        window = slippage.session_window(
+            time.time(), offset,
+            settings.get('OVERNIGHT_CLOSE_HOUR', 16),
+            settings.get('OVERNIGHT_CLOSE_MINUTE', 55))
+        if request.args.get('session') == 'all':
+            window = dict(window, **{
+                'from': None,
+                'label': 'every session recorded',
+                'note': ('every position in the database, not one session '
+                         '— sessions are not comparable across a change of '
+                         'symbol, ratio or clip size')})
+        pair_key = request.args.get('pair') or None
+        positions = db.positions_between(window['from'], window['to'],
+                                         pair_key=pair_key)
+        names = {key: (pair or {}).get('name') or key
+                 for key, pair in (raw.get('pairs') or {}).items()}
+        body = slippage.report(positions, window=window, names=names)
+        # The journal over the SAME window, on the broker's stamps, as
+        # the check on coverage: positions we know about against deals
+        # the account actually saw.
+        shift = (offset or 0) * 1000.0
+        from_ms = None if window['from'] is None else \
+            (window['from'] * 1000.0 + shift)
+        try:
+            body['journal'] = db.fills_between(
+                from_ms, window['to'] * 1000.0 + shift, ours_only=True)
+        except Exception as e:                    # a journal mid-write
+            logging.error('the journal could not be counted: %s', e)
+            body['journal'] = None
+        return body, None
+
+    @app.get('/api/slippage')
+    def api_slippage():
+        body, error = slippage_report()
+        if body is None:
+            return jsonify({'ok': False, 'error': error}), 503
+        return jsonify(dict(body, ok=True))
+
+    @app.get('/api/slippage.csv')
+    def api_slippage_csv():
+        """One row per position, both ends, for a spreadsheet.
+
+        Empty cells, not zeros, where nothing was measured: a zero here
+        would be read as a perfect fill by every tool that opens it.
+        """
+        import csv
+        import io
+        body, error = slippage_report()
+        if body is None:
+            return error, 503
+        buffer = io.StringIO()
+        columns = ['opened_at', 'closed_at', 'pair_key', 'side', 'quantity',
+                   'order_type', 'entry_points', 'entry_money', 'exit_points',
+                   'exit_money', 'round_trip_points', 'round_trip_money',
+                   'click_to_on_ms', 'realized_pnl', 'position_id']
+        writer = csv.DictWriter(buffer, fieldnames=columns,
+                                extrasaction='ignore')
+        writer.writeheader()
+        for row in body['rows']:
+            writer.writerow({column: ('' if row.get(column) is None
+                                      else row.get(column))
+                             for column in columns})
+        return (buffer.getvalue(), 200,
+                {'Content-Type': 'text/csv',
+                 'Content-Disposition':
+                     'attachment; filename=slippage.csv'})
 
     @app.get('/api/events')
     def api_events():

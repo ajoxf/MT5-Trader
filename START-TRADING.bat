@@ -1,13 +1,16 @@
 @echo off
-REM  MT5-Trader — double-click this to start trading.
+REM  MT5-Trader - double-click this to start trading.
 REM
-REM  It does the whole start: checks the two terminals are open, brings
-REM  the dependencies up to date, runs the safety tests, starts the
-REM  engine and opens the ladders in your browser.
+REM  It does the whole start: finds a Python, checks the two terminals
+REM  are open, brings the dependencies up to date, runs the safety
+REM  tests, starts the engine and opens the ladders in your browser.
 REM
 REM  If anything is wrong it stops and says what to do, in words. It
-REM  never starts the engine on a failing test suite — that rule is
+REM  never starts the engine on a failing test suite - that rule is
 REM  what keeps a bad build away from a live account.
+REM
+REM  Plain ASCII on purpose: a console running the default code page
+REM  turns anything else into mojibake in the one message that matters.
 
 title MT5-Trader
 cd /d "%~dp0"
@@ -15,21 +18,35 @@ color 0F
 
 echo.
 echo   =====================================================
-echo     MT5-Trader — starting up
+echo     MT5-Trader - starting up
 echo   =====================================================
 echo.
 
 REM --- 1. Python -------------------------------------------------------
-where py >nul 2>&1
-if errorlevel 1 (
-  echo   [X] Python is not installed on this machine.
+REM  Three ways a working Python turns up on these boxes, and all three
+REM  are normal: the py launcher from a python.org install, a plain
+REM  "python" on PATH (a conda or venv prompt has this and NO launcher),
+REM  or nothing at all. Assuming the launcher is what tells a machine
+REM  that already has Python that it has none.
+set "PY="
+py -3.11 -c "import sys" >nul 2>&1
+if not errorlevel 1 set "PY=py -3.11"
+if not defined PY (
+  python -c "import sys; assert sys.version_info[0] == 3" >nul 2>&1
+  if not errorlevel 1 set "PY=python"
+)
+if not defined PY (
+  echo   [X] No Python was found on this machine.
   echo.
   echo       Install Python 3.11, 64-bit, from python.org and tick
-  echo       "Add python.exe to PATH" during the install.
+  echo       "Add python.exe to PATH" during the install. If you use
+  echo       conda, open the prompt that has your environment active
+  echo       and run this file from there.
   echo.
   pause
   exit /b 1
 )
+echo   Using Python: %PY%
 
 REM --- 2. The two MetaTrader 5 terminals -------------------------------
 tasklist /fi "imagename eq terminal64.exe" 2>nul | find /i "terminal64.exe" >nul
@@ -55,7 +72,7 @@ if not exist .env (
 
 REM --- 4. Dependencies --------------------------------------------------
 echo   Checking dependencies...
-py -3.11 -m pip install --quiet --disable-pip-version-check -r requirements.txt
+%PY% -m pip install --quiet --disable-pip-version-check -r requirements.txt
 if errorlevel 1 (
   echo   [X] The dependencies could not be installed. Check the internet
   echo       connection on this machine and run this again.
@@ -65,7 +82,7 @@ if errorlevel 1 (
 
 REM --- 5. The safety tests ---------------------------------------------
 echo   Running the safety tests (about 20 seconds)...
-py -3.11 -m pytest tests -q
+%PY% -m pytest tests -q
 if errorlevel 1 (
   echo.
   echo   [X] THE SAFETY TESTS FAILED. The engine has NOT been started.
@@ -80,9 +97,9 @@ if errorlevel 1 (
 REM --- 6. Go ------------------------------------------------------------
 echo.
 echo   All checks passed. Starting the engine and opening the ladders.
-echo   Leave this window open — closing it stops trading.
+echo   Leave this window open - closing it stops trading.
 echo.
-py -3.11 start.py --config config.json --open-browser
+%PY% start.py --config config.json
 
 echo.
 echo   The engine has stopped. Any positions you had are still at the

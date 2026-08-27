@@ -38,7 +38,13 @@
     // own slow clock rather than three times a second.
     fills: null,
     fillsAt: 0,
-    fillsFilter: {ours: false}
+    fillsFilter: {ours: false},
+    // The slippage report, over the session that is actually running.
+    // Same treatment as the journal: recorded, not live, so it is read
+    // on its own slow clock.
+    slippage: null,
+    slippageAt: 0,
+    slippageAll: false
   };
 
   // -- plumbing -------------------------------------------------------
@@ -643,6 +649,7 @@
         '<button data-tab="positions">Positions</button>' +
         '<button data-tab="orders">Working Orders</button>' +
         '<button data-tab="fills">Fills</button>' +
+        '<button data-tab="slippage">Slippage</button>' +
         '<button data-tab="accounts">Accounts</button>' +
         '<button data-tab="reconcile">Reconciler</button></div>' +
         // `monitor-note`, not `note`: the panes have notes of their own,
@@ -664,6 +671,10 @@
           state.fillsFilter.ours = e.target.checked;
           loadFills(true);
         }
+        if (e.target.classList.contains('all-sessions')) {
+          state.slippageAll = e.target.checked;
+          loadSlippage(true);
+        }
       });
       el('desktop').appendChild(node);
     }
@@ -678,12 +689,21 @@
       loadFills();
       pane.innerHTML = fillsTable();
     }
+    else if (state.monitorTab === 'slippage') {
+      loadSlippage();
+      pane.innerHTML = slippageTable();
+    }
     else if (state.monitorTab === 'accounts') {
       pane.innerHTML = accountsTable();
     }
     else { pane.innerHTML = reconcileTable(); }
     node.querySelector('.monitor-note').textContent =
-      'Marked at the touches these would actually CLOSE at, less ' +
+      state.monitorTab === 'slippage'
+      ? 'Every figure here was MEASURED against the price that was ' +
+        'clicked. Positive is a cost, at both ends. A position whose ' +
+        'fill could not be priced is counted as unmeasured, never as ' +
+        'zero — averaging it in would flatter every column.'
+      : 'Marked at the touches these would actually CLOSE at, less ' +
       'commission only — so a position shows a loss the instant it ' +
       'opens, equal to one round turn of both legs’ bid-ask. That is ' +
       'what closing it immediately would cost.';
@@ -911,6 +931,149 @@
       .catch(function (error) {
         state.fills = {error: 'the journal could not be read: ' +
                               error.message};
+      });
+  }
+
+  // -- the slippage report -----------------------------------------------
+
+  function slipPoints(value) {
+    // Cost is red, improvement is green, unmeasured is a dash. The
+    // colour is the whole point of the column: a table of black
+    // numbers is one nobody reads twice.
+    if (value === null || value === undefined) { return '<td>' + DASH + '</td>'; }
+    return '<td class="' + (value > 0 ? 'down' : value < 0 ? 'up' : '') +
+      '">' + fmt(value, 4) + '</td>';
+  }
+
+  function slipMoney(value) {
+    if (value === null || value === undefined) { return '<td>' + DASH + '</td>'; }
+    return '<td class="' + (value > 0 ? 'down' : value < 0 ? 'up' : '') +
+      '">' + money(value) + '</td>';
+  }
+
+  function slipRow(label, stats) {
+    if (!stats) { return ''; }
+    var html = '<tr><td>' + label + '</td>';
+    html += '<td>' + stats.measured + '</td>';
+    // Unmeasured stands in its own column, in words, so it can never be
+    // mistaken for a zero in the mean.
+    html += '<td>' + (stats.unmeasured
+      ? '<span class="hint">' + stats.unmeasured + ' unmeasured</span>'
+      : '') + '</td>';
+    html += slipPoints(stats.points_mean);
+    html += slipPoints(stats.points_median);
+    html += slipPoints(stats.points_worst);
+    html += slipPoints(stats.points_best);
+    html += slipMoney(stats.money_total);
+    html += '<td>' + (stats.measured
+      ? stats.paid + ' paid / ' + stats.earned + ' earned' : DASH) + '</td>';
+    return html + '</tr>';
+  }
+
+  function slipHead(first) {
+    return '<thead><tr><th>' + first + '</th><th>Fills</th><th></th>' +
+      '<th>Mean</th><th>Median</th><th>Worst</th><th>Best</th>' +
+      '<th>Cost</th><th>Split</th></tr></thead>';
+  }
+
+  function slippageTable() {
+    var report = state.slippage;
+    var html = '<div class="journal-controls">' +
+      '<label class="check"><input type="checkbox" class="all-sessions"' +
+      (state.slippageAll ? ' checked' : '') + '> every session</label>' +
+      '<a class="btn" href="/api/slippage.csv' +
+      (state.slippageAll ? '?session=all' : '') + '" download>Export CSV</a>' +
+      '<span class="hint">Measured against the price that was clicked, ' +
+      'on the fills the broker actually gave us.</span></div>';
+
+    if (report === null) { return html + '<p class="note">loading…</p>'; }
+    if (report.error) {
+      return html + '<p class="note mismatch">' + report.error + '</p>';
+    }
+
+    var window_ = report.window || {};
+    html += '<table><tbody><tr><td>' + (window_.label || DASH) + '</td>' +
+      '<td>' + report.counts.positions + ' positions (' +
+      report.counts.open + ' still open)</td>';
+    var journal = report.journal;
+    html += '<td>' + (journal
+      ? journal.fills + ' of our fills at the broker over the same window'
+      : 'the journal could not be counted') + '</td></tr></tbody></table>';
+    if (window_.note) {
+      html += '<div class="' + (window_.clock === 'broker' ? 'hint' : 'note') +
+        '">' + window_.note + '</div>';
+    }
+
+    if (!report.counts.positions) {
+      return html + '<p class="note">nothing was traded in this window. ' +
+        'That is not a slippage of zero — there is nothing to measure ' +
+        'yet.</p>';
+    }
+
+    html += '<table>' + slipHead('This session');
+    html += '<tbody>';
+    html += slipRow('Entries', report.overall.entry);
+    html += slipRow('Exits', report.overall.exit);
+    html += slipRow('Round turn', report.overall.round_trip);
+    html += '</tbody></table>';
+
+    // MARKET against LIMIT, side by side. This is the split the peg has
+    // to justify itself against: a LIMIT that is not beating a market
+    // click on the same ladder is costing time for nothing.
+    html += '<table>' + slipHead('Entries by order type') + '<tbody>';
+    Object.keys(report.by_order_type).forEach(function (type) {
+      html += slipRow(type, report.by_order_type[type].entry);
+    });
+    html += '</tbody></table>';
+
+    html += '<table>' + slipHead('Entries by ladder') + '<tbody>';
+    Object.keys(report.by_pair).forEach(function (key) {
+      html += slipRow(report.by_pair[key].name || key,
+                      report.by_pair[key].entry);
+    });
+    html += '</tbody></table>';
+
+    if ((report.worst || []).length) {
+      html += '<table><thead><tr><th>Worst entries</th><th>Side</th>' +
+        '<th>Qty</th><th>Type</th><th>Slip</th><th>Cost</th>' +
+        '<th>Click→on</th><th>Opened</th></tr></thead><tbody>';
+      report.worst.forEach(function (row) {
+        html += '<tr><td>' + (row.pair_key || DASH) + '</td>';
+        html += '<td>' + (row.side || DASH) + '</td>';
+        html += '<td>' + row.quantity + '</td>';
+        html += '<td>' + (row.order_type || DASH) + '</td>';
+        html += slipPoints(row.entry_points);
+        html += slipMoney(row.entry_money);
+        html += '<td>' + (row.click_to_on_ms === null ||
+                          row.click_to_on_ms === undefined
+          ? DASH : Math.round(row.click_to_on_ms) + 'ms') + '</td>';
+        html += '<td>' + localTime(row.opened_at) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    return html;
+  }
+
+  function localTime(seconds) {
+    if (!seconds) { return DASH; }
+    return new Date(seconds * 1000).toTimeString().slice(0, 8);
+  }
+
+  function loadSlippage(force) {
+    var now = Date.now();
+    if (!force && state.slippage !== null && now - state.slippageAt < 5000) {
+      return;
+    }
+    state.slippageAt = now;
+    fetch('/api/slippage' + (state.slippageAll ? '?session=all' : ''))
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        state.slippage = body.ok ? body : {error: body.error};
+        render();
+      })
+      .catch(function (error) {
+        state.slippage = {error: 'the report could not be read: ' +
+                                 error.message};
       });
   }
 

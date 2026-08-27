@@ -184,3 +184,70 @@ def test_slippage_is_positive_when_it_costs_at_both_ends():
                     closing=True) == pytest.approx(0.13)
     # Unmeasured is not zero.
     assert slippage(None, 56.10, SpreadSide.SELL) is None
+
+
+def test_the_exit_is_measured_against_the_price_the_close_was_decided_at(
+        config, pair, legs):
+    """Slippage exists at the EXIT too, and this is where it was being
+    lost: an exit marked at the touch the close was decided at reports
+    every close as a perfect fill, whatever the broker gave us.
+
+    Here the market moves against the close between the decision and the
+    fill, and the report has to show that as a cost.
+    """
+    resolved(pair, legs)
+    executor = PairExecutor(config, legs, sleep=lambda s: None)
+    md = snapshot(pair, legs)
+    position = executor.market_entry(pair, SpreadSide.BUY, md, 1.0).position
+
+    # A BUY spread is closed by SELLING leg B at its bid. The bid drops
+    # ten ticks between the click and the fill.
+    symbol = legs['acct_b'].broker.symbols[pair.symbol_b]
+    symbol.bid -= 0.10
+
+    executor.close_position(pair, position, md, reason='test')
+
+    assert position.exit_slippage == pytest.approx(0.10)   # positive: a cost
+    # ...and the P&L is anchored on the price it actually got, not on
+    # the touch it aimed at.
+    assert position.exit_spread == pytest.approx(
+        md['short_spread'] - 0.10)
+
+
+def test_an_exit_that_gets_the_price_it_asked_for_measures_zero_not_none(
+        config, pair, legs):
+    """The control. A measured 0.00 and an unmeasured None mean
+    different things, and the report counts them in different columns."""
+    resolved(pair, legs)
+    executor = PairExecutor(config, legs, sleep=lambda s: None)
+    md = snapshot(pair, legs)
+    position = executor.market_entry(pair, SpreadSide.BUY, md, 1.0).position
+
+    executor.close_position(pair, position, md, reason='test')
+
+    assert position.exit_slippage == pytest.approx(0.0)
+
+
+def test_a_close_the_broker_did_not_price_is_unmeasured_not_zero():
+    """Half a spread is not a spread. With one leg's close price
+    missing, there is no exit price to report and no slippage to
+    measure — and neither is invented."""
+    from mt5trader.executor import closed_spread
+
+    priced = {'a': {'closed': [{'volume': 0.1, 'price': 100.0}]},
+              'b': {'closed': [{'volume': 0.1, 'price': 105.0}]}}
+    assert closed_spread(priced, 1.0) == pytest.approx(5.0)
+
+    priced['a']['closed'][0]['price'] = None
+    assert closed_spread(priced, 1.0) is None
+
+
+def test_a_ticket_closed_in_pieces_is_volume_weighted():
+    """A partial close at one price and the rest at another is one exit
+    at the weighted average — not at whichever piece went last."""
+    from mt5trader.executor import closed_spread
+
+    results = {'a': {'closed': [{'volume': 0.1, 'price': 100.0},
+                                {'volume': 0.3, 'price': 104.0}]},
+               'b': {'closed': [{'volume': 0.4, 'price': 110.0}]}}
+    assert closed_spread(results, 1.0) == pytest.approx(110.0 - 103.0)
