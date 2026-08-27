@@ -1,0 +1,10 @@
+.env
+config.json
+config.json.bak
+config.json.tmp
+status.json
+status.json.tmp
+*.log
+__pycache__/
+*.pyc
+.pytest_cache/

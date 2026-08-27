@@ -1,0 +1,5 @@
+# MetaTrader5 is Windows-only and is needed only on the trading box.
+# Everything else — and the whole test suite — runs anywhere.
+MetaTrader5>=5.0.45 ; sys_platform == "win32"
+python-dotenv>=1.0.0
+pytest>=8.0.0

@@ -1,0 +1,299 @@
+"""Fakes. MetaTrader5 is Windows-only; the whole system is testable on
+Linux, and nothing in here needs a terminal, a network or a clock.
+
+`FakeBroker` keeps a real HEDGING-mode book: an opposite market order
+opens a SECOND position and does not close the first. That is the
+behaviour the executor's ticket-based closes exist for, so faking it
+any other way would make the tests agree with a bug.
+"""
+
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mt5trader.broker import OrderResult                        # noqa: E402
+from mt5trader.config import PairConfig, TraderConfig           # noqa: E402
+from mt5trader.legs import LocalLeg                             # noqa: E402
+from mt5trader.models import MAGIC_NUMBER, OrderSide            # noqa: E402
+
+
+class FakeSymbol:
+    def __init__(self, name, bid, ask, contract_size=100.0, volume_min=0.01,
+                 volume_step=0.01, volume_max=100.0, tick_size=0.01,
+                 trade_allowed=True):
+        self.name = name
+        self.bid = bid
+        self.ask = ask
+        self.contract_size = contract_size
+        self.volume_min = volume_min
+        self.volume_step = volume_step
+        self.volume_max = volume_max
+        self.tick_size = tick_size
+        self.trade_allowed = trade_allowed
+        self.time = 1_700_000_000
+
+    def quote(self, bid, ask):
+        self.bid, self.ask = bid, ask
+        self.time += 1
+
+
+class FakeBroker:
+    """One account's book, in memory."""
+
+    def __init__(self, name='fake', symbols=None, timeline=None):
+        self.account = SimpleNamespace(name=name)
+        self.symbols = {s.name: s for s in (symbols or [])}
+        #: ticket -> position dict. Hedging mode: one per fill.
+        self.positions = {}
+        self.pendings = {}
+        #: Every request that reached the broker, in order, so a test can
+        #: assert that an "unwind" never sent an opposite market order.
+        self.sent = []
+        #: Shared across both accounts when the fixture passes one, so a
+        #: test can assert which leg reached its broker FIRST.
+        self.timeline = [] if timeline is None else timeline
+        self.fail_symbols = set()
+        #: Fails CLOSES only, leaving entries working — the shape of a
+        #: leg that goes on and then cannot be taken off again.
+        self.fail_closes = set()
+        self.reject_orders = {}          # symbol -> error string
+        self.next_ticket = 1000
+        self.connected = False
+
+    # -- helpers for tests -------------------------------------------------
+
+    def quote(self, symbol, bid, ask):
+        self.symbols[symbol].quote(bid, ask)
+
+    def open_positions(self, symbol=None):
+        return [p for p in self.positions.values()
+                if symbol is None or p['symbol'] == symbol]
+
+    def _record(self, entry):
+        entry = dict(entry, account=self.account.name)
+        self.sent.append(entry)
+        self.timeline.append(entry)
+        return entry
+
+    def _ticket(self):
+        self.next_ticket += 1
+        return self.next_ticket
+
+    # -- the BrokerSession interface --------------------------------------
+
+    def initialize(self):
+        self.connected = True
+        return True
+
+    def shutdown(self):
+        self.connected = False
+
+    def is_alive(self):
+        return self.connected
+
+    def account_info(self):
+        return SimpleNamespace(
+            login=12345, server='FakeServer', name=self.account.name,
+            currency='USD', leverage=100, balance=100_000.0,
+            equity=100_000.0, margin=0.0, margin_free=100_000.0,
+            margin_level=None, margin_so_call=50.0, margin_so_so=30.0,
+            profit=sum(p.get('profit', 0.0) for p in self.positions.values()))
+
+    def ensure_symbol(self, symbol):
+        return self.symbols.get(symbol)
+
+    def symbol_info(self, symbol):
+        return self.symbols.get(symbol)
+
+    def symbol_tick(self, symbol):
+        info = self.symbols.get(symbol)
+        if info is None:
+            return None
+        return SimpleNamespace(bid=info.bid, ask=info.ask,
+                               last=(info.bid + info.ask) / 2, time=info.time)
+
+    def find_symbols(self, pattern, limit=40):
+        needle = (pattern or '').upper()
+        return [{'symbol': s.name, 'description': s.name,
+                 'contract_size': s.contract_size, 'volume_min': s.volume_min,
+                 'volume_max': s.volume_max, 'volume_step': s.volume_step}
+                for s in self.symbols.values() if needle in s.name.upper()]
+
+    def symbol_report(self, symbol):
+        info = self.symbols.get(symbol)
+        if info is None:
+            return {'symbol': symbol, 'found': False,
+                    'error': f'{symbol} does not exist on this broker'}
+        return {
+            'symbol': symbol, 'found': True, 'description': symbol,
+            'visible': True, 'bid': info.bid, 'ask': info.ask,
+            'digits': 2, 'point': info.tick_size, 'tick_size': info.tick_size,
+            'tick_value': info.contract_size * info.tick_size,
+            'contract_size': info.contract_size,
+            'volume_min': info.volume_min, 'volume_max': info.volume_max,
+            'volume_step': info.volume_step, 'currency': 'USD',
+            'filling_mode': 1, 'trade_mode': 4,
+            'trade_allowed': info.trade_allowed, 'expiry': 0,
+        }
+
+    def terminal_report(self):
+        return {'library': True, 'terminal': True, 'logged_in': True,
+                'algo_trading': True, 'hedging': True,
+                'login': 12345, 'server': 'FakeServer'}
+
+    def verify_ticket(self, ticket, attempts=3, delay=0.0):
+        position = self.positions.get(int(ticket))
+        if position is None:
+            return {'ticket': ticket, 'confirmed': False,
+                    'error': 'not found'}
+        return {'ticket': ticket, 'confirmed': True, 'position_open': True,
+                'symbol': position['symbol'], 'volume': position['volume'],
+                'price': position['price_open'], 'source': 'open position'}
+
+    def send_market_order(self, symbol, side, volume, slippage_points=1.0,
+                          comment=""):
+        self._record({'action': 'market', 'symbol': symbol,
+                      'side': side.value, 'volume': volume,
+                      'comment': comment})
+        if symbol in self.fail_symbols:
+            return OrderResult(False, error='forced failure')
+        if symbol in self.reject_orders:
+            return OrderResult(False, error=self.reject_orders[symbol])
+        info = self.symbols[symbol]
+        price = info.ask if side is OrderSide.BUY else info.bid
+        ticket = self._ticket()
+        # HEDGING: this OPENS a position. It never closes another one.
+        self.positions[ticket] = {
+            'ticket': ticket, 'symbol': symbol, 'side': side.value,
+            'volume': volume, 'price_open': price, 'magic': MAGIC_NUMBER,
+            'comment': comment, 'profit': 0.0}
+        return OrderResult(True, requested_price=price, executed_price=price,
+                           ticket=ticket, volume=volume)
+
+    def order_fill_state(self, ticket):
+        position = self.positions.get(int(ticket))
+        pending = self.pendings.get(int(ticket))
+        if position is not None:
+            return {'ok': True, 'filled_volume': position['volume'],
+                    'price': position['price_open'],
+                    'position_tickets': [position['ticket']],
+                    'still_open': False, 'error': None}
+        return {'ok': True, 'filled_volume': 0.0, 'price': None,
+                'position_tickets': [], 'still_open': pending is not None,
+                'error': None}
+
+    def close_position_ticket(self, symbol, ticket, volume, entry_side,
+                              slippage_points=1.0, comment=""):
+        self._record({'action': 'close', 'symbol': symbol,
+                      'ticket': ticket, 'volume': volume,
+                      'entry_side': entry_side.value, 'comment': comment})
+        position = self.positions.get(int(ticket))
+        if position is None:
+            return OrderResult(False, error=f'no position {ticket}')
+        if symbol in self.fail_symbols or symbol in self.fail_closes:
+            return OrderResult(False, error='forced failure')
+        info = self.symbols[symbol]
+        close_side = entry_side.opposite
+        price = info.ask if close_side is OrderSide.BUY else info.bid
+        if volume >= position['volume'] - 1e-9:
+            del self.positions[int(ticket)]
+        else:
+            position['volume'] -= volume
+        return OrderResult(True, executed_price=price, ticket=int(ticket),
+                           volume=volume)
+
+    def positions_by_magic(self, symbol=None):
+        return [{'ticket': p['ticket'], 'symbol': p['symbol'],
+                 'side': p['side'], 'volume': p['volume'],
+                 'price_open': p['price_open']}
+                for p in self.positions.values()
+                if p['magic'] == MAGIC_NUMBER
+                and (symbol is None or p['symbol'] == symbol)]
+
+    def place_pending_limit(self, symbol, side, volume, price, comment="",
+                            position_ticket=None):
+        if symbol in self.fail_symbols:
+            return {'ok': False, 'ticket': None, 'error': 'forced failure'}
+        ticket = self._ticket()
+        self.pendings[ticket] = {'ticket': ticket, 'symbol': symbol,
+                                 'side': side.value, 'volume': volume,
+                                 'price': price, 'comment': comment}
+        self._record({'action': 'pending', 'symbol': symbol,
+                      'side': side.value, 'volume': volume, 'price': price})
+        return {'ok': True, 'ticket': ticket, 'error': None, 'price': price}
+
+    def pending_orders_by_magic(self, symbol=None):
+        return [dict(p) for p in self.pendings.values()
+                if symbol is None or p['symbol'] == symbol]
+
+    def modify_pending(self, ticket, price):
+        pending = self.pendings.get(int(ticket))
+        if pending is None:
+            return {'ok': False, 'error': 'order not open'}
+        pending['price'] = price
+        self._record({'action': 'modify', 'ticket': ticket, 'price': price})
+        return {'ok': True, 'error': None}
+
+    def cancel_pending(self, ticket):
+        pending = self.pendings.pop(int(ticket), None)
+        state = self.order_fill_state(ticket)
+        state['cancelled'] = pending is not None
+        if pending is None:
+            state['error'] = f'no pending {ticket}'
+        return state
+
+    def order_log(self, hours=24):
+        return []
+
+
+class FakeLeg(LocalLeg):
+    """The real LocalLeg over a FakeBroker — the wiring is under test too."""
+
+    def __init__(self, broker):
+        super().__init__(broker)
+        self.broker.initialize()
+
+
+@pytest.fixture
+def gold_symbols():
+    #: Spot 0.01-lot minimum against a future's 0.10 — CFI's real shape,
+    #: and the reason a click is quoted in spreads rather than leg lots.
+    return (FakeSymbol('XAUUSD_', 4292.00, 4292.20, contract_size=100.0,
+                       volume_min=0.01, volume_step=0.01),
+            FakeSymbol('GC1226', 4351.00, 4351.40, contract_size=100.0,
+                       volume_min=0.10, volume_step=0.10))
+
+
+@pytest.fixture
+def timeline():
+    """Every request that reached EITHER broker, in the order it did."""
+    return []
+
+
+@pytest.fixture
+def legs(gold_symbols, timeline):
+    spot, future = gold_symbols
+    a = FakeLeg(FakeBroker('acct_a', [spot], timeline))
+    b = FakeLeg(FakeBroker('acct_b', [future], timeline))
+    return {'acct_a': a, 'acct_b': b}
+
+
+@pytest.fixture
+def pair():
+    return PairConfig(
+        'XAUUSD_|GC1226', name='Gold basis',
+        leg_a={'account': 'acct_a', 'symbol': 'XAUUSD_'},
+        leg_b={'account': 'acct_b', 'symbol': 'GC1226'},
+        hedge_ratio=1.0, hedge_ratio_for='XAUUSD_|GC1226',
+        increment=0.01, default_quantity=1.0)
+
+
+@pytest.fixture
+def config(pair):
+    cfg = TraderConfig(pairs={pair.key: pair})
+    cfg.settings['LEG_DEADLINE_SEC'] = 0.05     # tests do not wait 2s
+    return cfg
