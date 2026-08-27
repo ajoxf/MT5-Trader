@@ -1,10 +1,9 @@
 # Working on MT5-Trader
 
-Read `MT5_TRADER_LADDER_PROMPT.md` first — it is the specification, and
-most of it is a rule that was paid for on a live account in the
-stat-arb system this code is ported from
-(`ajoxf/Statistical_Arbitrage_trade`, branch
-`claude/mt5-multi-account-streaming-4pmun0`).
+The build specification is held privately, outside this repository — get
+it from the repository owner and read it first. Most of it is a rule that
+was paid for on a live account in the stat-arb system this code is ported
+from.
 
 ## Hard rules
 

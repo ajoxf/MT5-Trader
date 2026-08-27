@@ -2,8 +2,8 @@
 
 Put the operator's TT screenshot here as `tt_ladder.png`.
 
-It is the layout specification for the ladder (§3.3 of
-`MT5_TRADER_LADDER_PROMPT.md`): three inter-product ladders
+It is the layout specification for the ladder (§3.3 of the private
+build specification): three inter-product ladders
 (`CL Oct26 − BZ Oct26`, `CL Nov26 − BZ Nov26`, `Oct26 HO−CL Crack`), each with
 
 - the title bar carrying pair name and routing account, and the bottom taskbar

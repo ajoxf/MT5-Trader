@@ -10,19 +10,9 @@ instrument, the way a CQG or TT inter-product ladder does.
 
 ## The specification
 
-**[`MT5_TRADER_LADDER_PROMPT.md`](MT5_TRADER_LADDER_PROMPT.md)** is the full
-build specification. Read it before writing code. Sections most likely to be
-skimmed and shouldn't be:
-
-| Section | Why |
-|---|---|
-| §2 | The spread and sizing arithmetic — it inverts the hedge if guessed |
-| §3.3 | Fidelity to the reference screen; it overrides the tables above it |
-| §4 | A resting spread order is synthetic — the central engineering problem |
-| §5 | Marks at the closing touch; the bid-ask is charged once |
-| §16 | Monitoring positions — the positions / working-orders / fills monitor |
-| §17 | The Market Grid — quote and trade per row, and the ladder launcher |
-| Hard rules | Repeat them back before starting |
+The full build specification is held privately, outside this repository.
+Ask the repository owner for a copy — it is required reading before
+writing any code.
 
 ## What is built so far
 

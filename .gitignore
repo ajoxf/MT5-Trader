@@ -8,3 +8,7 @@ status.json.tmp
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Private build specification — never commit
+MT5_TRADER_LADDER_PROMPT.md
+*_PROMPT.md
