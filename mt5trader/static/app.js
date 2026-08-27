@@ -971,7 +971,7 @@
   }
 
   function slipHead(first) {
-    return '<thead><tr><th>' + first + '</th><th>Fills</th><th></th>' +
+    return '<thead><tr><th>' + first + '</th><th>Measured</th><th></th>' +
       '<th>Mean</th><th>Median</th><th>Worst</th><th>Best</th>' +
       '<th>Cost</th><th>Split</th></tr></thead>';
   }
