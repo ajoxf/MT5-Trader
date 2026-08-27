@@ -1342,7 +1342,7 @@ def test_the_cancel_buttons_are_dead_when_there_is_nothing_to_cancel(page):
         timeout=5000)
 
     assert page.locator('.ladder .cxl-all').is_disabled()
-    assert 'Cancel all' in page.text_content('.ladder .cxl-all')
+    assert 'CXL All' in page.text_content('.ladder .cxl-all')
 
     page.evaluate("""() => {
         const state = window.MT5Trader.state;

@@ -22,13 +22,13 @@
    * The BANDS stay the softened ones — on a light frame the saturated
    * pair shouts, and a band that shouts makes the size printed in it
    * harder to read. */
-  --frame: #d7d7d7;
-  --frame-dark: #c3c3c3;
-  --frame-line: #a8a8a8;
+  --frame: #f0f0f0;
+  --frame-dark: #e2e2e2;
+  --frame-line: #c8c8c8;
   --frame-text: #1c1c1c;
-  --frame-muted: #5c5c5c;
-  --price-cell: #d5d5d5;      /* the price column */
-  --price-line: #ffffff;
+  --frame-muted: #6a6a6a;
+  --price-cell: #ffffff;      /* the price column */
+  --price-line: #d9d9d9;
 
   /* Softened, deliberately. The saturated pair was right for a dark
    * frame and is loud on a light one — and a band that shouts makes
@@ -182,7 +182,7 @@ body {
   color: var(--frame-text);
   font-size: 11px;
 }
-.window.inactive .titlebar { background: #cccccc; color: #565656; }
+.window.inactive .titlebar { background: #eaeaea; color: #6e6e6e; }
 .titlebar .swatch {
   width: 9px; height: 9px;
   background: var(--bid);
@@ -294,7 +294,7 @@ body {
 .rail .fair {
   margin-top: 4px;
   padding: 3px;
-  background: rgba(255, 255, 255, .55);
+  background: #ffffff;
   border: 1px solid var(--frame-line);
 }
 .rail .fair-value {
@@ -338,7 +338,7 @@ body {
 .route-box {
   font-size: 10px;
   color: var(--frame-muted);
-  background: rgba(255, 255, 255, .55);
+  background: #ffffff;
   border: 1px solid var(--frame-line);
   padding: 2px 3px;
 }
@@ -406,10 +406,10 @@ body {
   position: relative;
   flex: 1;
   overflow-y: auto;
-  /* The empty ladder is the frame's grey, not white: the Work and LTQ
-   * columns either side of the coloured bands are part of the window,
-   * not paper. */
-  background: #e9e9e9;
+  /* The Work and LTQ columns either side of the coloured bands: near
+   * white, as on the reference screen, so the two bands are the only
+   * colour on the ladder. */
+  background: #fbfbfb;
 }
 .grid table {
   border-collapse: collapse;
@@ -568,7 +568,7 @@ table.legbook {
   border-collapse: collapse;
   font: 10px/1.45 var(--mono);
   color: var(--frame-text);
-  background: rgba(255, 255, 255, .5);
+  background: #ffffff;
   border: 1px solid var(--frame-line);
 }
 table.legbook th,
