@@ -159,3 +159,51 @@ def test_results_are_published_for_the_web_process_to_read(bridge, pair,
 
     published = json.load(open(runner.results_path, encoding='utf-8'))
     assert published[command_id]['ok'] is True
+
+
+def test_a_click_does_not_wait_for_the_next_poll(bridge, pair, legs):
+    """The command thread drains far faster than the poll.
+
+    Waiting for the poll would put up to a whole interval between the
+    click and the order — on a product whose promise is that one click
+    is one order. The prices a click acts on are the ones already
+    published; nothing about it needs a fresh poll.
+    """
+    import threading
+    import time
+
+    coordinator, runner, log = bridge
+    pair.order_type = OrderType.MARKET
+    coordinator.commands = runner
+    runner.prime()
+    coordinator.config.settings['COMMAND_POLL_SEC'] = 0.005
+    # A poll interval long enough that a click waiting for it would be
+    # obvious — this is the fault under test.
+    coordinator.config.settings['POLL_INTERVAL_SEC'] = 5.0
+
+    thread = threading.Thread(target=coordinator.serve_commands, daemon=True)
+    thread.start()
+    try:
+        started = time.time()
+        log.submit('click', {'pair': pair.key, 'side': 'BUY', 'level': 59.5})
+        deadline = started + 2.0
+        while not coordinator.book.positions(pair.key) and time.time() < deadline:
+            time.sleep(0.005)
+        elapsed = time.time() - started
+    finally:
+        coordinator._stop.set()
+        thread.join(timeout=1.0)
+
+    assert coordinator.book.positions(pair.key), 'the click never executed'
+    assert elapsed < 0.5, f'the click waited {elapsed:.2f}s for a poll'
+
+
+def test_a_click_and_a_poll_do_not_read_the_book_at_the_same_time(bridge,
+                                                                   pair):
+    """One lock over the book and the executor: a poll reading the book
+    while a click mutates it would publish a half-placed order."""
+    coordinator, runner, log = bridge
+    assert coordinator.lock is not None
+    with coordinator.lock:
+        # Re-entrant, so the coordinator's own nested calls still work.
+        assert coordinator.click(pair.key, 'BUY', 58.4)['ok']

@@ -36,6 +36,12 @@ except ImportError:            # dotenv optional; the shell can set them
 DEFAULT_SETTINGS = {
     # --- the loop -----------------------------------------------------
     'POLL_INTERVAL_SEC': 0.3,
+    #: How often the coordinator drains clicks, on its own thread. This
+    #: is the click-to-order latency the trader actually feels, and it
+    #: is deliberately far shorter than the poll: waiting for the next
+    #: poll would put up to a whole interval between the click and the
+    #: order, on a product whose promise is that one click is one order.
+    'COMMAND_POLL_SEC': 0.02,
     'ACCOUNT_INFO_CACHE_SEC': 5.0,     # an IPC round trip; do not poll it
 
     # --- execution ----------------------------------------------------
@@ -51,6 +57,15 @@ DEFAULT_SETTINGS = {
     #: it is refused, in ladder increments. Default a few; measure the
     #: real distribution before fixing it (spec, open question 12).
     'MARKET_PROTECTION_TICKS': 3.0,
+    #: ONE CLICK IS ONE ORDER. A market click crosses immediately —
+    #: that is the product, and the arming is made unmistakable instead
+    #: (the mode badge, the tinted click columns, the cursor). Turn this
+    #: on and every market click asks first; it is a deliberate choice
+    #: for a desk that wants the extra gesture, not the default.
+    'CONFIRM_MARKET_CLICKS': False,
+    #: Ladder row height in pixels. 17 is the reference screen's; a
+    #: bigger target is a faster, safer click on a large monitor.
+    'ROW_HEIGHT_PX': 17,
     #: Re-peg dead band, in ladder increments. Every MODIFY loses queue
     #: position, so re-pricing three times a second guarantees you are
     #: never at the front of a queue — which defeats quoting entirely

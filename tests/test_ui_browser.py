@@ -34,6 +34,7 @@ class Publisher:
         self.path = path
         self.every = every
         self.order_type = 'LIMIT'
+        self.confirm = False
         self.live = threading.Event()
         self.live.set()
         self.stop = threading.Event()
@@ -46,7 +47,7 @@ class Publisher:
             time.sleep(self.every)
 
     def publish(self, at=None):
-        payload = snapshot(self.order_type)
+        payload = snapshot(self.order_type, self.confirm)
         if at is not None:
             payload['at'] = at
         tmp = self.path + '.tmp'
@@ -81,7 +82,7 @@ def server(tmp_path_factory):
     httpd.shutdown()
 
 
-def snapshot(order_type='LIMIT'):
+def snapshot(order_type='LIMIT', confirm=False):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -89,6 +90,8 @@ def snapshot(order_type='LIMIT'):
                      'is_best_bid': step == -1, 'is_best_ask': step == 1})
     return {
         'at': time.time(), 'loop_interval_sec': 0.31,
+        'confirm_market_clicks': confirm, 'row_height_px': 17,
+        'command_poll_sec': 0.02,
         'accounts': {'acct_a': {'profit': 0.0}, 'acct_b': {'profit': 0.0}},
         'reconciler': {'untracked_closes': [], 'escalated': [],
                        'unknown_accounts': []},
@@ -184,6 +187,10 @@ def test_the_inside_market_rule_is_drawn_between_the_two_touches(page):
 
 
 def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
+    # The ladder repaints three times a second; wait for a painted row
+    # rather than racing one.
+    page.wait_for_selector('.ladder tr.in-bid td.bid')
+    page.wait_for_selector('.ladder tr.in-ask td.ask')
     bid = page.locator('.ladder tr.in-bid td.bid').first
     ask = page.locator('.ladder tr.in-ask td.ask').first
     assert bid.evaluate('n => getComputedStyle(n).backgroundColor') == \
@@ -215,10 +222,11 @@ def test_three_clicks_at_one_price_send_three_orders(page):
     assert len(levels) == 1                       # same price, three orders
 
 
-def test_market_mode_is_unmistakable_and_confirms_through_our_own_modal(page):
+def test_a_market_click_fires_on_ONE_click(page):
+    """One click is one order. The arming carries the weight instead:
+    the mode badge, the tinted columns, the cursor."""
     # The selector sends a command; the UI arms itself from what the
-    # ENGINE says came back, never from the click. So the ladder is in
-    # MARKET mode only once the snapshot says it is.
+    # ENGINE says came back, never from the click.
     page.select_option('.ladder .order-type', 'MARKET')
     page.paths['publisher'].order_type = 'MARKET'
     page.wait_for_selector('.window.mode-market', timeout=3000)
@@ -228,16 +236,43 @@ def test_market_mode_is_unmistakable_and_confirms_through_our_own_modal(page):
 
     before = command_count(page)
     page.locator('.ladder tbody tr td.bid').nth(6).click()
-    page.wait_for_timeout(150)
-    # Our own modal, never a native confirm() — and nothing is sent until
-    # it is answered.
-    assert page.locator('#modal:not(.hidden)').count() == 1
-    assert command_count(page) == before
+    page.wait_for_timeout(250)
+
+    assert command_count(page) == before + 1        # no second gesture
+    assert page.locator('#modal.hidden').count() == 1
+    assert last_command(page)['kind'] == 'click'
+
+
+def test_the_click_shows_up_before_the_engine_answers(page):
+    """A trader who cannot see their click clicks again. The ghost is
+    drawn immediately and is never added into the working total."""
+    # Earlier tests in this file have clicked too; start from nothing in
+    # flight so the count means what it says.
+    page.evaluate('() => { window.MT5Trader.state.pending.length = 0; }')
+    page.locator('.ladder tbody tr td.ask').nth(8).click()
+    # No waiting: it is on the screen in the same frame.
+    page.wait_for_selector('.ladder td.work.pending', timeout=500)
+    assert page.locator('.ladder td.work.pending .ghost').first.text_content() \
+        == '1'
+
+
+def test_a_desk_that_wants_the_extra_gesture_can_have_it(page):
+    """The control: CONFIRM_MARKET_CLICKS turns the one click back into
+    a confirmed one — through OUR modal, never a native dialog."""
+    page.paths['publisher'].confirm = True
+    page.wait_for_timeout(400)
+
+    before = command_count(page)
+    page.locator('.ladder tbody tr td.bid').nth(6).click()
+    page.wait_for_selector('#modal:not(.hidden)')
+    assert command_count(page) == before          # nothing sent yet
     page.click('#modal-confirm')
     page.wait_for_timeout(250)
     assert command_count(page) == before + 1
-    assert last_command(page)['kind'] == 'click'
+
+    page.paths['publisher'].confirm = False
     page.paths['publisher'].order_type = 'LIMIT'
+    page.wait_for_timeout(400)
 
 
 def test_every_number_input_accepts_the_value_the_engine_shipped(page):
@@ -290,6 +325,119 @@ def last_command(page):
 
 
 # -- the settings page ---------------------------------------------------
+
+def test_the_quick_buttons_hit_the_touch_without_hunting_for_a_row(page):
+    """BUY lifts the offer, SELL hits the bid — the price the market is
+    actually offering for that direction, never the mid."""
+    before = command_count(page)
+    page.click('.ladder .buy-touch')
+    page.wait_for_timeout(250)
+    assert command_count(page) == before + 1
+    assert last_command(page)['payload']['level'] == 59.11      # long spread
+    assert last_command(page)['payload']['side'] == 'BUY'
+
+    page.click('.ladder .sell-touch')
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload']['level'] == 59.09      # short spread
+    assert last_command(page)['payload']['side'] == 'SELL'
+
+
+def test_one_key_is_one_order_too(page):
+    """B, S, and the quantity presets — a hand that never leaves the
+    keyboard is faster than one that hunts for a button."""
+    page.click('.ladder .titlebar')                 # focus this ladder
+    before = command_count(page)
+
+    page.keyboard.press('3')                        # arm 10 spreads
+    page.wait_for_timeout(120)
+    assert page.text_content('.ladder .armed') == '10'
+
+    page.keyboard.press('b')
+    page.wait_for_timeout(250)
+    assert command_count(page) == before + 1
+    command = last_command(page)
+    assert command['payload']['side'] == 'BUY'
+    assert command['payload']['quantity'] == 10
+
+    page.keyboard.press('s')
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload']['side'] == 'SELL'
+
+    page.keyboard.press('0')                        # back to the default
+    page.wait_for_timeout(120)
+    assert page.text_content('.ladder .armed') == '--'
+
+
+def test_x_pulls_this_ladders_orders_and_l_locks_the_scroll(page):
+    page.click('.ladder .titlebar')
+    before = command_count(page)
+    page.keyboard.press('x')
+    page.wait_for_timeout(250)
+    assert last_command(page)['kind'] == 'cancel_where'
+    assert command_count(page) == before + 1
+
+    assert page.evaluate("() => !!window.MT5Trader.state.locked['XAUUSD_|GC1226']") \
+        is False
+    page.keyboard.press('l')
+    page.wait_for_timeout(120)
+    assert page.evaluate("() => !!window.MT5Trader.state.locked['XAUUSD_|GC1226']") \
+        is True
+    page.keyboard.press('l')
+
+
+def test_a_key_typed_into_a_field_is_never_an_order(page):
+    """The one way a shortcut becomes dangerous: typing a quantity and
+    having the B in 'BUY' fire."""
+    before = command_count(page)
+    page.click('.ladder .default-qty')
+    page.keyboard.type('b')
+    page.keyboard.press('s')
+    page.wait_for_timeout(250)
+    assert command_count(page) == before
+    page.keyboard.press('Escape')
+
+
+def test_the_shortcuts_are_on_the_screen_not_in_a_manual(page):
+    page.click('#help')
+    page.wait_for_selector('#help-overlay:not(.hidden)')
+    text = page.text_content('#help-overlay')
+    assert 'buy the spread at the offer' in text
+    assert 'no confirmation, by design' in text
+    page.keyboard.press('Escape')
+    page.wait_for_selector('#help-overlay.hidden', state='attached')
+
+
+def test_flatten_asks_once_and_then_goes(page):
+    """Flattening is irreversible and it is the button pressed in a
+    hurry — so it asks, but with one key and only once."""
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.snapshot.pairs['XAUUSD_|GC1226'].net_position = -2;
+        window.MT5Trader.render();
+    }""")
+    before = command_count(page)
+    page.click('.ladder .flatten')
+    page.wait_for_selector('#modal:not(.hidden)')
+    assert 'cannot be undone' in page.text_content('#modal-body')
+    page.click('#modal-confirm')
+    page.wait_for_timeout(250)
+    assert command_count(page) == before + 1
+    assert last_command(page)['kind'] == 'flatten_pair'
+
+
+def test_flatten_says_so_when_there_is_nothing_to_flatten(page):
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.snapshot.pairs['XAUUSD_|GC1226'].net_position = 0;
+        window.MT5Trader.render();
+    }""")
+    before = command_count(page)
+    page.click('.ladder .flatten')
+    page.wait_for_selector('.toast')
+    assert 'already flat' in page.text_content('.toast')
+    assert command_count(page) == before
+    page.click('.toast')
+
 
 def test_the_settings_page_edits_accounts_and_pairs(page):
     """The one panel that must work with the ENGINE down: the

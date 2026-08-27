@@ -63,6 +63,11 @@ class Coordinator:
         self._loop_interval = None
         self._last_poll = None
         self._stop = threading.Event()
+        #: One lock over the book and the executor. Commands arrive on
+        #: their own thread — a click must not wait for the next poll —
+        #: and a poll reading the book while a click mutates it would
+        #: publish a half-placed order.
+        self.lock = threading.RLock()
         #: Symbol resolution failures, in the operator's words, kept on
         #: the snapshot so a broken pair is VISIBLE rather than absent
         #: (spec §17: never hide a broken row).
@@ -200,6 +205,10 @@ class Coordinator:
 
     def poll_once(self):
         """One pass over every enabled pair. Returns the snapshot dict."""
+        with self.lock:
+            return self._poll_once()
+
+    def _poll_once(self):
         started = self.clock()
         if self._last_poll is not None:
             self._loop_interval = started - self._last_poll
@@ -295,6 +304,10 @@ class Coordinator:
         The Market Grid and the ladder both come through here, so a grid
         click and a ladder click at the same price are the same order.
         """
+        with self.lock:
+            return self._click(pair_key, side, level, quantity)
+
+    def _click(self, pair_key, side, level, quantity=None):
         pair = self.config.pairs.get(pair_key)
         if pair is None:
             return {'ok': False, 'reason': f'no pair {pair_key}'}
@@ -319,6 +332,10 @@ class Coordinator:
         return {'ok': True, 'order': order.to_dict()}
 
     def cancel_order(self, order_id):
+        with self.lock:
+            return self._cancel_order(order_id)
+
+    def _cancel_order(self, order_id):
         order = self.book.order(order_id)
         if order is None or not order.is_working:
             return {'ok': False, 'reason': 'that order is not working'}
@@ -332,6 +349,10 @@ class Coordinator:
         pass, which is also where a fill that raced the cancel is
         caught.
         """
+        with self.lock:
+            return self._cancel_where(pair_key, side, reason)
+
+    def _cancel_where(self, pair_key=None, side=None, reason='cancelled'):
         pulled = self.book.cancel_where(pair_key, side, reason)
         for key, pair in self.config.pairs.items():
             if pair_key in (None, key):
@@ -408,6 +429,13 @@ class Coordinator:
             }
         return {
             'at': self.clock(),
+            # What a click does, and how fast it is drained — the UI
+            # arms itself from the ENGINE's answer, never from its own
+            # idea of what the trader last selected.
+            'confirm_market_clicks': bool(
+                self.config.get('CONFIRM_MARKET_CLICKS', False)),
+            'row_height_px': self.config.get('ROW_HEIGHT_PX', 17),
+            'command_poll_sec': self.config.get('COMMAND_POLL_SEC', 0.02),
             # Published so a slow ladder can be blamed on the right
             # process instead of argued about (spec §9).
             'loop_interval_sec': self._loop_interval,
@@ -428,10 +456,30 @@ class Coordinator:
         `open(path, 'w')` means it eventually reads half a JSON
         document.
         """
+        with self.lock:
+            payload = self.snapshot()
         tmp = self.status_path + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(self.snapshot(), f, default=str)
+            json.dump(payload, f, default=str)
         os.replace(tmp, self.status_path)
+
+    def serve_commands(self):
+        """Drain clicks on their OWN thread, far faster than the poll.
+
+        A click that waits for the next poll waits up to a whole poll
+        interval before the order is even sent — 300ms of nothing, on a
+        product whose entire promise is that one click is one order. The
+        prices it acts on are the ones already published; nothing here
+        needs a fresh poll to run.
+        """
+        every = float(self.config.get('COMMAND_POLL_SEC', 0.02))
+        while not self._stop.is_set():
+            try:
+                if self.commands is not None:
+                    self.commands.drain()
+            except Exception as e:                  # never die on a command
+                logging.exception("command drain failed: %s", e)
+            self.sleep(every)
 
     def run(self):
         interval = float(self.config.get('POLL_INTERVAL_SEC', 0.3))
@@ -440,8 +488,9 @@ class Coordinator:
             began = self.clock()
             try:
                 if self.commands is not None:
-                    # Before the poll: a click acts on the prices the
-                    # trader was looking at, not on the next pass's.
+                    # Also here, so a single-threaded run (the tests, and
+                    # anything that does not start the command thread)
+                    # still executes clicks.
                     self.commands.drain()
                 self.poll_once()
                 self.publish()

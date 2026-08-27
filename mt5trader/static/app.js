@@ -26,7 +26,13 @@
     armed: {},           // pair key -> quantity armed on the keypad
     locked: {},          // pair key -> scroll is locked
     filtered: {},        // pair key -> hide rows with nothing on them
-    monitorTab: 'positions'
+    monitorTab: 'positions',
+    // Clicks that have been sent but are not in a snapshot yet. The
+    // round trip is ~25ms plus the broker, but the ladder must show the
+    // order the INSTANT it is clicked: a trader who cannot see their
+    // click clicks again.
+    pending: [],
+    help: false
   };
 
   // -- plumbing -------------------------------------------------------
@@ -175,6 +181,15 @@
       state.armed[key] = button.dataset.qty ? parseFloat(button.dataset.qty) : null;
       render();
     });
+    node.querySelector('.buy-touch').addEventListener('click', function () {
+      atTouch(key, 'BUY');
+    });
+    node.querySelector('.sell-touch').addEventListener('click', function () {
+      atTouch(key, 'SELL');
+    });
+    node.querySelector('.flatten').addEventListener('click', function () {
+      flatten(key);
+    });
     node.querySelector('.cxl-b').addEventListener('click', function () {
       send('cancel_where', {pair: key, side: 'BUY'});
     });
@@ -202,24 +217,108 @@
 
   function clickLevel(key, side, level) {
     var pair = state.snapshot.pairs[key] || {};
+    var quantity = state.armed[key] || pair.default_quantity;
     var payload = {pair: key, side: side, level: level};
     if (state.armed[key]) { payload.quantity = state.armed[key]; }
-    if (pair.order_type === 'MARKET') {
-      // A market click crosses both accounts and cannot be taken back.
+
+    // ONE CLICK IS ONE ORDER. A market click crosses both accounts
+    // immediately — that is the product. The arming is what carries the
+    // weight instead: the mode badge, the tinted columns, the cursor.
+    // A desk that wants the extra gesture turns CONFIRM_MARKET_CLICKS on.
+    if (pair.order_type === 'MARKET' && state.snapshot.confirm_market_clicks) {
       ask('Cross both legs now?',
-          key + '\n' + side + ' ' + (payload.quantity || pair.default_quantity) +
-          ' spread(s) at ' + fmt(level, 4) + '.\n\n' +
-          'MARKET mode crosses both legs immediately. The clicked price ' +
-          'is the slippage guard: a fill worse than it by more than the ' +
+          key + '\n' + side + ' ' + quantity + ' spread(s) at ' +
+          fmt(level, 4) + '.\n\n' +
+          'MARKET crosses both legs immediately. The clicked price is the ' +
+          'slippage guard: a fill worse than it by more than the ' +
           'protection is refused.',
-          'Send it', function () { send('click', payload); });
+          'Send it', function () { fire(key, side, level, payload); });
       return;
     }
-    send('click', payload);
+    fire(key, side, level, payload);
+  }
+
+  function fire(key, side, level, payload) {
+    var pair = state.snapshot.pairs[key] || {};
+    var ghost = {
+      pair_key: key, side: side, level: level,
+      quantity: payload.quantity || pair.default_quantity,
+      market: pair.order_type === 'MARKET', at: Date.now()
+    };
+    state.pending.push(ghost);
+    flash(key, level, side);
+    render();
+    send('click', payload, function (result) {
+      ghost.done = true;
+      if (result && result.ok === false) { ghost.failed = true; }
+      render();
+    });
+  }
+
+  function flash(key, level, side) {
+    // The row lights up under the finger, before any round trip. It is
+    // the difference between "did that register?" and knowing it did.
+    var selector = '.ladder[data-pair="' + cssEscape(key) + '"] tr[data-level="'
+      + level + '"]';
+    var row = document.querySelector(selector);
+    if (!row) { return; }
+    row.classList.add(side === 'BUY' ? 'flash-buy' : 'flash-sell');
+    window.setTimeout(function () {
+      row.classList.remove('flash-buy');
+      row.classList.remove('flash-sell');
+    }, 350);
+  }
+
+  function prunePending() {
+    var now = Date.now();
+    state.pending = state.pending.filter(function (ghost) {
+      // A ghost lives until the engine's own answer arrives, and never
+      // more than a second: a stale ghost is a phantom order.
+      if (ghost.failed) { return false; }
+      if (ghost.done && now - ghost.at > 400) { return false; }
+      return now - ghost.at < 1500;
+    });
+  }
+
+  function pendingAt(key, level, increment) {
+    var half = (increment || 0.0001) / 2;
+    return state.pending.filter(function (ghost) {
+      return ghost.pair_key === key && !ghost.failed &&
+        Math.abs(ghost.level - level) < half;
+    });
   }
 
   function setPair(key, fields) {
     send('set_pair', {pair: key, fields: fields});
+  }
+
+  function atTouch(key, side) {
+    // Hit the touch without hunting for the row: the fastest
+    // possible "I want in, now" on the ladder already in front of you.
+    var row = state.snapshot.pairs[key];
+    if (!row) { return; }
+    // BUY lifts the long spread, SELL hits the short one — the price the
+    // market is actually offering for that direction, never the mid.
+    var level = side === 'BUY' ? row.long_spread : row.short_spread;
+    if (level === null || level === undefined) {
+      toast(key + ' has no price yet — nothing to hit');
+      return;
+    }
+    clickLevel(key, side, level);
+  }
+
+  function flatten(key) {
+    var row = state.snapshot.pairs[key] || {};
+    if (!row.net_position) {
+      toast((row.name || key) + ' is already flat');
+      return;
+    }
+    // Flattening is irreversible and it is the button pressed in a
+    // hurry, so it asks — but with one key, and only once.
+    ask('Flatten ' + (row.name || key) + '?',
+        (row.net_position > 0 ? '+' : '') + row.net_position +
+        ' spreads, at market, by ticket. This cannot be undone.',
+        'Flatten now', function () { send('flatten_pair', {pair: key}); });
   }
 
   function renderLadder(key, row) {
@@ -308,6 +407,12 @@
 
   function renderRows(node, key, row) {
     var body = node.querySelector('tbody');
+    if (state.snapshot.row_height_px) {
+      // A bigger target is a faster and safer click. 17px is the
+      // reference screen's; a large monitor wants more.
+      node.style.setProperty('--row-h',
+                             state.snapshot.row_height_px + 'px');
+    }
     var rows = row.rows || [];
     var market = row.market || {};
     var lastPrint = row.last_print || {};
@@ -334,6 +439,12 @@
       var workQty = orders.reduce(function (sum, order) {
         return sum + (order.quantity - order.filled_quantity);
       }, 0);
+      // Clicks that are on their way. Shown as their own thing, never
+      // added into the working total: a ghost is not an order yet.
+      var ghosts = pendingAt(key, level, row.increment);
+      var ghostQty = ghosts.reduce(function (sum, ghost) {
+        return sum + ghost.quantity;
+      }, 0);
       var classes = [];
       if (inBid) { classes.push('in-bid'); }
       if (inAsk) { classes.push('in-ask'); }
@@ -342,10 +453,15 @@
         Math.abs(lastPrint.level - level) < (row.increment || 1) / 2;
 
       html += '<tr class="' + classes.join(' ') + '" data-level="' + level + '">';
-      html += '<td class="work' + (work ? ' ' + work.side.toLowerCase() : '') +
-        '"' + (work ? ' data-order-id="' + work.order_id + '" title="' +
-        orders.length + ' order(s) here — click to pull one"' : '') + '>' +
-        (workQty ? workQty : '') + '</td>';
+      var ghostSide = ghosts.length ? ghosts[0].side.toLowerCase() : '';
+      html += '<td class="work' +
+        (work ? ' ' + work.side.toLowerCase() : '') +
+        (ghosts.length ? ' pending ' + ghostSide : '') + '"' +
+        (work ? ' data-order-id="' + work.order_id + '" title="' +
+          orders.length + ' order(s) here — click to pull one"' : '') + '>' +
+        (workQty ? workQty : '') +
+        (ghostQty ? '<span class="ghost" title="sent — waiting for the ' +
+          'engine">' + ghostQty + '</span>' : '') + '</td>';
       // MT5 publishes no depth for a spread, so only the touch is real.
       html += '<td class="bid' + (line.is_best_bid ? ' has-qty' : '') +
         '" title="Click: BUY the spread at ' + fmt(level, 4) + '">' +
@@ -765,6 +881,7 @@
 
   function render() {
     var snapshot = state.snapshot;
+    prunePending();
     var banner = el('engine-banner');
     if (snapshot.engine && snapshot.engine !== 'up') {
       banner.textContent = snapshot.engine_note;
@@ -847,12 +964,85 @@
     el('tabs').innerHTML = html;
   }
 
+  //: The keypad presets, in the order the reference screen has them.
+  var QUANTITY_KEYS = {'1': 1, '2': 5, '3': 10, '4': 50, '5': 100};
+
+  function onKey(e) {
+    if (e.key === 'Escape') {
+      closeModal();
+      el('help-overlay').classList.add('hidden');
+      return;
+    }
+    // Never steal a key from a field being typed into.
+    var tag = (document.activeElement || {}).tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') { return; }
+    if (e.metaKey || e.ctrlKey || e.altKey) { return; }
+
+    if (e.key === '?') {
+      el('help-overlay').classList.toggle('hidden');
+      return;
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      return focusNextLadder();
+    }
+
+    var key = activeLadder();
+    if (!key) { return; }
+    var lower = e.key.toLowerCase();
+
+    if (QUANTITY_KEYS[e.key] !== undefined) {
+      state.armed[key] = QUANTITY_KEYS[e.key];
+      return render();
+    }
+    if (e.key === '0') { state.armed[key] = null; return render(); }
+    if (lower === 'b') { return atTouch(key, 'BUY'); }
+    if (lower === 's') { return atTouch(key, 'SELL'); }
+    if (lower === 'f') { return flatten(key); }
+    if (lower === 'x') { return send('cancel_where', {pair: key}); }
+    if (lower === 'l') {
+      state.locked[key] = !state.locked[key];
+      return render();
+    }
+    if (lower === 'm') {
+      var pair = state.snapshot.pairs[key] || {};
+      return setPair(key, {order_type: pair.order_type === 'MARKET'
+                           ? 'LIMIT' : 'MARKET'});
+    }
+  }
+
+  function activeLadder() {
+    if (!state.active || state.active.indexOf('ladder:') !== 0) { return null; }
+    return state.active.slice('ladder:'.length);
+  }
+
+  function focusNextLadder() {
+    var ladders = state.open.filter(function (id) {
+      return id.indexOf('ladder:') === 0;
+    });
+    if (!ladders.length) { return; }
+    var at = ladders.indexOf(state.active);
+    state.active = ladders[(at + 1) % ladders.length];
+    render();
+  }
+
   // -- polling -------------------------------------------------------------
 
   function poll() {
     fetch('/api/status').then(function (r) { return r.json(); })
       .then(function (snapshot) {
         state.snapshot = snapshot;
+        // A ghost whose order is now in the book has done its job.
+        state.pending.forEach(function (ghost) {
+          var pair = snapshot.pairs[ghost.pair_key] || {};
+          var arrived = (pair.orders || []).some(function (order) {
+            return order.side === ghost.side &&
+              Math.abs(order.level - ghost.level) < 1e-9;
+          }) || (pair.positions || []).some(function (position) {
+            return position.opened_at * 1000 > ghost.at - 2000;
+          });
+          if (arrived) { ghost.done = true; }
+        });
         if (!state.open.length) {
           // First load: a ladder for every enabled pair, plus the grid.
           Object.keys(snapshot.pairs || {}).forEach(function (key) {
@@ -893,15 +1083,19 @@
             send('kill', {flatten: true});
           });
     });
+    el('help').addEventListener('click', function () {
+      el('help-overlay').classList.toggle('hidden');
+    });
+    el('help-close').addEventListener('click', function () {
+      el('help-overlay').classList.add('hidden');
+    });
     el('modal-cancel').addEventListener('click', closeModal);
     el('modal-confirm').addEventListener('click', function () {
       var handler = el('modal')._onConfirm;
       closeModal();
       if (handler) { handler(); }
     });
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { closeModal(); }
-    });
+    document.addEventListener('keydown', onKey);
     window.addEventListener('click', function (e) {
       var window_ = e.target.closest('.window');
       if (!window_) { return; }

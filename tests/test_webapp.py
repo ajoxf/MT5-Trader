@@ -416,3 +416,63 @@ def test_the_settings_panel_ships_no_native_dialogs_either():
     native = re.compile(r'(?<![\w.$])(confirm|alert|prompt)\s*\(')
     found = native.search(script)
     assert found is None, found.group(0)
+
+
+def test_a_setting_is_saved_and_pushed_to_the_running_engine(client, paths):
+    """Written to config.json so it survives a restart, and sent as a
+    command so the NEXT CLICK already obeys it."""
+    write_status(paths)
+    cfg.save_raw(paths['config'], {'accounts': {}, 'pairs': {}})
+
+    response = client.post('/api/settings',
+                           json={'fields': {'CONFIRM_MARKET_CLICKS': True,
+                                            'ROW_HEIGHT_PX': 22}})
+    body = response.get_json()
+    assert body['ok']
+    assert body['applied_now'] == ['CONFIRM_MARKET_CLICKS', 'ROW_HEIGHT_PX']
+    assert body['restart_required'] == []
+
+    saved = cfg.load_raw(paths['config'])['settings']
+    assert saved['CONFIRM_MARKET_CLICKS'] is True
+    written = [json.loads(line) for line in
+               open(paths['commands'], encoding='utf-8').read().splitlines()]
+    assert written[-1]['kind'] == 'set_setting'
+    assert written[-1]['payload']['fields']['ROW_HEIGHT_PX'] == 22
+
+
+def test_a_setting_the_launcher_only_reads_at_startup_says_so(client, paths):
+    """Crying 'restart' on every save teaches the operator to ignore the
+    line that matters — so only the ones that mean it say it."""
+    write_status(paths)
+    cfg.save_raw(paths['config'], {'accounts': {}, 'pairs': {}})
+    body = client.post('/api/settings',
+                       json={'fields': {'POLL_INTERVAL_SEC': 0.5}}).get_json()
+    assert body['restart_required'] == ['POLL_INTERVAL_SEC']
+    assert body['applied_now'] == []
+
+
+def test_a_typo_is_not_quietly_saved_as_a_new_setting(client, paths):
+    write_status(paths)
+    cfg.save_raw(paths['config'], {'accounts': {}, 'pairs': {}})
+    response = client.post('/api/settings',
+                           json={'fields': {'CONFRIM_MARKET_CLICKS': True}})
+    assert response.status_code == 400
+    assert 'not a setting' in response.get_json()['error']
+    assert 'settings' not in cfg.load_raw(paths['config'])
+
+
+def test_the_engine_publishes_what_a_click_will_do(config, legs, tmp_path):
+    """The UI arms itself from the ENGINE's answer, never from its own
+    idea of what was last selected."""
+    from mt5trader.coordinator import Coordinator
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+
+    snapshot = coordinator.snapshot()
+    assert snapshot['confirm_market_clicks'] is False    # one click, one order
+    assert snapshot['row_height_px'] == 17
+    assert snapshot['command_poll_sec'] == 0.02
+
+    config.settings['CONFIRM_MARKET_CLICKS'] = True
+    assert coordinator.snapshot()['confirm_market_clicks'] is True

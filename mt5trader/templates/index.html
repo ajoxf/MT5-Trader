@@ -30,6 +30,7 @@
   <div class="taskbar-right">
     <button id="open-settings" class="tab" title="Accounts and pairs">Settings</button>
     <span id="loop-stat" class="stat" title="The coordinator's achieved loop interval, and how old this snapshot is">—</span>
+    <button id="help" class="tab" title="Keyboard shortcuts (?)">?</button>
     <button id="kill" class="kill">KILL ALL</button>
   </div>
 </div>
@@ -50,6 +51,32 @@
 <!-- Errors live here until they are dismissed. A failure that vanishes
      in 3 seconds is one the operator misses. -->
 <div id="toasts"></div>
+
+<!-- The shortcuts, on the screen rather than in a manual. One click is
+     one order; one key is one order too. -->
+<div id="help-overlay" class="modal hidden">
+  <div class="modal-box">
+    <h2>One click, one order</h2>
+    <table class="keys">
+      <tr><th>B</th><td>buy the spread at the offer, on the focused ladder</td></tr>
+      <tr><th>S</th><td>sell the spread at the bid</td></tr>
+      <tr><th>F</th><td>flatten this pair, at market, by ticket (asks once)</td></tr>
+      <tr><th>X</th><td>cancel every working order on this ladder</td></tr>
+      <tr><th>1 2 3 4 5</th><td>arm 1 / 5 / 10 / 50 / 100 spreads</td></tr>
+      <tr><th>0</th><td>clear the armed quantity (back to the ladder default)</td></tr>
+      <tr><th>L</th><td>lock the ladder so it stops re-centring under your click</td></tr>
+      <tr><th>M</th><td>switch this ladder between LIMIT and MARKET</td></tr>
+      <tr><th>Tab</th><td>focus the next ladder</td></tr>
+      <tr><th>Esc</th><td>close this, or any open dialog</td></tr>
+    </table>
+    <p class="fine">In MARKET mode a click and B/S/F cross both accounts
+    immediately — no confirmation, by design. Turn on “confirm market
+    clicks” in settings if you want the extra gesture.</p>
+    <div class="modal-actions">
+      <button id="help-close" class="btn">Close</button>
+    </div>
+  </div>
+</div>
 
 <template id="ladder-template">
   <section class="window ladder">
@@ -85,6 +112,11 @@
           <option value="GTC">GTC</option>
         </select>
         <div class="armed">--</div>
+        <!-- The three fastest actions on the ladder, without hunting
+             for a row: hit the bid, lift the offer, get flat. -->
+        <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY <small>lift</small></button>
+        <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL <small>hit</small></button>
+        <button class="quick flatten" title="Flatten this pair at market (F)">FLAT</button>
         <div class="keypad">
           <button class="qty" data-qty="1">1</button>
           <button class="qty" data-qty="5">5</button>

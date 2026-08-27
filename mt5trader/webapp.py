@@ -107,6 +107,50 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             return jsonify({'ok': None, 'pending': True})
         return jsonify(result)
 
+    @app.get('/api/settings')
+    def api_settings():
+        """Every tunable, with its default beside it.
+
+        A guessed number gets corrected from measurement, and that needs
+        it on screen first.
+        """
+        raw = cfg.load_raw(config_path)
+        settings = dict(cfg.DEFAULT_SETTINGS)
+        settings.update(raw.get('settings') or {})
+        from .commands import CommandRunner
+        return jsonify({'settings': settings,
+                        'defaults': cfg.DEFAULT_SETTINGS,
+                        'hot': sorted(CommandRunner.HOT_SETTINGS),
+                        'structural': list(cfg.STRUCTURAL_SETTINGS)})
+
+    @app.post('/api/settings')
+    def api_save_settings():
+        """Save settings, and make the hot ones true NOW.
+
+        Written to config.json so they survive a restart, and pushed to
+        the running coordinator as a command so the next click already
+        obeys them. A setting that only takes effect on restart says so
+        rather than looking applied.
+        """
+        payload = request.get_json(silent=True) or {}
+        fields = payload.get('fields') or {}
+        unknown = [name for name in fields if name not in cfg.DEFAULT_SETTINGS]
+        if unknown:
+            return jsonify({'ok': False,
+                            'error': 'not a setting: ' + ', '.join(unknown)}), 400
+        raw = cfg.load_raw(config_path)
+        raw.setdefault('settings', {}).update(fields)
+        cfg.save_raw(config_path, raw)
+
+        from .commands import CommandRunner
+        hot = {name: value for name, value in fields.items()
+               if name in CommandRunner.HOT_SETTINGS}
+        if hot and status().get('engine') == 'up':
+            commands.submit('set_setting', {'fields': hot})
+        cold = [name for name in fields if name not in hot]
+        return jsonify({'ok': True, 'applied_now': sorted(hot),
+                        'restart_required': sorted(cold)})
+
     # -- account and symbol setup, which must work with the engine down ----
 
     @app.get('/api/accounts')

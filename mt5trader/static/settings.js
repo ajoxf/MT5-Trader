@@ -26,7 +26,9 @@
     draft: {},              // the pair form's current values
     derived: null,          // what MT5 says about the draft's two legs
     symbols: {},            // account -> last search result
-    tests: {}               // account -> last connectivity answer
+    tests: {},              // account -> last connectivity answer
+    settings: null,         // the engine's tunables, with their defaults
+    hot: []                 // ...and which of them apply without a restart
   };
 
   function el(id) { return document.getElementById(id); }
@@ -48,11 +50,14 @@
 
   function refresh() {
     return Promise.all([
-      api('/api/accounts'), api('/api/pairs')
+      api('/api/accounts'), api('/api/pairs'), api('/api/settings')
     ]).then(function (results) {
       local.accounts = results[0].body.accounts || [];
       local.nextPort = results[0].body.next_free_port || local.nextPort;
       local.pairs = results[1].body.pairs || {};
+      local.settings = results[2].body.settings || {};
+      local.defaults = results[2].body.defaults || {};
+      local.hot = results[2].body.hot || [];
       render();
     });
   }
@@ -70,6 +75,7 @@
       '<span class="winbtns"><button class="winbtn close">&times;</button>' +
       '</span></div>' +
       '<div class="settings-body">' +
+      '<section class="trading"></section>' +
       '<section class="accounts"></section>' +
       '<section class="pairs"></section>' +
       '</div>' +
@@ -101,6 +107,7 @@
     // one-click correction the operator asked for — and re-reading the
     // form here would immediately undo it.
     if (fromForm !== false) { readDraft(); }
+    redraw(panel.querySelector('.trading'), tradingHtml);
     redraw(panel.querySelector('.accounts'), accountsHtml);
     redraw(panel.querySelector('.pairs'), pairsHtml);
   }
@@ -119,6 +126,60 @@
     // Only a field being typed into blocks the repaint.
     var tag = active.tagName;
     return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+  }
+
+  // -- how a click behaves ------------------------------------------------
+
+  function tradingHtml() {
+    var settings = local.settings;
+    if (!settings) { return '<h3>Trading</h3><p>loading…</p>'; }
+    var confirm = settings.CONFIRM_MARKET_CLICKS;
+    var html = '<h3>Trading <small>what a click does, and how fast</small>' +
+      '</h3><div class="fields trading-fields">';
+    html += field('Market clicks',
+      '<label class="check"><input type="checkbox" class="s-confirm"' +
+      (confirm ? ' checked' : '') + '> ask before crossing</label>' +
+      '<div class="hint">' + (confirm
+        ? 'ON: every market click asks first. Slower, and deliberate.'
+        : 'OFF (default): ONE CLICK IS ONE ORDER — a market click ' +
+          'crosses both accounts immediately. The arming carries the ' +
+          'weight instead: the mode badge, the tinted columns, the ' +
+          'cursor.') + '</div>');
+    html += field('Slippage protection (ticks)',
+      '<input class="s-protection" type="number" min="0" step="0.5" ' +
+      'value="' + escape(settings.MARKET_PROTECTION_TICKS) + '">' +
+      '<div class="hint">A market click is market-WITH-protection: a ' +
+      'fill worse than the clicked spread by more than this many ' +
+      'increments is refused, and the ladder says why. 0 turns it off.' +
+      '</div>');
+    html += field('Ladder row height (px)',
+      '<input class="s-rowheight" type="number" min="12" max="40" ' +
+      'step="1" value="' + escape(settings.ROW_HEIGHT_PX) + '">' +
+      '<div class="hint">17 is the reference screen\'s. A bigger target ' +
+      'is a faster and safer click on a large monitor.</div>');
+    html += field('Click drain (seconds)',
+      '<input class="s-drain" type="number" min="0.005" max="1" ' +
+      'step="0.005" value="' + escape(settings.COMMAND_POLL_SEC) + '">' +
+      '<div class="hint">How often the engine picks clicks up, on its ' +
+      'own thread. This is the click-to-order latency you feel; the ' +
+      'price poll is separate and slower.</div>');
+    html += field('Re-peg dead band (ticks)',
+      '<input class="s-repeg" type="number" min="0" step="0.5" value="' +
+      escape(settings.REPEG_DEAD_BAND_TICKS) + '">' +
+      '<div class="hint">LIMIT mode only. Every re-peg loses queue ' +
+      'position, so a tight band means never being at the front of a ' +
+      'queue — which defeats quoting.</div>');
+    html += field('Stale quote limit (seconds)',
+      '<input class="s-stale" type="number" min="0" step="0.5" value="' +
+      escape(settings.MAX_QUOTE_AGE_SEC) + '">' +
+      '<div class="hint">A pair is only as good as its worse leg. 0 ' +
+      'turns the guard off — it can withhold an order, never a close.' +
+      '</div>');
+    html += '</div><div class="actions">' +
+      '<button class="btn save-settings">Apply</button>' +
+      '<span class="hint">These apply to the running engine at once — ' +
+      'no restart.</span></div>';
+    return html;
   }
 
   // -- accounts -----------------------------------------------------------
@@ -389,6 +450,9 @@
     if (!button) { return; }
     var row = button.closest('tr');
 
+    if (button.classList.contains('save-settings')) {
+      return saveSettings();
+    }
     if (button.classList.contains('save-account')) {
       return saveAccount(row);
     }
@@ -471,6 +535,33 @@
     }
     if (button.classList.contains('derive-pair')) { return derive(); }
     if (button.classList.contains('save-pair')) { return savePair(); }
+  }
+
+  function saveSettings() {
+    var panel = document.querySelector('.window.settings .trading');
+    function number(selector) {
+      return parseFloat(panel.querySelector(selector).value);
+    }
+    var fields = {
+      CONFIRM_MARKET_CLICKS: panel.querySelector('.s-confirm').checked,
+      MARKET_PROTECTION_TICKS: number('.s-protection'),
+      ROW_HEIGHT_PX: number('.s-rowheight'),
+      COMMAND_POLL_SEC: number('.s-drain'),
+      REPEG_DEAD_BAND_TICKS: number('.s-repeg'),
+      MAX_QUOTE_AGE_SEC: number('.s-stale')
+    };
+    return api('/api/settings',
+               {method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({fields: fields})})
+      .then(function (result) {
+        if (!result.ok) { UI.toast(result.body.error); return; }
+        var cold = result.body.restart_required || [];
+        UI.toast(cold.length
+          ? 'applied — except ' + cold.join(', ') + ', which the launcher ' +
+            'only reads at startup'
+          : 'applied to the running engine', 'ok');
+        refresh();
+      });
   }
 
   function saveAccount(row) {

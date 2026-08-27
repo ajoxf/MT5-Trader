@@ -201,6 +201,38 @@ class CommandRunner:
                 flattened.append(self._do_flatten_pair({'pair': key}))
         return {'cancelled': len(pulled), 'flattened': flattened}
 
+    #: Settings the running engine can adopt without a restart. Each one
+    #: is read fresh on every use, so changing it here changes the next
+    #: click — the launcher is only needed for what it reads at startup.
+    HOT_SETTINGS = {
+        'CONFIRM_MARKET_CLICKS': lambda v: bool(v),
+        'ROW_HEIGHT_PX': lambda v: max(12, min(40, int(v))),
+        'MARKET_PROTECTION_TICKS': float,
+        'REPEG_DEAD_BAND_TICKS': float,
+        'MAX_QUOTE_AGE_SEC': float,
+        'MAX_SPREAD_JUMP_SIGMA': float,
+        'COMMAND_POLL_SEC': lambda v: max(0.005, min(1.0, float(v))),
+        'OVERNIGHT_CLOSE_HOUR': lambda v: max(0, min(23, int(v))),
+        'OVERNIGHT_CLOSE_MINUTE': lambda v: max(0, min(59, int(v))),
+    }
+
+    def _do_set_setting(self, payload):
+        """Change a hot setting on the RUNNING engine.
+
+        The web process also writes it to config.json, so it survives a
+        restart; this is what makes it true now. A setting the launcher
+        only reads at startup is not in here — it would look applied
+        while nothing had changed.
+        """
+        applied = {}
+        for name, value in (payload.get('fields') or {}).items():
+            coerce = self.HOT_SETTINGS.get(name)
+            if coerce is None:
+                continue
+            self.coordinator.config.settings[name] = coerce(value)
+            applied[name] = self.coordinator.config.settings[name]
+        return {'applied': applied}
+
     def _do_set_pair(self, payload):
         """Mode / TIF / overnight / increment / quantity, per ladder.
 

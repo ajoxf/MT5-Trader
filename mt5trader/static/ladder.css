@@ -207,6 +207,22 @@ body {
 .keypad button:hover { background: #fff; }
 .default-qty { font-family: var(--mono); text-align: center; }
 
+/* The three fastest actions on the ladder. Big targets on purpose:
+ * these are pressed in a hurry, and a missed click is a missed trade —
+ * or the wrong one. */
+.quick {
+  font: 700 12px var(--font);
+  padding: 4px 0;
+  border: 1px solid var(--chrome-dark);
+  cursor: pointer;
+  color: #fff;
+}
+.quick small { font-weight: 400; opacity: .85; }
+.buy-touch { background: var(--bid); }
+.sell-touch { background: var(--ask); }
+.flatten { background: #444; }
+.quick:hover { filter: brightness(1.15); }
+
 .cxl {
   font: 11px var(--font);
   text-align: left;
@@ -273,6 +289,27 @@ td.ltq.print { background: var(--traded); color: #fff; }
 
 td.work.buy { background: var(--bid-cell); color: #fff; cursor: pointer; }
 td.work.sell { background: var(--ask-cell); color: #fff; cursor: pointer; }
+
+/* A click that has been SENT but is not in a snapshot yet. Hatched, and
+ * never added into the working total — a ghost is not an order yet, and
+ * a trader who cannot see their click clicks again. */
+td.work.pending .ghost {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 0 3px;
+  border: 1px dashed currentColor;
+  opacity: .85;
+}
+td.work.pending.buy { background: repeating-linear-gradient(
+  45deg, var(--bid-cell), var(--bid-cell) 4px, #7cc3ef 4px, #7cc3ef 8px); }
+td.work.pending.sell { background: repeating-linear-gradient(
+  45deg, var(--ask-cell), var(--ask-cell) 4px, #e88 4px, #e88 8px); }
+
+/* The row lights up under the finger, before any round trip. */
+@keyframes flash-buy { from { background: var(--bid); } to { background: none; } }
+@keyframes flash-sell { from { background: var(--ask); } to { background: none; } }
+tr.flash-buy > td { animation: flash-buy .35s ease-out; }
+tr.flash-sell > td { animation: flash-sell .35s ease-out; }
 
 td.bid, td.ask { cursor: pointer; }
 tr:hover td.price { outline: 1px solid #333; }
@@ -459,6 +496,15 @@ tr:hover td.price { outline: 1px solid #333; }
   max-width: 520px;
 }
 .modal-box h2 { margin: 0 0 6px; font-size: 14px; }
+table.keys { border-collapse: collapse; margin-bottom: 8px; }
+table.keys th {
+  text-align: left;
+  padding: 2px 10px 2px 0;
+  font: 700 12px var(--mono);
+  white-space: nowrap;
+}
+table.keys td { padding: 2px 0; font-size: 12px; }
+.fine { font-size: 11px; color: var(--muted); }
 .modal-box p { margin: 0 0 12px; font-size: 12px; white-space: pre-wrap; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .btn {
@@ -544,6 +590,14 @@ tr.good td { background: #ebfbee; color: #1b6b32; font: 11px var(--font); }
   border: 1px solid var(--chrome-dark);
   background: var(--panel);
 }
+.trading-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(240px, 1fr));
+  gap: 8px 16px;
+  margin-bottom: 6px;
+}
+.trading-fields .check { font-weight: 600; }
+
 .pair-form .fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(280px, 1fr));

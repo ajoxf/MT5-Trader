@@ -57,6 +57,32 @@ with the coordinator down.
 Still to come: restart recovery of open positions, per-account margin on
 the monitor, and the slippage report over a real session.
 
+## One click is one order
+
+That is the product, so it is the default and it is fast:
+
+- A **market click crosses both accounts immediately** — no confirmation
+  dialog. The arming carries the weight instead: the mode badge, the
+  tinted click columns, the crosshair cursor. A desk that wants the
+  extra gesture turns on *ask before crossing* in Settings → Trading.
+- The clicked price is still the **slippage guard**: a fill worse than
+  it by more than `MARKET_PROTECTION_TICKS` is refused, with the reason
+  on the ladder.
+- Clicks are drained on their **own thread** (~20 ms), not on the price
+  poll — a click never waits for the next 300 ms pass.
+- The order appears on the ladder **before the engine answers**: the row
+  flashes and a hatched ghost sits in the Work column until the real
+  order arrives. A trader who cannot see their click clicks again.
+- **BUY / SELL / FLAT** on the rail hit the touch and get flat without
+  hunting for a row.
+- **Keyboard**: `B` buy at the offer, `S` sell at the bid, `F` flatten,
+  `X` cancel this ladder, `1`–`5` arm 1/5/10/50/100, `0` clear, `L`
+  lock the scroll, `M` switch LIMIT↔MARKET, `Tab` next ladder, `?` the
+  list. Keys never fire while a field has focus.
+
+Flatten and the global kill still ask once — they are irreversible and
+they are the buttons pressed in a hurry.
+
 ## Running it
 
 The terminals and the leg runners live on the Windows box; everything

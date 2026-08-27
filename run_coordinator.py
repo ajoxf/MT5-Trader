@@ -11,6 +11,7 @@ import argparse
 import logging
 import signal
 import sys
+import threading
 
 from mt5trader.commands import CommandRunner
 from mt5trader.config import TraderConfig
@@ -87,6 +88,9 @@ def main():
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
+    # Clicks are drained on their own thread so one never waits for the
+    # next poll: the whole product is that a click is an order.
+    threading.Thread(target=coordinator.serve_commands, daemon=True).start()
     coordinator.run()
 
 
