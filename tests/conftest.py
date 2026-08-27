@@ -8,6 +8,7 @@ any other way would make the tests agree with a bug.
 """
 
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -62,7 +63,15 @@ class FakeBroker:
         self.fail_closes = set()
         self.reject_orders = {}          # symbol -> error string
         self.next_ticket = 1000
+        self.next_deal = 500000
         self.connected = False
+        #: MT5's own deal history — what `order_log()` reads back, and
+        #: what the journal is built from. The fake records a deal on
+        #: every fill, exactly as the terminal does, including for
+        #: positions opened outside this system.
+        self.deals = []
+        #: Seconds the broker's clock runs ahead of ours.
+        self.server_offset_sec = 3 * 3600
 
     # -- helpers for tests -------------------------------------------------
 
@@ -167,10 +176,13 @@ class FakeBroker:
         price = info.ask if side is OrderSide.BUY else info.bid
         ticket = self._ticket()
         # HEDGING: this OPENS a position. It never closes another one.
+        magic = MAGIC_NUMBER if comment != 'by hand' else 0
         self.positions[ticket] = {
             'ticket': ticket, 'symbol': symbol, 'side': side.value,
-            'volume': volume, 'price_open': price, 'magic': MAGIC_NUMBER,
+            'volume': volume, 'price_open': price, 'magic': magic,
             'comment': comment, 'profit': 0.0}
+        self._record_deal(symbol, side.value, volume, price, 'open', comment,
+                          ticket, magic)
         return OrderResult(True, requested_price=price, executed_price=price,
                            ticket=ticket, volume=volume)
 
@@ -199,6 +211,12 @@ class FakeBroker:
         info = self.symbols[symbol]
         close_side = entry_side.opposite
         price = info.ask if close_side is OrderSide.BUY else info.bid
+        move = price - position['price_open']
+        if entry_side is OrderSide.SELL:
+            move = -move
+        profit = move * volume * info.contract_size
+        self._record_deal(symbol, close_side.value, volume, price, 'close',
+                          comment, int(ticket), position['magic'], profit)
         if volume >= position['volume'] - 1e-9:
             del self.positions[int(ticket)]
         else:
@@ -207,6 +225,8 @@ class FakeBroker:
                            volume=volume)
 
     def positions_by_magic(self, symbol=None):
+        """Magic-scoped, so the trader's own terminal positions are
+        never touched — and never mistaken for ours."""
         return [{'ticket': p['ticket'], 'symbol': p['symbol'],
                  'side': p['side'], 'volume': p['volume'],
                  'price_open': p['price_open']}
@@ -276,8 +296,28 @@ class FakeBroker:
             state['error'] = f'no pending {ticket}'
         return state
 
+    def _record_deal(self, symbol, side, volume, price, entry, comment,
+                     position_ticket, magic, profit=0.0):
+        self.next_deal += 1
+        self.deals.append({
+            'order_id': str(position_ticket), 'deal_id': str(self.next_deal),
+            'symbol': symbol, 'inst_type': 'DEAL', 'side': side.lower(),
+            'pos_side': entry, 'order_type': 'market',
+            'quantity': volume, 'fill_qty': volume, 'fill_price': price,
+            'commission': -0.7 * volume, 'swap': 0.0,
+            'fee': -0.7 * volume, 'fee_ccy': 'USD', 'pnl': profit,
+            'state': 'filled',
+            'filled_at': int((time.time() + self.server_offset_sec) * 1000),
+            'position_id': position_ticket, 'magic': magic,
+            'is_bot': magic == MAGIC_NUMBER, 'comment': comment,
+            'server_offset_sec': self.server_offset_sec,
+        })
+        return self.deals[-1]
+
     def order_log(self, hours=24):
-        return []
+        """Everything this account did, as MT5 reports it — ours and the
+        trader's own terminal clicks alike."""
+        return [dict(deal, account=self.account.name) for deal in self.deals]
 
 
 class FakeLeg(LocalLeg):

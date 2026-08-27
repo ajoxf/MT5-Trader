@@ -16,6 +16,7 @@ import threading
 from mt5trader.commands import CommandRunner
 from mt5trader.config import TraderConfig
 from mt5trader.coordinator import Coordinator
+from mt5trader.database import Store
 from mt5trader.legs import RemoteLeg
 from mt5trader.shutdown import should_close
 
@@ -45,6 +46,7 @@ def main():
     parser.add_argument('--status', default='status.json')
     parser.add_argument('--commands', default='commands.jsonl')
     parser.add_argument('--results', default='results.json')
+    parser.add_argument('--db', default='mt5trader.db')
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -60,7 +62,10 @@ def main():
               '    python run_leg.py --config config.json --account <name>')
         sys.exit(1)
 
-    coordinator = Coordinator(config, legs, status_path=args.status)
+    # The database is what makes a restart safe: without it the book
+    # comes back empty and every live position looks like an orphan.
+    coordinator = Coordinator(config, legs, status_path=args.status,
+                              store=Store(args.db))
     # PRIME before the first drain. Everything already in the command
     # file was written to a process that is gone; replaying it would
     # place those orders again, now, at today's prices.

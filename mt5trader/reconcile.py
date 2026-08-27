@@ -50,6 +50,15 @@ class Reconciler:
         self.escalated = set()
         self.last_run = None
         self.unknown_accounts = []
+        #: Set by recovery at startup. FALSE means our book may be
+        #: incomplete — no database, or an account that could not be
+        #: read — and nothing is auto-closed while it is false. An
+        #: orphan is only an orphan if we are sure it is not ours.
+        self.book_complete = False
+        #: Positions at the broker carrying our magic that recovery
+        #: could not account for. Never struck out, never auto-closed:
+        #: they are put on the screen for a person to adopt or close.
+        self.unclaimed = {}
 
     #: Strikes before acting. One poll can catch the broker mid-fill.
     STRIKES = 3
@@ -78,12 +87,28 @@ class Reconciler:
                   'closed': [], 'escalated': [],
                   'unknown_accounts': list(self.unknown_accounts)}
 
+        report['unclaimed'] = [dict(row) for row in self.unclaimed.values()]
+        report['book_complete'] = self.book_complete
+
         for account, positions in broker.items():
             for ticket, position in positions.items():
                 if (account, ticket) in known:
                     continue
                 key = (account, ticket)
                 if key in self.escalated:
+                    continue
+                if key in self.unclaimed:
+                    # Older than this process, and unexplained. It is on
+                    # the screen for a person; it is not ours to close.
+                    continue
+                if not self.book_complete:
+                    # We are not sure our book is the whole truth, so we
+                    # are not sure this is an orphan. Report it, never
+                    # act on it.
+                    report['orphans'].append(
+                        dict(position, account=account, strikes=0,
+                             held='the book is incomplete, so nothing is '
+                                  'auto-closed'))
                     continue
                 strikes = self.orphan_strikes.get(key, 0) + 1
                 self.orphan_strikes[key] = strikes
@@ -236,4 +261,6 @@ class Reconciler:
             'untracked_closes': list(self.untracked_closes),
             'escalated': [f'{a}:{t}' for a, t in self.escalated],
             'unknown_accounts': list(self.unknown_accounts),
+            'book_complete': self.book_complete,
+            'unclaimed': [dict(row) for row in self.unclaimed.values()],
         }

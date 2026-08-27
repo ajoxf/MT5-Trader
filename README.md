@@ -33,6 +33,7 @@ The spec's build order, in order. Steps 1-8 are in:
 | `mt5trader/quoter.py` | The synthetic LIMIT path: quote one leg, re-peg off the OTHER leg by MODIFY, cross on fill |
 | `mt5trader/reconcile.py` | Orphans and ghosts, three strikes, contract-size-correct P&L |
 | `mt5trader/session.py` | The one cutoff: DAY orders die, each ladder's overnight rule decides |
+| `mt5trader/database.py` | SQLite (WAL, 30s busy timeout): crash-safe positions, the fill journal, the audit trail |
 | `mt5trader/shutdown.py` | An unanswered prompt means NO |
 | `mt5trader/commands.py` | The web↔coordinator bridge, primed at startup so a restart never replays a command |
 | `mt5trader/webapp.py` | The Flask process: it renders and it asks; it never trades |
@@ -54,8 +55,24 @@ with its derivation and offered as a one-click correction, never
 applied silently. It talks to the leg runners directly, so it works
 with the coordinator down.
 
-Still to come: restart recovery of open positions, per-account margin on
-the monitor, and the slippage report over a real session.
+**Restart recovery.** Open positions are written to the database on
+every change and recovered at startup with their own ids, fills and
+tickets. Until recovery has completed against both accounts the book is
+marked incomplete and the reconciler auto-closes **nothing** — an
+orphan is only an orphan if we are sure it is not ours. Anything at the
+broker carrying our magic that recovery cannot explain is listed as
+UNCLAIMED on a red banner, never closed automatically, with *adopt* and
+*close it* for a person to choose.
+
+**Fills — the trade journal.** Every fill the broker reports, read back
+from MT5's own deal history rather than from our intentions, keyed by
+(account, deal id) so two brokers' identical deal numbers cannot
+overwrite each other. It carries the trader's own terminal clicks too,
+marked as not ours, with the broker's commission, swap and P&L and the
+broker's own clock beside the offset from ours. Exportable as CSV.
+
+Still to come: per-account margin on the monitor, and the slippage
+report over a real session.
 
 ## One click is one order
 
@@ -108,8 +125,11 @@ python run_coordinator.py --config config.json
 pytest tests/ -q
 ```
 
-155 of them, including nine that drive Chromium under Playwright and
-read `pageerror` — Python tests cannot see a temporal-dead-zone
+211 of them, including an end-to-end suite that runs two leg runners on
+real sockets, a coordinator with a real database, the Flask process and
+Chromium — a click crosses every boundary except MT5 itself, survives a
+coordinator restart, and lands in the journal. Twenty-one more drive
+the UI under Playwright and read `pageerror` — Python tests cannot see a temporal-dead-zone
 `ReferenceError` that aborts a script block and silently unregisters a
 handler, and that is exactly what happened in the system this is ported
 from. They skip cleanly where no browser is installed.

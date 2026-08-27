@@ -171,6 +171,15 @@ class LegFill:
             'contract_size': self.contract_size, 'at': self.at,
         }
 
+    @classmethod
+    def from_dict(cls, raw):
+        if not raw:
+            return None
+        return cls(raw['account'], raw['symbol'], raw['side'], raw['volume'],
+                   raw['price'], order_ticket=raw.get('order_ticket'),
+                   position_tickets=raw.get('position_tickets'),
+                   contract_size=raw.get('contract_size'), at=raw.get('at'))
+
 
 class SpreadPosition:
     """A pair that is ON: leg A and leg B, both filled, both ours.
@@ -204,6 +213,11 @@ class SpreadPosition:
         self.entry_slippage = None
         self.exit_slippage = None
         self.click_to_on_ms = None
+        #: True when this came back from the database at startup rather
+        #: than being watched happen.
+        self.recovered = False
+        #: Set once the reconciler has seen both legs at the broker.
+        self.confirmed = False
 
     @property
     def is_open(self):
@@ -240,6 +254,37 @@ class SpreadPosition:
             'entry_slippage': self.entry_slippage,
             'exit_slippage': self.exit_slippage,
             'click_to_on_ms': self.click_to_on_ms,
+            'recovered': self.recovered,
+            'confirmed': self.confirmed,
             'leg_a': self.leg_a.to_dict() if self.leg_a else None,
             'leg_b': self.leg_b.to_dict() if self.leg_b else None,
         }
+
+    @classmethod
+    def from_dict(cls, raw):
+        """Rebuild a position from the database, at restart.
+
+        It comes back OPEN and under management — its id, its fills and
+        its tickets exactly as they were. A recovered position that came
+        back under a new id would be an orphan to the reconciler and a
+        ghost to the book.
+        """
+        position = cls(raw['pair_key'], raw['side'], raw['quantity'],
+                       LegFill.from_dict(raw.get('leg_a')),
+                       LegFill.from_dict(raw.get('leg_b')),
+                       raw.get('entry_spread'),
+                       raw.get('order_type') or OrderType.MARKET.value,
+                       raw.get('spread_units') or 0.0)
+        position.position_id = raw['position_id']
+        position.opened_at = raw.get('opened_at') or position.opened_at
+        position.closed_at = raw.get('closed_at')
+        position.close_reason = raw.get('close_reason')
+        position.realized_pnl = raw.get('realized_pnl')
+        position.exit_spread = raw.get('exit_spread')
+        position.entry_slippage = raw.get('entry_slippage')
+        position.exit_slippage = raw.get('exit_slippage')
+        position.click_to_on_ms = raw.get('click_to_on_ms')
+        #: Recovered from disk rather than seen happen. The monitor says
+        #: so until the reconciler has confirmed both legs at the broker.
+        position.recovered = True
+        return position

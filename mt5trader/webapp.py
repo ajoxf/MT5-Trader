@@ -19,6 +19,7 @@ Two rules from the spec shape the endpoints here:
 """
 
 import json
+import logging
 import os
 import time
 
@@ -37,9 +38,25 @@ STATUS_STALE_SEC = 2.0
 
 
 def create_app(status_path='status.json', command_path='commands.jsonl',
-               results_path='results.json', config_path='config.json'):
+               results_path='results.json', config_path='config.json',
+               db_path='mt5trader.db'):
     app = Flask(__name__)
     commands = CommandLog(command_path)
+
+    def store():
+        """A read-only view of the coordinator's database.
+
+        Opened per request rather than held: SQLite in WAL mode lets a
+        reader in while the writer works, and a connection kept across
+        requests in a threaded server is a connection used from the
+        wrong thread.
+        """
+        from .database import Store
+        try:
+            return Store(db_path)
+        except Exception as e:
+            logging.error('the journal could not be opened: %s', e)
+            return None
 
     def read_json(path, default=None):
         try:
@@ -150,6 +167,67 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         cold = [name for name in fields if name not in hot]
         return jsonify({'ok': True, 'applied_now': sorted(hot),
                         'restart_required': sorted(cold)})
+
+    # -- the journal: Fills, as the BROKER reported them ------------------
+
+    @app.get('/api/fills')
+    def api_fills():
+        """The trade journal.
+
+        Read from MT5's own deal history, so it carries the trader's
+        manual terminal clicks as well as ours — `is_ours` says which is
+        which. This is the record that survives the process.
+        """
+        db = store()
+        if db is None:
+            return jsonify({'ok': False,
+                            'error': 'the journal database could not be '
+                                     'opened — fills are still at the '
+                                     'broker, but this table cannot show '
+                                     'them'}), 503
+        pair_key = request.args.get('pair') or None
+        account = request.args.get('account') or None
+        ours = request.args.get('ours') == '1'
+        limit = min(int(request.args.get('limit', 200)), 2000)
+        fills = db.fills(pair_key=pair_key, account=account, ours_only=ours,
+                         limit=limit)
+        return jsonify({'ok': True, 'fills': fills,
+                        'totals': db.fill_totals(pair_key)})
+
+    @app.get('/api/fills.csv')
+    def api_fills_csv():
+        """The same rows, for a spreadsheet. Broker time first, because
+        that is the column that has to line up with MT5's History."""
+        import csv
+        import io
+        db = store()
+        if db is None:
+            return 'the journal database could not be opened', 503
+        fills = db.fills(pair_key=request.args.get('pair') or None,
+                         limit=int(request.args.get('limit', 5000)))
+        buffer = io.StringIO()
+        columns = ['broker_time_ms', 'server_offset_s', 'account', 'symbol',
+                   'pair_key', 'leg', 'side', 'entry', 'order_type', 'volume',
+                   'price', 'commission', 'swap', 'profit', 'deal_id',
+                   'order_id', 'position_ticket', 'is_ours', 'comment']
+        writer = csv.DictWriter(buffer, fieldnames=columns,
+                                extrasaction='ignore')
+        writer.writeheader()
+        for fill in fills:
+            writer.writerow(fill)
+        return (buffer.getvalue(), 200,
+                {'Content-Type': 'text/csv',
+                 'Content-Disposition': 'attachment; filename=fills.csv'})
+
+    @app.get('/api/events')
+    def api_events():
+        db = store()
+        if db is None:
+            return jsonify({'ok': False, 'error': 'no database'}), 503
+        return jsonify({'ok': True,
+                        'events': db.events(request.args.get('kind') or None,
+                                            int(request.args.get('limit',
+                                                                 200)))})
 
     # -- account and symbol setup, which must work with the engine down ----
 
@@ -547,10 +625,12 @@ def main():
     parser.add_argument('--status', default='status.json')
     parser.add_argument('--commands', default='commands.jsonl')
     parser.add_argument('--results', default='results.json')
+    parser.add_argument('--db', default='mt5trader.db')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8000)
     args = parser.parse_args()
-    app = create_app(args.status, args.commands, args.results, args.config)
+    app = create_app(args.status, args.commands, args.results, args.config,
+                     args.db)
     app.run(host=args.host, port=args.port, threaded=True)
 
 

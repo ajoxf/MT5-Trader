@@ -103,6 +103,7 @@ def main():
     parser.add_argument('--status', default='status.json')
     parser.add_argument('--commands', default='commands.jsonl')
     parser.add_argument('--results', default='results.json')
+    parser.add_argument('--db', default='mt5trader.db')
     parser.add_argument('--web-port', type=int, default=8000)
     parser.add_argument('--no-web', action='store_true',
                         help='engine only, no browser UI')
@@ -136,7 +137,7 @@ def main():
                         [sys.executable, 'run_coordinator.py',
                          '--config', args.config, '--status', args.status,
                          '--commands', args.commands,
-                         '--results', args.results])
+                         '--results', args.results, '--db', args.db])
     coordinator.start()
     children.append(coordinator)
 
@@ -144,7 +145,7 @@ def main():
         web = Child('web', [sys.executable, '-m', 'mt5trader.webapp',
                             '--config', args.config, '--status', args.status,
                             '--commands', args.commands,
-                            '--results', args.results,
+                            '--results', args.results, '--db', args.db,
                             '--port', str(args.web_port)])
         web.start()
         children.append(web)

@@ -22,6 +22,10 @@ from.
 - **Credentials live only in `.env`** — never in code, config, chat or a
   log line.
 - **Sweep our pendings at shutdown AND at startup**, magic-scoped.
+- **The book is persisted and recovered.** An empty book at startup
+  makes every live position look like an orphan; the reconciler
+  auto-closes nothing until recovery says the book is complete, and
+  never touches a position it cannot explain.
 - **No strategy and no loops.** No signals, no automatic entries or
   exits, nothing that re-enters by itself.
 

@@ -32,7 +32,13 @@
     // order the INSTANT it is clicked: a trader who cannot see their
     // click clicks again.
     pending: [],
-    help: false
+    help: false,
+    // The journal, from the database. Not in the snapshot: it is the
+    // BROKER's record, it outlives the process, and it is read on its
+    // own slow clock rather than three times a second.
+    fills: null,
+    fillsAt: 0,
+    fillsFilter: {ours: false}
   };
 
   // -- plumbing -------------------------------------------------------
@@ -646,6 +652,12 @@
         render();
       });
       node.querySelector('.pane').addEventListener('click', onMonitorClick);
+      node.querySelector('.pane').addEventListener('change', function (e) {
+        if (e.target.classList.contains('ours-only')) {
+          state.fillsFilter.ours = e.target.checked;
+          loadFills(true);
+        }
+      });
       el('desktop').appendChild(node);
     }
     Array.prototype.forEach.call(node.querySelectorAll('.tabs button'),
@@ -655,7 +667,10 @@
     var pane = node.querySelector('.pane');
     if (state.monitorTab === 'positions') { pane.innerHTML = positionsTable(); }
     else if (state.monitorTab === 'orders') { pane.innerHTML = ordersTable(); }
-    else if (state.monitorTab === 'fills') { pane.innerHTML = fillsTable(); }
+    else if (state.monitorTab === 'fills') {
+      loadFills();
+      pane.innerHTML = fillsTable();
+    }
     else { pane.innerHTML = reconcileTable(); }
     node.querySelector('.note').textContent =
       'Marked at the touches these would actually CLOSE at, less ' +
@@ -797,37 +812,105 @@
 
   function fillsTable() {
     var snapshot = state.snapshot;
-    var html = '<table><thead><tr><th>What</th><th>Value</th></tr></thead><tbody>';
+    var html = '<table><thead><tr><th>What</th><th>Value</th></tr></thead>' +
+      '<tbody>';
     html += timingRow('fill → hedge on (LIMIT)', snapshot.hedge_times_ms,
                       'against the 2.0s escalation deadline');
     html += timingRow('click → both legs on (MARKET)',
                       snapshot.click_to_on_ms, 'measured, not assumed');
     html += '</tbody></table>';
-    html += '<table><thead><tr><th>Pair</th><th>Side</th><th>Qty</th>' +
-      '<th>Entry</th><th>Exit</th><th>Mode</th><th>Slip in</th>' +
-      '<th>Slip out</th><th>Net</th></tr></thead><tbody>';
-    var any = false;
-    Object.keys(snapshot.pairs || {}).forEach(function (key) {
-      (snapshot.pairs[key].positions || []).forEach(function (position) {
-        any = true;
-        html += '<tr><td>' + key + '</td><td>' + position.side + '</td><td>' +
-          position.quantity + '</td><td>' + fmt(position.entry_spread, 4) +
-          '</td><td>' + fmt(position.exit_spread, 4) + '</td><td>' +
-          position.order_type + '</td><td>' +
-          fmt(position.entry_slippage, 4) + '</td><td>' +
-          fmt(position.exit_slippage, 4) + '</td><td>' +
-          (position.realized_pnl === null || position.realized_pnl === undefined
-           ? DASH : money(position.realized_pnl)) + '</td></tr>';
-      });
+
+    var journal = state.fills;
+    html += '<div class="journal-controls">' +
+      '<label class="check"><input type="checkbox" class="ours-only"' +
+      (state.fillsFilter.ours ? ' checked' : '') + '> ours only</label>' +
+      '<a class="btn" href="/api/fills.csv" download>Export CSV</a>' +
+      '<span class="hint">Read back from MT5\'s own deal history — so it ' +
+      'carries the trader\'s terminal clicks too, marked as not ours.' +
+      '</span></div>';
+
+    if (journal === null) {
+      return html + '<p class="note">loading the journal…</p>';
+    }
+    if (journal.error) {
+      return html + '<p class="note mismatch">' + journal.error + '</p>';
+    }
+
+    var totals = journal.totals || {};
+    html += '<table><tbody><tr><td>' + (totals.fills || 0) + ' fills</td>' +
+      '<td>' + fmt(totals.volume, 2) + ' lots</td>' +
+      '<td>commission ' + money(totals.commission) + '</td>' +
+      '<td>swap ' + money(totals.swap) + '</td>' +
+      '<td>the broker\'s own P&amp;L ' + money(totals.profit) +
+      '</td></tr></tbody></table>';
+
+    html += '<table><thead><tr><th>Broker time</th><th>Account</th>' +
+      '<th>Symbol</th><th>Pair</th><th>Leg</th><th>Side</th><th>In/Out</th>' +
+      '<th>Volume</th><th>Price</th><th>Comm</th><th>Swap</th>' +
+      '<th>P&amp;L</th><th>Ticket</th><th>Deal</th><th>Ours</th>' +
+      '<th>Comment</th></tr></thead><tbody>';
+    (journal.fills || []).forEach(function (fill) {
+      html += '<tr class="' + (fill.is_ours ? '' : 'theirs') + '">';
+      html += '<td>' + brokerTime(fill) + '</td>';
+      html += '<td>' + (fill.account || DASH) + '</td>';
+      html += '<td>' + (fill.symbol || DASH) + '</td>';
+      html += '<td>' + (fill.pair_key || DASH) + '</td>';
+      html += '<td>' + (fill.leg || DASH) + '</td>';
+      html += '<td>' + (fill.side || DASH) + '</td>';
+      html += '<td>' + (fill.entry || DASH) + '</td>';
+      html += '<td>' + fmt(fill.volume, 2) + '</td>';
+      html += '<td>' + fmt(fill.price, 4) + '</td>';
+      html += '<td>' + money(fill.commission) + '</td>';
+      html += '<td>' + money(fill.swap) + '</td>';
+      html += '<td>' + money(fill.profit) + '</td>';
+      html += '<td>' + (fill.position_ticket || DASH) + '</td>';
+      html += '<td>' + (fill.deal_id || DASH) + '</td>';
+      html += '<td>' + (fill.is_ours ? 'yes' : 'no') + '</td>';
+      html += '<td>' + (fill.comment || '') + '</td>';
+      html += '</tr>';
     });
-    if (!any) { html += '<tr><td colspan="9">no fills yet</td></tr>'; }
+    if (!(journal.fills || []).length) {
+      html += '<tr><td colspan="16">no fills recorded yet</td></tr>';
+    }
     return html + '</tbody></table>';
+  }
+
+  function brokerTime(fill) {
+    // The BROKER's wall clock, which is what MT5's own History shows.
+    // Rendering it in the browser's zone would put every row hours away
+    // from the same trade in the terminal.
+    if (!fill.broker_time_ms) { return DASH; }
+    var stamp = new Date(fill.broker_time_ms);
+    return stamp.toISOString().slice(11, 19) +
+      (fill.server_offset_s === null || fill.server_offset_s === undefined
+        ? '' : ' (broker)');
+  }
+
+  function loadFills(force) {
+    var now = Date.now();
+    if (!force && state.fills !== null && now - state.fillsAt < 5000) {
+      return;
+    }
+    state.fillsAt = now;
+    var query = state.fillsFilter.ours ? '?ours=1' : '';
+    fetch('/api/fills' + query).then(function (r) { return r.json(); })
+      .then(function (body) {
+        state.fills = body.ok ? body : {error: body.error};
+        render();
+      })
+      .catch(function (error) {
+        state.fills = {error: 'the journal could not be read: ' +
+                              error.message};
+      });
   }
 
   function timingRow(label, values, note) {
     if (!values || !values.length) {
+      // `hint`, not `note`: the note style is a full-width banner, and
+      // inside a table cell it paints a yellow band across the table.
       return '<tr><td>' + label + '</td><td>' + DASH +
-        ' <span class="note">nothing measured yet — not zero</span></td></tr>';
+        ' <span class="hint">nothing measured yet — not zero</span>' +
+        '</td></tr>';
     }
     var sorted = values.slice().sort(function (a, b) { return a - b; });
     var worst = sorted[sorted.length - 1];
@@ -891,6 +974,7 @@
     }
 
     renderNaked();
+    renderUnclaimed();
 
     var wanted = {};
     state.open.forEach(function (id) { wanted[id] = true; });
@@ -920,6 +1004,35 @@
       ? 'loop ' + (loop * 1000).toFixed(0) + 'ms · snapshot ' +
         ((snapshot.status_age_sec || 0) * 1000).toFixed(0) + 'ms old'
       : DASH;
+  }
+
+  function renderUnclaimed() {
+    var reconciler = state.snapshot.reconciler || {};
+    var unclaimed = reconciler.unclaimed || [];
+    var banner = el('unclaimed-banner');
+    if (!unclaimed.length) {
+      banner.classList.add('hidden');
+      return;
+    }
+    // A position we cannot explain is exactly the one an automatic close
+    // must not touch. It sits here until a person decides.
+    var html = '<b>' + unclaimed.length + ' position(s) at the broker ' +
+      'carry our magic but are not in our book.</b> Nothing will be ' +
+      'closed automatically. Adopt them into a pair, or close them by ' +
+      'hand.<table class="unclaimed"><thead><tr><th>Account</th>' +
+      '<th>Ticket</th><th>Symbol</th><th>Side</th><th>Volume</th>' +
+      '<th>Open</th><th></th></tr></thead><tbody>';
+    unclaimed.forEach(function (row) {
+      html += '<tr><td>' + row.account + '</td><td>' + row.ticket +
+        '</td><td>' + row.symbol + '</td><td>' + row.side + '</td><td>' +
+        fmt(row.volume, 2) + '</td><td>' + fmt(row.price_open, 4) +
+        '</td><td><button class="btn close-unclaimed" data-account="' +
+        row.account + '" data-ticket="' + row.ticket +
+        '">Close it</button></td></tr>';
+    });
+    html += '</tbody></table>';
+    banner.innerHTML = html;
+    banner.classList.remove('hidden');
   }
 
   function renderNaked() {
@@ -1081,6 +1194,18 @@
           'position at market, by ticket, which cannot be undone.',
           'Cancel all + flatten', function () {
             send('kill', {flatten: true});
+          });
+    });
+    el('unclaimed-banner').addEventListener('click', function (e) {
+      var button = e.target.closest('.close-unclaimed');
+      if (!button) { return; }
+      ask('Close ' + button.dataset.account + ':' + button.dataset.ticket +
+          '?',
+          'This position is at the broker but not in our book. Closing it ' +
+          'is by ticket, at market, and cannot be undone.',
+          'Close it', function () {
+            send('close_unclaimed', {account: button.dataset.account,
+                                     ticket: button.dataset.ticket});
           });
     });
     el('help').addEventListener('click', function () {

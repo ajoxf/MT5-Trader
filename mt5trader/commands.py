@@ -175,9 +175,11 @@ class CommandRunner:
         if position is None:
             return {'ok': False, 'reason': 'no such position'}
         pair = self.coordinator.config.pairs[position.pair_key]
-        return self.coordinator.executor.close_position(
+        result = self.coordinator.executor.close_position(
             pair, position, self.coordinator.market.get(position.pair_key),
             reason='closed by trader')
+        self.coordinator.remember(position)
+        return result
 
     def _do_flatten_pair(self, payload):
         """Every position on one ladder, at market, by ticket."""
@@ -188,6 +190,7 @@ class CommandRunner:
             results.append(self.coordinator.executor.close_position(
                 pair, position, self.coordinator.market.get(key),
                 reason='flattened by trader'))
+            self.coordinator.remember(position)
         return {'closed': len(results),
                 'failed': [r for r in results if not r['ok']]}
 
@@ -215,6 +218,22 @@ class CommandRunner:
         'OVERNIGHT_CLOSE_HOUR': lambda v: max(0, min(23, int(v))),
         'OVERNIGHT_CLOSE_MINUTE': lambda v: max(0, min(59, int(v))),
     }
+
+    def _do_close_unclaimed(self, payload):
+        """Close a position at the broker that our book cannot explain.
+
+        By TICKET, at market, and only because a person asked: an
+        unclaimed position is exactly the one an automatic close must
+        not touch.
+        """
+        return self.coordinator.close_unclaimed(payload['account'],
+                                                payload['ticket'])
+
+    def _do_adopt_unclaimed(self, payload):
+        """Take an unclaimed pair of tickets into the book as one
+        spread position, so it is managed and marked like any other."""
+        return self.coordinator.adopt_unclaimed(
+            payload['pair'], payload['ticket_a'], payload['ticket_b'])
 
     def _do_set_setting(self, payload):
         """Change a hot setting on the RUNNING engine.

@@ -21,8 +21,10 @@ import time
 
 from . import hedgeratio, sizing
 from .book import Book
+from .database import Store
 from .executor import PairExecutor, mark_position
-from .models import MAGIC_NUMBER, OrderType
+from .models import (MAGIC_NUMBER, LegFill, OrderType, SpreadPosition,
+                     SpreadSide)
 from .quoter import Quoter
 from .reconcile import Reconciler
 from .session import SessionClock, day_orders, overnight_action
@@ -33,7 +35,7 @@ from .spread import (LevelSigma, QuoteAgeTracker, SpreadJumpTracker,
 class Coordinator:
     def __init__(self, config, legs, status_path='status.json',
                  clock=time.time, sleep=time.sleep,
-                 monotonic=time.monotonic):
+                 monotonic=time.monotonic, store=None):
         self.config = config
         self.legs = legs                    # {account name: leg}
         self.status_path = status_path
@@ -46,6 +48,13 @@ class Coordinator:
                                      clock=clock)
         self._last_reconcile = None
         self.session_clock = SessionClock(config)
+        #: The local database: crash-safe position state, and the fill
+        #: journal. None means run without one — the tests that do not
+        #: care, and nothing else.
+        self.store = store
+        #: What recovery found at startup, and what it could not claim.
+        self.recovery = {'recovered': 0, 'unclaimed': [], 'complete': False}
+        self._last_journal = None
         #: Set by the launcher: the bridge from the web process. Primed
         #: at startup, so a restart never replays a command history.
         self.commands = None
@@ -76,15 +85,96 @@ class Coordinator:
     # -- startup ------------------------------------------------------------
 
     def start(self):
-        """Sweep first, then resolve symbols, then poll.
+        """Sweep, resolve symbols, recover the book, then poll.
 
         The sweep is before ANYTHING else: a pending of ours still
         resting is from a previous life, and one that filled while we
         were down is an unhedged outright position nobody was watching.
+
+        Recovery comes before the first reconcile for a sharper reason:
+        the book starts EMPTY, and an empty book makes every real
+        position look like an orphan. Sixty seconds later the reconciler
+        would close them — the machinery working correctly on a book
+        that lied to it.
         """
         swept = self.sweep_pendings('startup')
         self.resolve_symbols()
+        self.recover()
         return swept
+
+    def recover(self):
+        """Bring back the positions that were open when we stopped.
+
+        Each one comes back ACTIVE, with its own id, fills and tickets —
+        a position recovered under a NEW id is an orphan to the
+        reconciler and a ghost to the book.
+
+        Then: anything at the broker carrying OUR magic that recovery
+        did not account for is UNCLAIMED. It is not closed and it is not
+        struck out; it is put on the screen for a person to adopt or
+        close, because a position we cannot explain is exactly the one
+        an automatic close should not touch.
+        """
+        report = {'recovered': 0, 'unclaimed': [], 'complete': False,
+                  'error': None}
+        if self.store is None:
+            # No database: we cannot know what was open. Say so, and let
+            # the reconciler hold its fire rather than guess.
+            report['error'] = ('no database — open positions cannot be '
+                               'recovered, so nothing at the broker will be '
+                               'auto-closed')
+            self.recovery = report
+            self.reconciler.book_complete = False
+            return report
+        try:
+            for row in self.store.open_positions():
+                position = SpreadPosition.from_dict(row)
+                self.book.add_position(position)
+                report['recovered'] += 1
+        except Exception as e:                       # a broken database
+            logging.critical('could not recover positions: %s', e)
+            report['error'] = str(e)
+            self.recovery = report
+            self.reconciler.book_complete = False
+            return report
+
+        known = self.reconciler.known_tickets()
+        for name, leg in self.legs.items():
+            positions = leg.positions()
+            if positions is None:
+                # UNKNOWN, not flat: we cannot complete recovery against
+                # an account we could not read.
+                report['error'] = (f"account '{name}' could not be read at "
+                                   f"startup — recovery is incomplete")
+                continue
+            for position in positions:
+                if (name, str(position['ticket'])) in known:
+                    continue
+                report['unclaimed'].append(dict(position, account=name))
+
+        report['complete'] = report['error'] is None
+        # The reconciler auto-closes orphans only when the book is known
+        # to be complete. It never auto-closes anything on this list.
+        self.reconciler.book_complete = report['complete']
+        self.reconciler.unclaimed = {
+            (row['account'], str(row['ticket'])): row
+            for row in report['unclaimed']}
+        if report['recovered']:
+            logging.warning('recovered %d open position(s) from the database',
+                            report['recovered'])
+        if report['unclaimed']:
+            logging.critical(
+                '%d position(s) at the broker carry our magic but are not in '
+                'our book. They will NOT be closed automatically — adopt or '
+                'close them by hand: %s', len(report['unclaimed']),
+                ', '.join(f"{row['account']}:{row['ticket']} {row['symbol']} "
+                          f"{row['side']} {row['volume']}"
+                          for row in report['unclaimed']))
+        if self.store is not None:
+            self.store.event('recovery', **{k: v for k, v in report.items()
+                                            if k != 'unclaimed'})
+        self.recovery = report
+        return report
 
     def sweep_pendings(self, when):
         """Cancel every pending of OURS on both accounts, and verify.
@@ -318,7 +408,11 @@ class Coordinator:
             result = self.executor.market_entry(pair, side, md, quantity,
                                                 level)
             if result.ok and result.position:
-                self.book.add_position(result.position)
+                self.remember(self.book.add_position(result.position))
+            elif self.store is not None and result.reason:
+                self.store.event('refused', pair_key, reason=result.reason,
+                                 side=getattr(side, 'value', side),
+                                 level=level, naked=result.naked)
             return result.to_dict()
 
         refusal = self.executor.precheck(pair, side, md, quantity)
@@ -358,6 +452,118 @@ class Coordinator:
             if pair_key in (None, key):
                 self.quoter.work(pair, self.market.get(key))
         return pulled
+
+    def close_unclaimed(self, account, ticket):
+        """Close one unexplained position at the broker, by ticket.
+
+        Only ever because a person asked. The volume comes from the
+        broker's own book, and a ticket MT5 no longer lists is already
+        gone rather than an error.
+        """
+        with self.lock:
+            row = self.reconciler.unclaimed.get((account, str(ticket)))
+            if row is None:
+                return {'ok': False, 'reason': f'{account}:{ticket} is not '
+                                               f'on the unclaimed list'}
+            leg = self.legs.get(account)
+            if leg is None:
+                return {'ok': False, 'reason': f"no leg runner for {account}"}
+            result = self.executor.close_tickets(
+                leg, row['symbol'], [ticket], row['side'],
+                comment='UNCLAIMED')
+            if result.get('ok'):
+                self.reconciler.unclaimed.pop((account, str(ticket)), None)
+                if self.store is not None:
+                    self.store.event('unclaimed_closed', None, account=account,
+                                     ticket=str(ticket), symbol=row['symbol'],
+                                     volume=row['volume'])
+            return result
+
+    def adopt_unclaimed(self, pair_key, ticket_a, ticket_b):
+        """Take two unexplained tickets into the book as one spread.
+
+        For the case the operator can see and we cannot: the two legs of
+        a pair that went on before the database existed, or under a
+        build that did not persist. Once adopted it is managed, marked
+        and closable like any other position.
+        """
+        with self.lock:
+            pair = self.config.pairs.get(pair_key)
+            if pair is None:
+                return {'ok': False, 'reason': f'no pair {pair_key}'}
+            rows = {}
+            for leg_key, ticket, account in (
+                    ('a', ticket_a, pair.account_a),
+                    ('b', ticket_b, pair.account_b)):
+                row = self.reconciler.unclaimed.get((account, str(ticket)))
+                if row is None:
+                    return {'ok': False,
+                            'reason': f'{account}:{ticket} is not on the '
+                                      f'unclaimed list'}
+                rows[leg_key] = row
+
+            # The SIDE of the spread comes from what leg B actually is:
+            # buying the spread is long B, and a position that says
+            # otherwise is not this pair's.
+            side = (SpreadSide.BUY if rows['b']['side'] == 'BUY'
+                    else SpreadSide.SELL)
+            leg_a_side, leg_b_side = side.leg_sides()
+            if rows['a']['side'] != leg_a_side.value:
+                return {'ok': False,
+                        'reason': (f"those two are not a hedge: leg B is "
+                                   f"{rows['b']['side']} so leg A must be "
+                                   f"{leg_a_side.value}, and it is "
+                                   f"{rows['a']['side']}")}
+
+            contract_a = (pair.meta_a or {}).get('contract_size')
+            contract_b = (pair.meta_b or {}).get('contract_size')
+            leg_a = LegFill(pair.account_a, rows['a']['symbol'], leg_a_side,
+                            rows['a']['volume'], rows['a']['price_open'],
+                            position_tickets=[rows['a']['ticket']],
+                            contract_size=contract_a, clock=self.clock)
+            leg_b = LegFill(pair.account_b, rows['b']['symbol'], leg_b_side,
+                            rows['b']['volume'], rows['b']['price_open'],
+                            position_tickets=[rows['b']['ticket']],
+                            contract_size=contract_b, clock=self.clock)
+            entry = (leg_b.price - float(pair.hedge_ratio) * leg_a.price
+                     if (leg_a.price and leg_b.price) else None)
+            quantity = (leg_b.volume / pair.clip_lots_b
+                        if pair.clip_lots_b else leg_b.volume)
+            position = SpreadPosition(
+                pair_key, side, quantity, leg_a, leg_b, entry,
+                OrderType.MARKET,
+                sizing.spread_units(leg_b.volume, contract_b),
+                clock=self.clock)
+            position.recovered = True
+            self.remember(self.book.add_position(position))
+            for leg_key, ticket, account in (
+                    ('a', ticket_a, pair.account_a),
+                    ('b', ticket_b, pair.account_b)):
+                self.reconciler.unclaimed.pop((account, str(ticket)), None)
+            if self.store is not None:
+                self.store.event('adopted', pair_key,
+                                 position_id=position.position_id,
+                                 tickets=[str(ticket_a), str(ticket_b)])
+            return {'ok': True, 'position': position.to_dict()}
+
+    def remember(self, position):
+        """Write a position through to the database.
+
+        On every change, not on a timer: the window between an order
+        filling and the state being safe is the window a crash turns
+        into an unrecoverable position.
+        """
+        if self.store is not None and position is not None:
+            try:
+                self.store.save_position(position)
+            except Exception as e:                   # never lose the trade
+                logging.critical('could not persist %s: %s — a restart will '
+                                 'not recover it', position.position_id, e)
+        return position
+
+    def remember_all(self):
+        for position in self.book.positions(open_only=False):
+            self.remember(position)
 
     def account_info(self, name):
         """Cached ~5s. Fetching this three times a second is three IPC
@@ -442,6 +648,7 @@ class Coordinator:
             'poll_target_sec': self.config.get('POLL_INTERVAL_SEC'),
             'accounts': {name: self.account_info(name) for name in self.legs},
             'reconciler': self.reconciler.snapshot(),
+            'recovery': dict(self.recovery),
             'session_events': self.session_events[-50:],
             'hedge_times_ms': list(self.quoter.hedge_times[-50:]),
             'click_to_on_ms': list(self.executor.timings[-50:]),
@@ -498,6 +705,7 @@ class Coordinator:
                 logging.exception("poll failed: %s", e)
             self.run_session_cutoff()
             self.reconcile_if_due()
+            self.journal_if_due()
             elapsed = self.clock() - began
             self.sleep(max(0.0, interval - elapsed))
 
@@ -534,12 +742,60 @@ class Coordinator:
                 # withholds it.
                 result = self.executor.close_position(pair, position, md,
                                                       reason=verdict)
+                self.remember(position)
                 events.append({'pair': key, 'action': 'overnight_close',
                                'position': position.position_id,
                                'mode': pair.overnight.value,
                                'net_pnl': net_pnl, 'ok': result['ok']})
         self.session_events.extend(events)
         return events
+
+    def journal_if_due(self):
+        """Write what the BROKER says happened into the journal.
+
+        Read from MT5's own deal history rather than from our intentions,
+        so it also carries the trader's manual terminal clicks — `is_ours`
+        says which is which. Idempotent by deal id, and on its own slow
+        clock: a history query is not something to do three times a
+        second.
+        """
+        if self.store is None:
+            return None
+        every = float(self.config.get('JOURNAL_INTERVAL_SEC', 10.0) or 0.0)
+        if every <= 0:
+            return None
+        now = self.clock()
+        if self._last_journal is not None and now - self._last_journal < every:
+            return None
+        self._last_journal = now
+        written = 0
+        for name, leg in self.legs.items():
+            try:
+                rows = leg.order_log(
+                    int(self.config.get('JOURNAL_HOURS', 24)))
+            except Exception as e:
+                logging.error('journal: %s would not answer: %s', name, e)
+                continue
+            if rows is None:
+                # None is UNKNOWN, not "nothing traded".
+                logging.debug('journal: %s could not be read this pass', name)
+                continue
+            written += self.store.record_fills(name, rows, self.resolve_leg)
+        return written
+
+    def resolve_leg(self, account, symbol):
+        """(pair key, 'A'/'B') for a fill, where it belongs to a pair.
+
+        A fill we cannot map is still journalled: it happened on the
+        account, and a journal that drops what it does not recognise is
+        not an audit trail.
+        """
+        for key, pair in self.config.pairs.items():
+            if pair.account_a == account and pair.symbol_a == symbol:
+                return key, 'A'
+            if pair.account_b == account and pair.symbol_b == symbol:
+                return key, 'B'
+        return None, None
 
     def reconcile_if_due(self):
         """Every ~20s in LIVE. Assume you will lose track."""
@@ -551,7 +807,19 @@ class Coordinator:
             return None
         self._last_reconcile = now
         try:
-            return self.reconciler.run()
+            report = self.reconciler.run()
+            # A force-cleared ghost is a state change, and the database
+            # must not hand it back at the next restart.
+            if report and (report['ghosts'] or report['closed']):
+                self.remember_all()
+            if self.store is not None and report and (
+                    report['orphans'] or report['ghosts'] or report['closed']):
+                self.store.event('reconcile', **{
+                    'orphans': len(report['orphans']),
+                    'ghosts': len(report['ghosts']),
+                    'closed': report['closed'],
+                    'unknown_accounts': report['unknown_accounts']})
+            return report
         except Exception as e:                      # never die on a pass
             logging.exception("reconcile failed: %s", e)
             return None

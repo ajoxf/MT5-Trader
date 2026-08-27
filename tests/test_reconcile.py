@@ -9,20 +9,54 @@ from mt5trader.models import OrderSide, SpreadSide
 
 
 @pytest.fixture
-def engine(config, pair, legs):
-    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+def engine(config, pair, legs, tmp_path):
+    """A coordinator with a database, started cleanly.
+
+    The database is what makes the book COMPLETE: without one, recovery
+    cannot know what was open, and the reconciler holds its fire rather
+    than call a live position an orphan.
+    """
+    from mt5trader.database import Store
+    coordinator = Coordinator(config, legs, sleep=lambda s: None,
+                              store=Store(str(tmp_path / 'test.db')))
     coordinator.start()
     coordinator.poll_once()
+    assert coordinator.reconciler.book_complete
     return coordinator
 
 
 def an_orphan(legs, symbol='GC1226', side=OrderSide.SELL, volume=0.1,
               account='acct_b'):
-    """Something at the broker that our book has never heard of — a
-    position the trader opened in the terminal by hand, say."""
+    """A position carrying OUR magic that the book has never heard of.
+
+    That is what an orphan is: a fill of ours we lost track of — not the
+    trader's own terminal click, which carries a different magic and is
+    never ours to touch.
+    """
+    result = legs[account].broker.send_market_order(symbol, side, volume,
+                                                    comment='LADDER-lost')
+    return result.ticket
+
+
+def a_manual_trade(legs, symbol='GC1226', side=OrderSide.SELL, volume=0.1,
+                   account='acct_b'):
+    """The trader's own click in the terminal. Different magic."""
     result = legs[account].broker.send_market_order(symbol, side, volume,
                                                     comment='by hand')
     return result.ticket
+
+
+def test_the_traders_own_terminal_position_is_never_touched(engine, legs):
+    """Magic-scoped, always. Every query, every sweep, every close."""
+    coordinator = engine
+    ticket = a_manual_trade(legs)
+
+    for _ in range(6):
+        report = coordinator.reconciler.run()
+
+    assert report['orphans'] == []
+    assert report['closed'] == []
+    assert legs['acct_b'].broker.positions.get(ticket)
 
 
 def test_an_orphan_is_closed_on_the_third_strike_not_the_first(engine, legs):
@@ -184,6 +218,107 @@ def test_a_close_that_will_not_go_escalates_once_and_stops_hammering(
         report = coordinator.reconciler.run()
     assert closes() == 3
     assert report['escalated'] == []           # escalated ONCE, not each pass
+
+
+def test_a_position_already_there_at_startup_is_never_auto_closed(
+        config, pair, legs, tmp_path):
+    """A position we cannot explain is exactly the one an automatic
+    close must not touch. It goes on the screen for a person instead."""
+    from mt5trader.database import Store
+    an_orphan(legs)                      # it is there BEFORE we start
+    coordinator = Coordinator(config, legs, sleep=lambda s: None,
+                              store=Store(str(tmp_path / 'test.db')))
+    coordinator.start()
+    coordinator.poll_once()
+
+    assert len(coordinator.recovery['unclaimed']) == 1
+    for _ in range(6):
+        report = coordinator.reconciler.run()
+
+    assert report['closed'] == []
+    assert legs['acct_b'].broker.open_positions()          # still there
+    assert report['unclaimed'][0]['symbol'] == 'GC1226'
+    # And it is in the snapshot the monitor renders from.
+    assert coordinator.snapshot()['reconciler']['unclaimed']
+
+
+def test_without_a_database_nothing_is_auto_closed_at_all(config, pair, legs):
+    """No database means the book cannot be known to be complete, and an
+    orphan is only an orphan if we are sure it is not ours."""
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+    an_orphan(legs)
+
+    for _ in range(6):
+        report = coordinator.reconciler.run()
+
+    assert report['book_complete'] is False
+    assert report['closed'] == []
+    assert 'incomplete' in report['orphans'][0]['held']
+    assert legs['acct_b'].broker.open_positions()
+    assert 'no database' in coordinator.recovery['error']
+
+
+def test_an_unclaimed_pair_can_be_adopted_and_is_then_managed(
+        config, pair, legs, tmp_path):
+    """For what the operator can see and we cannot: two legs that went
+    on before this build. Adopted, it is marked and closable like any
+    other position."""
+    from mt5trader.database import Store
+    from mt5trader.models import OrderSide
+    ticket_b = an_orphan(legs, 'GC1226', OrderSide.SELL, 0.1, 'acct_b')
+    ticket_a = an_orphan(legs, 'XAUUSD_', OrderSide.BUY, 0.1, 'acct_a')
+    coordinator = Coordinator(config, legs, sleep=lambda s: None,
+                              store=Store(str(tmp_path / 'test.db')))
+    coordinator.start()
+    coordinator.poll_once()
+    assert len(coordinator.recovery['unclaimed']) == 2
+
+    adopted = coordinator.adopt_unclaimed(pair.key, ticket_a, ticket_b)
+
+    assert adopted['ok']
+    position = coordinator.book.positions(pair.key)[0]
+    assert position.side.value == 'SELL'          # short B = short the spread
+    assert position.leg_b.position_tickets == [ticket_b]
+    assert coordinator.reconciler.unclaimed == {}
+    # It survives a restart now, like anything else in the book.
+    assert Store(str(tmp_path / 'test.db')).open_positions()
+
+
+def test_adopting_two_tickets_that_are_not_a_hedge_is_refused(
+        config, pair, legs, tmp_path):
+    """The control: adopting two positions on the SAME side would book
+    a spread that does not exist and mark it against a hedge nobody
+    holds."""
+    from mt5trader.database import Store
+    from mt5trader.models import OrderSide
+    ticket_b = an_orphan(legs, 'GC1226', OrderSide.SELL, 0.1, 'acct_b')
+    ticket_a = an_orphan(legs, 'XAUUSD_', OrderSide.SELL, 0.1, 'acct_a')
+    coordinator = Coordinator(config, legs, sleep=lambda s: None,
+                              store=Store(str(tmp_path / 'test.db')))
+    coordinator.start()
+
+    refused = coordinator.adopt_unclaimed(pair.key, ticket_a, ticket_b)
+
+    assert not refused['ok']
+    assert 'not a hedge' in refused['reason']
+    assert coordinator.book.positions(pair.key) == []
+
+
+def test_an_unclaimed_position_can_be_closed_by_hand(config, pair, legs,
+                                                      tmp_path):
+    from mt5trader.database import Store
+    ticket = an_orphan(legs)
+    coordinator = Coordinator(config, legs, sleep=lambda s: None,
+                              store=Store(str(tmp_path / 'test.db')))
+    coordinator.start()
+
+    result = coordinator.close_unclaimed('acct_b', ticket)
+
+    assert result['ok']
+    assert legs['acct_b'].broker.open_positions() == []
+    assert coordinator.reconciler.unclaimed == {}
 
 
 def test_the_reconciler_runs_on_its_own_interval(engine):
