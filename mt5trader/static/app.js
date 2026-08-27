@@ -23,6 +23,7 @@
     snapshot: {pairs: {}, accounts: {}},
     open: [],            // panel ids in taskbar order
     closed: {},          // panels the TRADER closed — they stay closed
+    reveal: null,        // a panel just opened: scroll it into view once
     active: null,
     armed: {},           // pair key -> quantity armed on the keypad
     locked: {},          // pair key -> scroll is locked
@@ -227,6 +228,11 @@
     delete state.closed[id];
     if (state.open.indexOf(id) < 0) { state.open.push(id); }
     state.active = id;
+    // ...and SHOW it. The desktop is a row that scrolls: with two
+    // ladders and the grid already on it, a window opened at the end
+    // sits off the right-hand edge, and "Positions opens into nothing"
+    // is what that looks like from the outside.
+    state.reveal = id;
     render();
   }
 
@@ -1751,6 +1757,32 @@
       });
 
     renderTabs();
+    revealPanel();
+  }
+
+  function revealPanel() {
+    /* Scroll a newly opened window into view — once, and never while
+     * it is being dragged. A floating window is already where the
+     * trader put it, so only the desktop's horizontal scroll moves. */
+    var id = state.reveal;
+    if (!id) { return; }
+    state.reveal = null;
+    var node = null;
+    Array.prototype.forEach.call(document.querySelectorAll('.window'),
+      function (candidate) {
+        if (panelIdOf(candidate) === id) { node = candidate; }
+      });
+    if (!node) { return; }
+    var desktop = el('desktop');
+    var box = node.getBoundingClientRect();
+    var frame = desktop.getBoundingClientRect();
+    if (box.left < frame.left || box.right > frame.right) {
+      desktop.scrollLeft += box.left - frame.left - 4;
+    }
+    node.classList.add('revealed');
+    window.setTimeout(function () {
+      node.classList.remove('revealed');
+    }, 900);
   }
 
   function renderUnclaimed() {
@@ -1924,6 +1956,7 @@
           if (state.open.indexOf(id) >= 0 || state.closed[id]) { return; }
           state.open.unshift(id);
           if (!first) {
+            state.reveal = id;
             toast('new ladder: ' + (snapshot.pairs[key].name || key), 'ok');
           }
         });

@@ -1149,3 +1149,44 @@ def test_a_pair_added_while_the_screen_is_open_gets_its_own_ladder(page):
         delete window.MT5Trader.state.snapshot.pairs['EURUSD|GBPUSD'];
         window.MT5Trader.render();
     }""")
+
+
+def test_a_window_opened_at_the_end_of_the_row_is_scrolled_into_view(page):
+    """The desktop is a row that scrolls. With ladders and the grid
+    already on it, a window opened at the end sits off the right-hand
+    edge — and "Positions opens into nothing" is what that looks like
+    from the outside."""
+    tidy(page)
+    page.evaluate("""() => {
+        const UI = window.MT5Trader;
+        UI.state.closed = {};
+        UI.closePanel(UI.panelId('monitor'));
+        // A desktop wide enough that the end of the row is off screen.
+        document.querySelectorAll('.window.ladder').forEach(function (node) {
+            node.style.width = '900px';
+        });
+        UI.state.open = [UI.panelId('ladder', 'XAUUSD_|GC1226'),
+                         UI.panelId('grid')];
+        UI.render();
+        document.getElementById('desktop').scrollLeft = 0;
+    }""")
+
+    page.evaluate("() => window.MT5Trader.openPanel('monitor:')")
+    page.wait_for_selector('.window.monitor', timeout=5000)
+    page.wait_for_timeout(200)
+
+    visible = page.evaluate("""() => {
+        const node = document.querySelector('.window.monitor');
+        const desktop = document.getElementById('desktop');
+        const box = node.getBoundingClientRect();
+        const frame = desktop.getBoundingClientRect();
+        return box.left >= frame.left - 8 && box.left < frame.right;
+    }""")
+    assert visible
+
+    page.evaluate("""() => {
+        document.querySelectorAll('.window.ladder').forEach(function (node) {
+            node.style.width = '';
+        });
+    }""")
+    tidy(page)

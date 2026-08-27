@@ -131,6 +131,13 @@ body {
                               transparent 80%);
 }
 
+/* A window that was just opened, said once so the eye finds it. */
+@keyframes reveal-flash {
+  from { box-shadow: 0 0 0 3px #ffd43b; }
+  to { box-shadow: 1px 1px 0 rgba(0, 0, 0, .3); }
+}
+.window.revealed { animation: reveal-flash .9s ease-out; }
+
 /* Moved windows: out of the row, at the place they were dropped. */
 .window.floating {
   position: absolute;
