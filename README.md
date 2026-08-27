@@ -149,6 +149,14 @@ That is the product, so it is the default and it is fast:
   spreads the two order books can actually do, matched leg against leg
   and counted once. Where a broker publishes no depth the columns stay
   empty rather than inventing a size from one leg.
+- **The exit price on the rail**: break-even (the entry price plus
+  commission, both legs, both ends) and break-even plus a target that
+  is a percentage of the MARGIN one spread ties up — priced by the two
+  terminals with `order_calc_margin`, not derived from notional. Both
+  directions, because a long leaves on the bid and a short buys back on
+  the offer. A position that is on gets its own line, anchored on the
+  price it was ENTERED at. Nothing is sent to the broker: it is a price
+  on the screen, and no leg ever carries a broker-side stop.
 - **Fair spread on the rail**: `swap per day × days to expiry`, with
   the market named rich or cheap against it. Set the futures leg's
   expiry and swap on the Exchanges page; without both there is no fair

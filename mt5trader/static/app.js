@@ -600,7 +600,7 @@
       if (state.centring[key]) { return; }
       state.scrolledAt[key] = Date.now();
     });
-    node.querySelector('tbody').addEventListener('click', function (e) {
+    node.querySelector('.grid tbody').addEventListener('click', function (e) {
       var cell = e.target.closest('td');
       if (!cell) { return; }
       var row = cell.closest('tr');
@@ -874,6 +874,34 @@
       gap.className = 'fair-gap ' + (fair.rich ? 'down' : 'up');
     }
     node.querySelector('.fair-note').textContent = fair.note || '';
+    renderExit(node, row);
+  }
+
+  function renderExit(node, row) {
+    /* Where a trade entered NOW gets out: break-even first, then
+     * break-even plus the target.
+     *
+     * Two columns because a spread has two directions and their exits
+     * move opposite ways: a long leaves on the bid ABOVE what it paid,
+     * a short buys back BELOW what it sold. One number here would be
+     * right half the time.
+     *
+     * A position that is already on gets its own line, anchored on the
+     * price it was ENTERED at — a take-profit that moves with the
+     * market is not a take-profit.
+     */
+    var exit = row.exit || {};
+    node.querySelector('.be-buy').textContent = fmt(exit.break_even_buy, 4);
+    node.querySelector('.be-sell').textContent = fmt(exit.break_even_sell, 4);
+    node.querySelector('.tp-buy').textContent = fmt(exit.tp_buy, 4);
+    node.querySelector('.tp-sell').textContent = fmt(exit.tp_sell, 4);
+    var note = exit.note || '';
+    var open = (row.positions || [])[0];
+    if (open && open.exit) {
+      note = open.side + ' on: out at ' + fmt(open.exit.tp, 4) +
+        ', flat at ' + fmt(open.exit.break_even, 4);
+    }
+    node.querySelector('.exit-note').textContent = note;
   }
 
   function legFeed(row, market) {
@@ -952,7 +980,10 @@
   }
 
   function renderRows(node, key, row) {
-    var body = node.querySelector('tbody');
+    // '.grid tbody', not 'tbody': the rail has small tables of its own
+    // now, and the first tbody in the window is not necessarily the
+    // ladder's. Writing the rows into the wrong one destroys the rail.
+    var body = node.querySelector('.grid tbody');
     if (state.snapshot.row_height_px) {
       // A bigger target is a faster and safer click. 17px is the
       // reference screen's; a large monitor wants more.

@@ -22,9 +22,9 @@
    * The BANDS stay the softened ones — on a light frame the saturated
    * pair shouts, and a band that shouts makes the size printed in it
    * harder to read. */
-  --frame: #f0f0f0;
-  --frame-dark: #e2e2e2;
-  --frame-line: #c8c8c8;
+  --frame: #e3e3e3;
+  --frame-dark: #d5d5d5;
+  --frame-line: #bcbcbc;
   --frame-text: #1c1c1c;
   --frame-muted: #6a6a6a;
   --price-cell: #ffffff;      /* the price column */
@@ -306,6 +306,24 @@ body {
 .rail .fair-gap.up { color: #2f7d3f; }
 .rail .fair-gap.down { color: #b03030; }
 .rail .fair-note { font-size: 9px; color: var(--frame-muted); }
+.rail .exit {
+  margin-top: 4px;
+  padding: 3px;
+  background: #ffffff;
+  border: 1px solid var(--frame-line);
+}
+table.exits { width: 100%; border-collapse: collapse; font: 10px var(--mono); }
+table.exits th {
+  text-align: left;
+  color: var(--frame-muted);
+  font-weight: 400;
+}
+table.exits td { text-align: right; }
+/* The two directions keep the ladder's colours: a long leaves on the
+ * blue side, a short buys back on the red. */
+table.exits td:nth-child(2) { color: #1f5f96; }
+table.exits td:nth-child(3) { color: #a33; }
+.rail .exit-note { font-size: 9px; color: var(--frame-muted); }
 .rail-label { font-size: 10px; color: var(--frame-muted); margin-top: 4px; }
 .rail .armed {
   width: 100%;
@@ -566,10 +584,13 @@ table.legbook {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
-  font: 10px/1.45 var(--mono);
+  font: 10px/1.5 var(--mono);
   color: var(--frame-text);
-  background: #ffffff;
-  border: 1px solid var(--frame-line);
+  /* No box: it belongs to the footer it sits in. A panel with its own
+   * background and border read as a separate window stuck to the
+   * bottom of the ladder. */
+  background: none;
+  border: 0;
 }
 table.legbook th,
 table.legbook td {
@@ -594,16 +615,22 @@ table.legbook .sym {
   color: var(--frame-muted);
   text-overflow: ellipsis;
 }
-table.legbook .c-bid, table.legbook .c-ask { width: 21%; }
-table.legbook .c-width { width: 14%; }
+/* The ladder's own colours, so a price means the same thing here as it
+ * does in the columns above: bid blue, ask red. */
+table.legbook .c-bid { width: 21%; color: #1f5f96; }
+table.legbook .c-ask { width: 21%; color: #a33; }
+table.legbook .c-width { width: 14%; color: var(--frame-text); }
 table.legbook .c-age { width: 10%; color: var(--frame-muted); }
 table.legbook td.age.bad { color: #b03030; font-weight: 700; }
 table.legbook tr.spread th,
 table.legbook tr.spread td {
   border-top: 1px solid var(--frame-line);
   font-weight: 700;
-  color: var(--frame-text);
 }
+/* The spread's own row keeps the two colours — it IS a bid and an ask,
+ * the two prices the ladder trades at — and its width is the round
+ * turn, which is the number the whole window is about. */
+table.legbook tr.spread .c-width { color: #7a4b00; }
 
 /* -- the Market Grid ------------------------------------------------ */
 

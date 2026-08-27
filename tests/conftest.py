@@ -70,6 +70,9 @@ class FakeBroker:
         #: leg that goes on and then cannot be taken off again.
         self.fail_closes = set()
         self.reject_orders = {}          # symbol -> error string
+        #: Margin per lot this terminal reports, or None for a broker
+        #: that cannot price it.
+        self.margin_per_lot = None
         self.next_ticket = 1000
         self.next_deal = 500000
         self.connected = False
@@ -122,6 +125,13 @@ class FakeBroker:
 
     def ensure_symbol(self, symbol):
         return self.symbols.get(symbol)
+
+    def margin_for(self, symbol, side, volume, price=None):
+        """What this terminal says the margin is. None when it cannot
+        price it — the case the take-profit target has to survive."""
+        if getattr(self, 'margin_per_lot', None) is None:
+            return None
+        return float(self.margin_per_lot) * float(volume)
 
     def depth(self, symbol):
         """The DOM this broker publishes, or None.

@@ -175,7 +175,7 @@ def page(server):
         page.on('console', lambda message: errors.append(message.text)
                 if message.type == 'error' else None)
         page.goto(url)
-        page.wait_for_selector('.ladder tbody tr')
+        page.wait_for_selector('.ladder .grid tbody tr')
         page.errors = errors
         page.paths = paths
         yield page
@@ -193,7 +193,7 @@ def test_the_ladder_draws_the_reference_screens_columns(page):
     headers = page.eval_on_selector_all(
         '.ladder thead th', 'nodes => nodes.map(n => n.textContent)')
     assert headers == ['Work', 'Bids', 'Price', 'Asks', 'LTQ']
-    assert page.locator('.ladder tbody tr').count() == 41
+    assert page.locator('.ladder .grid tbody tr').count() == 41
 
 
 def test_one_rule_marks_the_market_and_it_is_at_the_mid(page):
@@ -231,7 +231,7 @@ def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
 
 def test_a_limit_click_places_one_order_and_asks_nothing(page):
     before = command_count(page)
-    page.locator('.ladder tbody tr td.bid').nth(5).click()
+    page.locator('.ladder .grid tbody tr td.bid').nth(5).click()
     page.wait_for_timeout(250)
     assert page.locator('#modal.hidden').count() == 1     # no confirmation
     assert command_count(page) == before + 1
@@ -247,11 +247,11 @@ def test_the_asks_column_buys_the_spread_and_the_bids_column_sells_it(page):
     """Stated as its own test because it is a definition, not a
     preference: buying the spread is buying leg B and selling leg A,
     and that is what the ASK side of the ladder offers."""
-    page.locator('.ladder tbody tr td.ask').nth(3).click()
+    page.locator('.ladder .grid tbody tr td.ask').nth(3).click()
     page.wait_for_timeout(250)
     assert last_command(page)['payload']['side'] == 'BUY'
 
-    page.locator('.ladder tbody tr td.bid').nth(3).click()
+    page.locator('.ladder .grid tbody tr td.bid').nth(3).click()
     page.wait_for_timeout(250)
     assert last_command(page)['payload']['side'] == 'SELL'
 
@@ -268,7 +268,7 @@ def test_the_asks_column_buys_the_spread_and_the_bids_column_sells_it(page):
 
 def test_three_clicks_at_one_price_send_three_orders(page):
     before = command_count(page)
-    cell = page.locator('.ladder tbody tr td.ask').nth(3)
+    cell = page.locator('.ladder .grid tbody tr td.ask').nth(3)
     for _ in range(3):
         cell.click()
         page.wait_for_timeout(120)
@@ -293,14 +293,14 @@ def test_a_market_click_fires_on_ONE_click(page):
     # instead of promising a cross.
     cursors = page.evaluate(
         "() => ({touch: getComputedStyle(document.querySelector("
-        "'.window.mode-market tr.in-bid td.bid')).cursor,"
+        "'.window.mode-market .grid tr.in-bid td.bid')).cursor,"
         " away: getComputedStyle(document.querySelector("
-        "'.window.mode-market tbody td.bid')).cursor})")
+        "'.window.mode-market .grid tbody td.bid')).cursor})")
     assert 'svg+xml' in cursors['touch'] and 'crosshair' in cursors['touch']
     assert cursors['away'] == 'cell'
 
     before = command_count(page)
-    page.locator('.ladder tbody tr td.bid').nth(6).click()
+    page.locator('.ladder .grid tbody tr td.bid').nth(6).click()
     page.wait_for_timeout(250)
 
     assert command_count(page) == before + 1        # no second gesture
@@ -314,7 +314,7 @@ def test_the_click_shows_up_before_the_engine_answers(page):
     # Earlier tests in this file have clicked too; start from nothing in
     # flight so the count means what it says.
     page.evaluate('() => { window.MT5Trader.state.pending.length = 0; }')
-    page.locator('.ladder tbody tr td.ask').nth(8).click()
+    page.locator('.ladder .grid tbody tr td.ask').nth(8).click()
     # No waiting: it is on the screen in the same frame.
     page.wait_for_selector('.ladder td.work.pending', timeout=500)
     assert page.locator('.ladder td.work.pending .ghost').first.text_content() \
@@ -328,7 +328,7 @@ def test_a_desk_that_wants_the_extra_gesture_can_have_it(page):
     page.wait_for_timeout(400)
 
     before = command_count(page)
-    page.locator('.ladder tbody tr td.bid').nth(6).click()
+    page.locator('.ladder .grid tbody tr td.bid').nth(6).click()
     page.wait_for_selector('#modal:not(.hidden)')
     assert command_count(page) == before          # nothing sent yet
     page.click('#modal-confirm')
@@ -808,7 +808,7 @@ def test_a_window_goes_where_it_is_dragged_and_is_still_there_after_a_reload(
     assert page.locator('.window.ladder.floating').count() == 1
 
     page.reload()
-    page.wait_for_selector('.ladder tbody tr')
+    page.wait_for_selector('.ladder .grid tbody tr')
     open_ladder(page)
     restored = page.locator('.window.ladder').first.bounding_box()
     assert restored['x'] == pytest.approx(after['x'], abs=2)
@@ -921,7 +921,7 @@ def test_a_window_is_freely_expandable_from_its_corner(page):
     assert before['height'] - after['height'] == pytest.approx(150, abs=10)
 
     page.reload()
-    page.wait_for_selector('.ladder tbody tr')
+    page.wait_for_selector('.ladder .grid tbody tr')
     open_ladder(page)
     restored = page.locator('.window.ladder').first.bounding_box()
     assert restored['width'] == pytest.approx(after['width'], abs=2)
@@ -1025,7 +1025,7 @@ def test_the_ladder_centres_on_the_mid_and_leaves_a_hand_scroll_alone(page):
 
     centred = page.evaluate("""() => {
         const grid = document.querySelector('.ladder .grid');
-        const rows = [...document.querySelectorAll('.ladder tbody tr')];
+        const rows = [...document.querySelectorAll('.ladder .grid tbody tr')];
         const mid = window.MT5Trader.state.snapshot
             .pairs['XAUUSD_|GC1226'].market.spread;
         const row = rows.reduce((best, r) =>
@@ -1546,3 +1546,55 @@ def test_the_leg_panel_never_runs_off_the_edge_of_the_ladder(page):
 
     assert fits['inside'], 'the leg panel is wider than the ladder'
     assert fits['ageVisible'], 'the Age column fell off the edge'
+
+
+def test_the_exit_price_is_on_the_rail_for_both_directions(page):
+    """The trader wants one number back when they click: where do I get
+    out? Break-even first, then break-even plus the target — and both
+    directions, because a long leaves on the bid and a short buys back
+    on the offer."""
+    open_ladder(page)
+    page.evaluate("""() => {
+        const row = window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226'];
+        row.exit = {break_even_buy: 59.21, break_even_sell: 58.99,
+                    tp_buy: 60.21, tp_sell: 57.99,
+                    target_money: 10.0, target_pct: 2.0,
+                    margin_per_spread: 500.0,
+                    note: '2% of 500.00 margin per spread = 10.00, ' +
+                          'over commission'};
+        window.MT5Trader.render();
+    }""")
+
+    assert page.text_content('.ladder .be-buy') == '59.2100'
+    assert page.text_content('.ladder .tp-buy') == '60.2100'
+    assert page.text_content('.ladder .tp-sell') == '57.9900'
+    assert 'margin per spread' in page.text_content('.ladder .exit-note')
+
+    # A position that is ON gets its own line, anchored on the price it
+    # was ENTERED at.
+    page.evaluate("""() => {
+        const row = window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226'];
+        row.positions = [{position_id: 'P1', side: 'BUY', quantity: 1,
+                          entry_spread: 59.11, spread_units: 10,
+                          order_type: 'MARKET', leg_a: null, leg_b: null,
+                          exit: {break_even: 59.21, tp: 60.21, side: 'BUY'}}];
+        window.MT5Trader.render();
+    }""")
+    note = page.text_content('.ladder .exit-note')
+    assert 'out at 60.2100' in note and 'flat at 59.2100' in note
+
+    page.evaluate("""() => {
+        const row = window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226'];
+        row.positions = []; delete row.exit;
+    }""")
+
+
+def test_nothing_about_the_take_profit_is_sent_to_the_broker():
+    """It is a price on the SCREEN. No bracket order, no broker-side
+    stop — one leg stopping alone converts the hedge into a naked
+    position, which is the rule this whole system is built around."""
+    source = (Path(__file__).resolve().parent.parent / 'mt5trader'
+              / 'takeprofit.py').read_text(encoding='utf-8')
+    for forbidden in ('place_limit', 'order(', 'send_market_order',
+                      'sl=', 'tp='):
+        assert forbidden not in source, forbidden

@@ -97,6 +97,9 @@ class LocalLeg:
     def depth(self, symbol):
         return self.broker.depth(symbol)
 
+    def margin_for(self, symbol, side, volume, price=None):
+        return self.broker.margin_for(symbol, side, volume, price)
+
     def order(self, symbol, side, volume, slippage_points=1.0, comment=""):
         result = self.broker.send_market_order(
             symbol, OrderSide(side), volume,
@@ -280,6 +283,14 @@ class RemoteLeg:
         reply = self._request({'cmd': 'depth', 'symbol': symbol})
         if reply and reply.get('ok'):
             return reply.get('depth')
+        return None
+
+    def margin_for(self, symbol, side, volume, price=None):
+        reply = self._request({'cmd': 'margin', 'symbol': symbol,
+                               'side': side, 'volume': volume,
+                               'price': price})
+        if reply and reply.get('ok'):
+            return reply.get('margin')
         return None
 
     def order(self, symbol, side, volume, slippage_points=1.0, comment=""):

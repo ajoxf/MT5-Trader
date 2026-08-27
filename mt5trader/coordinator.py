@@ -20,7 +20,8 @@ import threading
 import time
 from datetime import datetime
 
-from . import depth as depth_book, fairvalue, hedgeratio, sizing
+from . import depth as depth_book, fairvalue, hedgeratio, sizing, \
+    takeprofit
 from .book import Book
 from .database import Store
 from .executor import PairExecutor, mark_position
@@ -78,6 +79,8 @@ class Coordinator:
         self._session_cache = {}
         #: (account, symbol) -> (at, that leg's DOM)
         self._depth_cache = {}
+        #: pair key -> (at, margin for ONE spread across both accounts)
+        self._margin_cache = {}
         self._loop_interval = None
         self._last_poll = None
         self._stop = threading.Event()
@@ -367,6 +370,42 @@ class Coordinator:
             if tick:
                 ticks[(account, symbol)] = tick
         return ticks
+
+    def margin_per_spread(self, pair):
+        """What ONE spread ties up, in money, across BOTH accounts.
+
+        Priced by the terminals themselves — margin depends on the
+        broker's leverage, the symbol's margin mode and the account
+        group, so a number computed here would be a guess wearing a
+        figure's clothes. Cached: it moves with the price, but slowly.
+
+        None when either leg cannot price it. The take-profit target
+        then shows an em dash and says why, rather than being built on
+        half a number.
+        """
+        ttl = float(self.config.get('MARGIN_TTL_SEC', 60.0))
+        now = self.clock()
+        cached = self._margin_cache.get(pair.key)
+        if cached and now - cached[0] < ttl:
+            return cached[1]
+        total = 0.0
+        for leg_name, account, symbol, lots, side in (
+                ('a', pair.account_a, pair.symbol_a, pair.clip_lots_a, 'SELL'),
+                ('b', pair.account_b, pair.symbol_b, pair.clip_lots_b, 'BUY')):
+            leg = self.legs.get(account)
+            if leg is None or not symbol or not lots:
+                total = None
+                break
+            try:
+                margin = leg.margin_for(symbol, side, lots)
+            except Exception:                 # a leg mid-restart
+                margin = None
+            if margin is None:
+                total = None
+                break
+            total += float(margin)
+        self._margin_cache[pair.key] = (now, total)
+        return total
 
     def leg_depth(self, account, symbol):
         """One leg's market depth, cached for a fraction of a second.
@@ -902,7 +941,13 @@ class Coordinator:
                     position, md, self.config.settings)
                 row = position.to_dict()
                 row.update({'gross_pnl': gross, 'net_pnl': net_pnl,
-                            'closing_spread': closing})
+                            'closing_spread': closing,
+                            # Anchored on the price this position was
+                            # ENTERED at: a take-profit that moves with
+                            # the market is not a take-profit.
+                            'exit': takeprofit.for_position(
+                                position, md, pair, self.config.settings,
+                                self.margin_per_spread(pair))})
                 positions.append(row)
                 if net_pnl is not None:
                     open_pnl += net_pnl
@@ -928,6 +973,17 @@ class Coordinator:
                 # What the CARRY says this spread should be, from the
                 # two things only the trader knows: the futures leg's
                 # expiry and the swap per day at their broker.
+                # Where to get out: break-even (the entry price plus
+                # commission, both legs, both ends) and break-even plus
+                # a target on the margin the spread ties up. A price on
+                # the screen — nothing is sent to the broker.
+                'exit': takeprofit.describe(
+                    pair, md, self.config.settings,
+                    margin_per_spread=self.margin_per_spread(pair),
+                    quantity=pair.default_quantity,
+                    spread_units=sizing.spread_units(
+                        pair.clip_lots_b,
+                        (pair.meta_b or {}).get('contract_size'))),
                 'fair': fairvalue.describe((md or {}).get('spread'),
                                            pair.swap_per_day, pair.expiry,
                                            self.session_clock.broker_now()

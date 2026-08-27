@@ -63,6 +63,11 @@ class LegServer:
                 if tick is None:
                     return {'ok': False, 'error': f"No tick for {msg['symbol']}"}
                 return {'ok': True, 'tick': tick}
+            if cmd == 'margin':
+                return {'ok': True,
+                        'margin': self.leg.margin_for(
+                            msg['symbol'], msg.get('side', 'BUY'),
+                            msg['volume'], msg.get('price'))}
             if cmd == 'depth':
                 return {'ok': True, 'depth': self.leg.depth(msg['symbol'])}
             if cmd == 'session_stats':

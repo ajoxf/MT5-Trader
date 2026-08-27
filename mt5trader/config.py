@@ -110,6 +110,15 @@ DEFAULT_SETTINGS = {
     'OVERNIGHT_CLOSE_MINUTE': 55,
     'OVERNIGHT_DEFAULT': OvernightMode.ALLOW.value,
 
+    #: The take-profit target, as a percentage of the MARGIN one spread
+    #: ties up. The exit price on the ladder is break-even — the entry
+    #: price plus commission, both legs, both ends — plus this. 0 shows
+    #: break-even alone. Nothing is ever SENT to the broker from it: it
+    #: is a price on the screen, and no leg carries a broker-side stop.
+    'TP_TARGET_PCT_OF_MARGIN': 2.0,
+    #: How often the margin for one spread is re-priced from the
+    #: terminals. It moves with the price, but slowly.
+    'MARGIN_TTL_SEC': 60.0,
     #: Margin level (%) below which the monitor calls an account tight.
     #: Margin is posted PER ACCOUNT with two brokers, so the WEAKEST
     #: account governs what the pair can carry — not the total.

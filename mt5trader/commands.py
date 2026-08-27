@@ -213,6 +213,7 @@ class CommandRunner:
         'MARKET_PROTECTION_TICKS': float,
         'CLICK_AWAY_RESTS': lambda v: bool(v),
         'REFUSE_SHARED_ACCOUNT': lambda v: bool(v),
+        'TP_TARGET_PCT_OF_MARGIN': lambda v: max(0.0, float(v)),
         'RECENTRE_SEC': lambda v: max(0.0, min(300.0, float(v))),
         'REPEG_DEAD_BAND_TICKS': float,
         'MAX_QUOTE_AGE_SEC': float,

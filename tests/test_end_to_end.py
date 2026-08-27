@@ -243,7 +243,7 @@ def browser_page(desk):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url)
-        page.wait_for_selector('.ladder tbody tr', timeout=15000)
+        page.wait_for_selector('.ladder .grid tbody tr', timeout=15000)
         page.errors = errors
         yield page
         browser.close()
@@ -289,7 +289,7 @@ def test_a_click_away_from_the_touch_rests_instead_of_being_refused(
     # Clicked in ONE evaluate: the ladder rebuilds on every publish, and
     # a row resolved in Python can be replaced before the click lands.
     page.evaluate("""() => {
-        const cells = document.querySelectorAll('.ladder tbody tr td.ask');
+        const cells = document.querySelectorAll('.ladder .grid tbody tr td.ask');
         cells[cells.length - 1].click();
     }""")
     page.wait_for_selector('.toast', timeout=8000)

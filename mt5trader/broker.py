@@ -213,6 +213,36 @@ class BrokerSession:
                 break
         return found
 
+    def margin_for(self, symbol, side, volume, price=None):
+        """Margin for `volume` lots of `symbol`, as THIS terminal
+        computes it.
+
+        Asked of MT5 rather than derived from notional: margin depends
+        on the broker's own leverage, the symbol's margin mode and the
+        account's group, and a number computed here would be a guess
+        presented as a figure. None when it cannot be computed — the
+        screen then shows an em dash rather than a target built on
+        nothing.
+        """
+        if mt5 is None:
+            return None
+        info = self.ensure_symbol(symbol)
+        if info is None:
+            return None
+        tick = mt5.symbol_info_tick(symbol)
+        if price is None:
+            price = (tick.ask if str(side).upper() == 'BUY' else tick.bid) \
+                if tick else None
+        if not price:
+            return None
+        action = (mt5.ORDER_TYPE_BUY if str(side).upper() == 'BUY'
+                  else mt5.ORDER_TYPE_SELL)
+        try:
+            return mt5.order_calc_margin(action, symbol, float(volume),
+                                         float(price))
+        except Exception:
+            return None
+
     def depth(self, symbol):
         """This symbol's market depth, or None when the broker has none.
 
