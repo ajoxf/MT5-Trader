@@ -645,3 +645,19 @@ def test_an_account_that_cannot_be_read_is_unknown_not_funded(config, legs):
 
     assert health['unknown'] == ['acct_a']
     assert health['accounts']['acct_a']['equity'] is None
+
+
+def test_the_page_stamps_its_css_and_js_so_a_stale_cache_cannot_mix(client):
+    """A browser serving last week's app.js against today's HTML is not
+    merely stale, it is MIXED: new markup with old handlers, and one
+    missing element takes out every button wired after it. The stamp is
+    what makes `git pull` enough, without a hard refresh nobody
+    remembers."""
+    body = client.get('/').get_data(as_text=True)
+
+    stamps = re.findall(r"(app\.js|ladder\.css)\?v=(\d+)", body)
+    assert {name for name, _ in stamps} == {'app.js', 'ladder.css'}
+    assert all(int(value) > 0 for _, value in stamps)
+    # And the page itself must never be the cached thing: it carries the
+    # stamp.
+    assert 'no-store' in client.get('/').headers.get('Cache-Control', '')

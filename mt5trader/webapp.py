@@ -86,9 +86,35 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
 
     # -- what the panels render from ---------------------------------------
 
+    def asset_version():
+        """A stamp that changes when the screen's own files change.
+
+        Without it a browser serves the CSS and JS it cached last week
+        against today's HTML — which is not merely stale, it is MIXED:
+        new markup with old handlers, and one missing element takes out
+        every button wired after it. `git pull` then has to be followed
+        by a hard refresh that nobody remembers, and the screen looks
+        broken in ways that are nowhere in the code.
+        """
+        newest = 0.0
+        for name in ('static/app.js', 'static/settings.js',
+                     'static/ladder.css', 'templates/index.html'):
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                name)
+            try:
+                newest = max(newest, os.path.getmtime(path))
+            except OSError:
+                pass
+        return str(int(newest))
+
     @app.get('/')
     def index():
-        return render_template('index.html')
+        response = app.make_response(
+            render_template('index.html', asset_version=asset_version()))
+        # The PAGE itself is never cached: it carries the stamp that
+        # tells the browser whether its cached CSS and JS are current.
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
     @app.get('/api/status')
     def api_status():

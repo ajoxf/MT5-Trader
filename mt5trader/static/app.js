@@ -2036,7 +2036,12 @@
     });
     el('tabs').addEventListener('click', function (e) {
       var button = e.target.closest('.tab');
-      if (button) { state.active = button.dataset.panel; render(); }
+      if (!button) { return; }
+      state.active = button.dataset.panel;
+      // Clicking a tab means "show me that window" — including when it
+      // is off the right-hand end of the desktop row.
+      state.reveal = button.dataset.panel;
+      render();
     });
     el('open-settings').addEventListener('click', function () {
       openPanel(panelId('settings'));
