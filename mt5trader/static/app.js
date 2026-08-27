@@ -22,6 +22,7 @@
   var state = {
     snapshot: {pairs: {}, accounts: {}},
     open: [],            // panel ids in taskbar order
+    closed: {},          // panels the TRADER closed — they stay closed
     active: null,
     armed: {},           // pair key -> quantity armed on the keypad
     locked: {},          // pair key -> scroll is locked
@@ -223,6 +224,7 @@
   function panelId(kind, key) { return kind + ':' + (key || ''); }
 
   function openPanel(id) {
+    delete state.closed[id];
     if (state.open.indexOf(id) < 0) { state.open.push(id); }
     state.active = id;
     render();
@@ -230,6 +232,9 @@
 
   function closePanel(id) {
     state.open = state.open.filter(function (other) { return other !== id; });
+    // Closing is a decision, and it is remembered: a ladder that came
+    // back on the next poll would be a window that cannot be closed.
+    state.closed[id] = true;
     render();
   }
 
@@ -1902,17 +1907,27 @@
           });
           if (arrived) { ghost.done = true; }
         });
-        if (!state.open.length) {
-          // First load: a ladder for every enabled pair, plus the grid.
-          Object.keys(snapshot.pairs || {}).forEach(function (key) {
-            if (snapshot.pairs[key].enabled) {
-              state.open.push(panelId('ladder', key));
-            }
-          });
+        var first = !state.open.length;
+        if (first) {
           state.open.push(panelId('grid'));
           state.open.push(panelId('monitor'));
-          state.active = state.open[0];
         }
+        // A ladder for every enabled pair — including one added while
+        // this screen was open. A pair configured on the Exchanges page
+        // and then nowhere to be seen is the whole setup looking
+        // broken; the ladder appears beside the others the moment the
+        // engine picks the pair up. A ladder the trader CLOSED stays
+        // closed: that was a decision, and it is remembered.
+        Object.keys(snapshot.pairs || {}).forEach(function (key) {
+          var id = panelId('ladder', key);
+          if (!snapshot.pairs[key].enabled) { return; }
+          if (state.open.indexOf(id) >= 0 || state.closed[id]) { return; }
+          state.open.unshift(id);
+          if (!first) {
+            toast('new ladder: ' + (snapshot.pairs[key].name || key), 'ok');
+          }
+        });
+        if (first) { state.active = state.open[0]; }
         // Redraw the PANELS only when the coordinator has actually
         // published something new. `at` is its own publish clock, so a
         // stalled or restarting engine — the state this screen is in

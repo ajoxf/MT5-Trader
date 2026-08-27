@@ -166,8 +166,11 @@ matched-minimum clip and the minimum notional from the contract specs,
 then Save. The key is built from the two symbols. The launcher restarts
 the engine within a few seconds and the ladder appears.
 
-The **+** button in the taskbar lists every ladder, the Market Grid and
-the Positions window. Windows move by their title bar and resize from
+A pair saved on the Exchanges page gets its ladder **by itself**, beside
+the ones already open, as soon as the engine picks it up — no reload. A
+ladder you close stays closed. The **+** button in the taskbar lists
+every ladder, the Market Grid and the Positions window, to open one
+again. Windows move by their title bar and resize from
 the corner grip, and where you put them is where they are after a
 reload; **Tidy** puts them back in a row.
 

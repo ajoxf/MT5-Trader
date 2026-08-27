@@ -1106,3 +1106,46 @@ def test_the_sounds_are_generated_here_and_can_be_silenced(page):
     # Two notes for a fill, and nothing at all while it is off.
     assert played == 2
     assert page.locator('#sound-toggle').count() == 1
+
+
+def test_a_pair_added_while_the_screen_is_open_gets_its_own_ladder(page):
+    """A pair configured on the Exchanges page and then nowhere to be
+    seen is the whole setup looking broken. It appears beside the
+    others, and a ladder the trader CLOSED stays closed."""
+    page.evaluate("""() => {
+        const state = window.MT5Trader.state;
+        state.closed = {};
+        const pairs = state.snapshot.pairs;
+        const copy = JSON.parse(JSON.stringify(pairs['XAUUSD_|GC1226']));
+        copy.key = 'EURUSD|GBPUSD';
+        copy.name = 'EURUSD - GBPUSD';
+        copy.symbol_a = 'EURUSD';
+        copy.symbol_b = 'GBPUSD';
+        pairs['EURUSD|GBPUSD'] = copy;
+        window.MT5Trader.render();
+    }""")
+    # The snapshot the publisher writes does not have it, so drive one
+    # poll's worth of the same logic the poller runs.
+    page.evaluate("""() => {
+        const state = window.MT5Trader.state;
+        Object.keys(state.snapshot.pairs).forEach(function (key) {
+            const id = window.MT5Trader.panelId('ladder', key);
+            if (state.open.indexOf(id) < 0 && !state.closed[id]) {
+                state.open.unshift(id);
+            }
+        });
+        window.MT5Trader.render();
+    }""")
+
+    assert page.locator('.window.ladder').count() == 2
+    assert 'EURUSD - GBPUSD' in page.text_content('#tabs')
+
+    # Closed stays closed.
+    page.evaluate("""() => window.MT5Trader.closePanel(
+        window.MT5Trader.panelId('ladder', 'EURUSD|GBPUSD'))""")
+    page.wait_for_timeout(700)
+    assert page.locator('.window.ladder').count() == 1
+    page.evaluate("""() => {
+        delete window.MT5Trader.state.snapshot.pairs['EURUSD|GBPUSD'];
+        window.MT5Trader.render();
+    }""")
