@@ -11,8 +11,19 @@
  */
 
 :root {
-  --chrome: #d4d0c8;          /* TT's window furniture grey */
+  --chrome: #d4d0c8;          /* the button/input furniture grey */
   --chrome-dark: #a9a9a9;
+  /* The reference screen's window FRAME: dark grey, with light text on
+   * it. Title bar, quote strip, rail, column headers, footer and the
+   * taskbar are all this — it is what makes the coloured columns read
+   * as bright as they do. */
+  --frame: #4a4a4a;
+  --frame-dark: #3a3a3a;
+  --frame-line: #5f5f5f;
+  --frame-text: #e8e8e8;
+  --frame-muted: #b6b6b6;
+  --price-cell: #d5d5d5;      /* the grey price column */
+  --price-line: #ffffff;
   --panel: #f0f0f0;
   --grid-line: #808080;
   --text: #1a1a1a;
@@ -139,11 +150,11 @@ body {
   align-items: center;
   gap: 6px;
   padding: 2px 4px;
-  background: linear-gradient(#3d7ebf, #2b5f96);
-  color: #fff;
+  background: var(--frame-dark);
+  color: var(--frame-text);
   font-size: 11px;
 }
-.window.inactive .titlebar { background: #9aa5b1; }
+.window.inactive .titlebar { background: #6a6a6a; }
 .titlebar .swatch {
   width: 9px; height: 9px;
   background: var(--bid);
@@ -189,8 +200,9 @@ body {
   align-items: center;
   gap: 14px;
   padding: 3px 6px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--chrome-dark);
+  background: var(--frame);
+  color: var(--frame-text);
+  border-bottom: 1px solid var(--frame-line);
 }
 .quotestrip .netchg {
   font-size: 17px;
@@ -203,15 +215,15 @@ body {
   display: flex;
   flex-direction: column;
   font-size: 10px;
-  color: var(--muted);
+  color: var(--frame-muted);
 }
-.quotestrip .stats b { font-family: var(--mono); color: var(--text); }
+.quotestrip .stats b { font-family: var(--mono); color: var(--frame-text); }
 .quotestrip label { margin-right: 3px; }
 .quotestrip .ours {
   margin-left: auto;
   font-size: 9px;
-  color: var(--muted);
-  border: 1px dotted var(--muted);
+  color: var(--frame-muted);
+  border: 1px dotted var(--frame-muted);
   padding: 0 3px;
   cursor: help;
 }
@@ -226,8 +238,9 @@ body {
   gap: 3px;
   width: 92px;
   padding: 4px;
-  background: var(--chrome);
-  border-right: 1px solid var(--chrome-dark);
+  background: var(--frame);
+  color: var(--frame-text);
+  border-right: 1px solid var(--frame-line);
 }
 .rail select,
 .rail input[type="number"] {
@@ -235,8 +248,8 @@ body {
   font: 11px var(--font);
   padding: 1px 2px;
 }
-.rail .check { font-size: 10px; }
-.rail-label { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.rail .check { font-size: 10px; color: var(--frame-text); }
+.rail-label { font-size: 10px; color: var(--frame-muted); margin-top: 4px; }
 .rail .armed {
   font-family: var(--mono);
   text-align: center;
@@ -291,7 +304,10 @@ body {
   position: relative;
   flex: 1;
   overflow-y: auto;
-  background: #fff;
+  /* The empty ladder is the frame's grey, not white: the Work and LTQ
+   * columns either side of the coloured bands are part of the window,
+   * not paper. */
+  background: #e9e9e9;
 }
 .grid table {
   border-collapse: collapse;
@@ -302,15 +318,18 @@ body {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--chrome);
-  border: 1px solid var(--grid-line);
+  background: var(--frame);
+  color: var(--frame-text);
+  border: 1px solid var(--frame-line);
   font: 600 10px var(--font);
   padding: 1px 3px;
   text-align: left;
 }
 .grid td {
   height: var(--row-h);
-  border: 1px solid #d5d5d5;
+  /* White rules on a grey ladder, as on the reference screen: the
+   * gridlines separate without competing with the coloured bands. */
+  border: 1px solid var(--price-line);
   padding: 0 3px;
   font: 11px var(--mono);
   text-align: right;
@@ -331,7 +350,11 @@ td.ask.has-qty { background: var(--ask-cell); color: #fff; }
  * ask. Never anti-aliased into a smudge, never between rows. */
 tr.market-line > td { border-top: 2px solid var(--inside); }
 
-td.price { text-align: center; font-weight: 600; }
+td.price {
+  text-align: center;
+  font-weight: 600;
+  background: var(--price-cell);
+}
 td.price.last-trade { background: var(--last-trade); }
 td.ltq.print { background: var(--traded); color: #fff; }
 
@@ -391,8 +414,9 @@ tr:hover td.price { outline: 1px solid #333; }
   gap: 10px;
   align-items: center;
   padding: 2px 6px;
-  background: var(--panel);
-  border-top: 1px solid var(--chrome-dark);
+  background: var(--frame);
+  color: var(--frame-text);
+  border-top: 1px solid var(--frame-line);
   font-size: 10px;
 }
 .footer .feed.ok { color: var(--traded); }
@@ -513,8 +537,8 @@ table.unclaimed th, table.unclaimed td {
   gap: 3px;
   height: 28px;
   padding: 2px 4px;
-  background: var(--chrome);
-  border-top: 1px solid #fff;
+  background: var(--frame);
+  border-top: 1px solid var(--frame-line);
 }
 #tabs { display: flex; gap: 3px; }
 .tab {
