@@ -197,14 +197,18 @@ python run_coordinator.py --config config.json
 pytest tests/ -q
 ```
 
-211 of them, including an end-to-end suite that runs two leg runners on
+262 of them, including an end-to-end suite that runs two leg runners on
 real sockets, a coordinator with a real database, the Flask process and
 Chromium — a click crosses every boundary except MT5 itself, survives a
 coordinator restart, and lands in the journal. Twenty-one more drive
 the UI under Playwright and read `pageerror` — Python tests cannot see a temporal-dead-zone
 `ReferenceError` that aborts a script block and silently unregisters a
 handler, and that is exactly what happened in the system this is ported
-from. They skip cleanly where no browser is installed.
+from. They skip cleanly where no browser is installed — and nothing else
+skips or fails with them: a box with no Chromium runs 231 and skips 31,
+because every test about what happens to a live position clicks through
+the command bridge when there is no browser to click with. (To get the
+browser ones too: `python -m playwright install chromium`.)
 
 They must pass before any commit, and LIVE mode must never be run
 without them. Everything is faked — `FakeBroker` keeps a real

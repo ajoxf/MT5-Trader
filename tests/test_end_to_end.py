@@ -124,6 +124,48 @@ class Desk:
         for leg in self.coordinator.legs.values():
             leg.close()
 
+    # -- the same commands the screen sends, without a browser ---------
+
+    def send(self, kind, payload, timeout=10.0):
+        """Through the REAL bridge: the file the web process writes and
+        the coordinator's own command thread drains.
+
+        A box with no Chromium still has to prove this path works — the
+        browser is the only piece missing here, and everything the click
+        actually costs money through is still in it.
+        """
+        from mt5trader.commands import CommandLog
+        command_id = CommandLog(self.paths['commands']).submit(kind, payload)
+        self.wait_for(lambda: self.result(command_id) is not None,
+                      f'the {kind} command was never executed', timeout)
+        return self.result(command_id)
+
+    def result(self, command_id):
+        try:
+            with open(self.paths['results'], 'r', encoding='utf-8') as f:
+                return json.load(f).get(command_id)
+        except (OSError, ValueError):
+            return None
+
+    def buy_the_touch(self, quantity=1.0):
+        """One click, at the price a BUY would actually cross at."""
+        key = 'XAUUSD_|GC1226'
+        md = self.coordinator.market.get(key)
+        assert md, 'no market data to click at'
+        answer = self.send('click', {'pair': key, 'side': 'BUY',
+                                     'level': md['long_spread'],
+                                     'quantity': quantity})
+        assert answer.get('ok'), answer
+        self.wait_for(lambda: self.coordinator.book.positions(),
+                      'the click never became a position')
+        return self.coordinator.book.positions()[0]
+
+    def flatten(self):
+        answer = self.send('flatten_pair', {'pair': 'XAUUSD_|GC1226'})
+        assert answer.get('ok'), answer
+        self.wait_for(lambda: not self.coordinator.book.positions(),
+                      'the flatten never emptied the book')
+
     def serve_web(self):
         from werkzeug.serving import make_server
         app = create_app(self.paths['status'], self.paths['commands'],
@@ -157,6 +199,36 @@ def desk(tmp_path_factory):
     desk.start_engine()
     yield desk
     desk.close()
+
+
+@pytest.fixture
+def pair_on(desk):
+    """A pair ON — clicked in the browser if there is one, through the
+    command bridge if there is not.
+
+    The tests below are about what happens to a LIVE position: recovery,
+    the reconciler, the journal, the record. None of that is about the
+    browser, and on a box with no Chromium they were failing for the
+    absence of one — which reads as a broken build on a machine that is
+    fine.
+    """
+    if not desk.coordinator.book.positions():
+        desk.buy_the_touch()
+    return desk.coordinator.book.positions()[0]
+
+
+@pytest.fixture
+def round_turn(desk):
+    """A completed round turn: on, and off again."""
+    if Store(desk.paths['db']).closed_positions():
+        return                       # the browser already did it
+    if not desk.coordinator.book.positions():
+        desk.buy_the_touch()
+    desk.flatten()
+    desk.wait_for(lambda: not desk.brokers['spot'].positions_by_magic(),
+                  'leg A never closed')
+    desk.wait_for(lambda: len(Store(desk.paths['db']).fills()) >= 5,
+                  'the closing fills never reached the journal')
 
 
 @pytest.fixture(scope='module')
@@ -266,7 +338,8 @@ def test_the_journal_records_what_the_broker_reported(desk, browser_page):
     assert 'Export CSV' in text
 
 
-def test_a_manual_trade_in_the_terminal_is_journalled_but_not_ours(desk):
+def test_a_manual_trade_in_the_terminal_is_journalled_but_not_ours(
+        desk, pair_on):
     """A fill on the account is a fill on the account — and it is never
     mistaken for one of ours, in the book or in the journal."""
     desk.brokers['fut'].send_market_order(
@@ -284,11 +357,11 @@ def test_a_manual_trade_in_the_terminal_is_journalled_but_not_ours(desk):
     assert len(desk.coordinator.book.positions()) == 1
 
 
-def test_the_position_survives_a_coordinator_restart(desk):
+def test_the_position_survives_a_coordinator_restart(desk, pair_on):
     """The blocker this was built for: an empty book at startup makes
     every live position look like an orphan, and sixty seconds later the
     reconciler closes them."""
-    before = desk.coordinator.book.positions()[0]
+    before = pair_on
     tickets = {
         'spot': before.leg_a.position_tickets,
         'fut': before.leg_b.position_tickets,
@@ -347,7 +420,8 @@ def test_closing_from_the_screen_leaves_both_books_empty(desk, browser_page):
                   'the closing fills never reached the journal')
 
 
-def test_the_closed_trade_is_in_the_record_after_everything(desk):
+def test_the_closed_trade_is_in_the_record_after_everything(desk,
+                                                            round_turn):
     store = Store(desk.paths['db'])
     assert store.open_positions() == []
     closed = store.closed_positions()
@@ -372,19 +446,20 @@ def test_the_closed_trade_is_in_the_record_after_everything(desk):
 
 
 def test_the_slippage_report_covers_the_session_that_was_just_traded(
-        desk, browser_page):
+        desk, round_turn):
     """The report, over a REAL session: the one this module just traded.
 
     Nothing here is modelled. The entry was measured against the price
-    the browser clicked, the exit against the touch the close was taken
-    at, and both came back through the broker, the journal and the
-    database before this test read them.
+    that was clicked, the exit against the touch the close was sent at,
+    and both came back through the broker, the journal and the database
+    before this test read them.
     """
-    page = browser_page
-    body = page.evaluate("""async () => {
-        const response = await fetch('/api/slippage');
-        return await response.json();
-    }""")
+    app = create_app(desk.paths['status'], desk.paths['commands'],
+                     desk.paths['results'], desk.paths['config'],
+                     desk.paths['db'])
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get('/api/slippage').get_json()
 
     assert body['ok']
     assert body['counts']['positions'] == 1
@@ -403,9 +478,13 @@ def test_the_slippage_report_covers_the_session_that_was_just_traded(
     assert body['window']['clock'] == 'broker'
     assert body['journal']['fills'] >= 4
 
+
+def test_the_slippage_report_is_on_the_screen(desk, browser_page, round_turn):
+    page = browser_page
     page.evaluate("""() => {
         window.MT5Trader.state.open = ['monitor:'];
         window.MT5Trader.state.monitorTab = 'slippage';
+        window.MT5Trader.state.slippage = null;
         window.MT5Trader.render();
     }""")
     page.wait_for_function(
@@ -414,7 +493,7 @@ def test_the_slippage_report_covers_the_session_that_was_just_traded(
     text = page.text_content('.monitor .pane')
     assert 'Entries by ladder' in text and 'XAUUSD_|GC1226' in text
     assert 'MARKET' in text                      # by order type
-    assert 'Round turn' in text
+    assert 'unmeasured' not in text              # everything was priced
     assert page.errors == []
 
 
