@@ -257,6 +257,33 @@ body {
   border: 1px solid var(--grid-line);
   padding: 2px 0;
 }
+/* Armed is a DIFFERENT state from the ladder's default size, and one
+ * click sends it — so it does not look the same. */
+.rail .armed.on {
+  background: #ffd43b;
+  border-color: #b8860b;
+  font-weight: 700;
+}
+.keypad button.on {
+  background: #ffd43b;
+  border-color: #b8860b;
+  font-weight: 700;
+}
+
+/* Which two accounts this ladder is routed across. */
+.route-box {
+  font-size: 10px;
+  color: var(--frame-muted);
+  background: var(--frame-dark);
+  border: 1px solid var(--frame-line);
+  padding: 2px 3px;
+}
+.route-box b {
+  display: block;
+  color: var(--frame-text);
+  font-family: var(--mono);
+}
+.route-box .hint { color: var(--frame-muted); font-size: 9px; }
 .keypad { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
 .keypad button {
   font: 11px var(--font);
@@ -279,8 +306,12 @@ body {
   color: #fff;
 }
 .quick small { font-weight: 400; opacity: .85; }
-.buy-touch { background: var(--bid); }
-.sell-touch { background: var(--ask); }
+/* The button takes the colour of the COLUMN it acts on: buying the
+ * spread lifts the offer, which is the red Asks side; selling hits the
+ * bid, which is the blue Bids side. A button coloured the other way is
+ * a button that reads as the opposite trade. */
+.buy-touch { background: var(--ask); }
+.sell-touch { background: var(--bid); }
 .flatten { background: #444; }
 .quick:hover { filter: brightness(1.15); }
 
@@ -425,6 +456,8 @@ tr:hover td.price { outline: 1px solid #333; }
 .footer .pnl.up { color: var(--traded); }
 .footer .pnl.down { color: var(--down); }
 .footer .errors { color: var(--ask); font-weight: 600; }
+.footer .legs { font-family: var(--mono); color: var(--frame-muted); }
+.footer .legs .bad { color: #ff8787; font-weight: 700; }
 
 /* -- the Market Grid ------------------------------------------------ */
 
@@ -541,6 +574,59 @@ table.unclaimed th, table.unclaimed td {
   border-top: 1px solid var(--frame-line);
 }
 #tabs { display: flex; gap: 3px; }
+
+/* The + menu: every ladder this installation has. */
+.menu {
+  position: fixed;
+  bottom: 32px;
+  left: 6px;
+  z-index: 60;
+  min-width: 260px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 4px;
+  background: var(--frame);
+  border: 1px solid var(--frame-line);
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, .35);
+}
+.menu-title {
+  padding: 3px 4px;
+  color: var(--frame-muted);
+  font: 700 10px var(--font);
+  text-transform: uppercase;
+}
+.menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  background: none;
+  border: 0;
+  color: var(--frame-text);
+  font: 12px var(--font);
+  cursor: pointer;
+}
+.menu button small {
+  display: block;
+  color: var(--frame-muted);
+  font-size: 10px;
+}
+.menu button:hover { background: var(--bid); }
+.menu-note { padding: 4px 6px; color: var(--frame-muted); font-size: 11px; }
+/* "Is it working?", always on screen. Green only when both accounts
+ * answered AND every enabled ladder is quoting. */
+.link {
+  padding: 2px 8px;
+  font: 700 11px var(--font);
+  color: #fff;
+  border: 1px solid rgba(0, 0, 0, .35);
+  cursor: help;
+}
+.link.ok { background: #1b7a35; }
+.link.warn { background: #b8860b; }
+.link.bad { background: var(--ask); }
+.link.unknown { background: #6a6a6a; }
+.tab.off { opacity: .6; text-decoration: line-through; }
 .tab {
   display: flex;
   align-items: center;

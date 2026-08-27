@@ -125,8 +125,26 @@ That is the product, so it is the default and it is fast:
 - The order appears on the ladder **before the engine answers**: the row
   flashes and a hatched ghost sits in the Work column until the real
   order arrives. A trader who cannot see their click clicks again.
-- **BUY / SELL / FLAT** on the rail hit the touch and get flat without
-  hunting for a row.
+- **The Asks column BUYS the spread** (buy leg B, sell leg A); the Bids
+  column sells it. The rail's BUY button is red and SELL is blue for
+  the same reason — a button takes the colour of the column it acts on.
+- **A click away from the touch RESTS.** A buy under the offer cannot
+  cross at any price, so it becomes a working order at that level and
+  the toast says so. `CLICK_AWAY_RESTS` turns that off and the click is
+  refused instead.
+- **BUY / SELL / FLATTEN** on the rail hit the touch and get flat
+  without hunting for a row.
+- **The ladder centres on the mid**, re-centres every `RECENTRE_SEC`
+  (5s by default; 0 = only when the market leaves the window), and
+  leaves a hand-scrolled ladder alone for four seconds so an order can
+  be placed twenty rows away. Lock stops it entirely.
+- **Sound**: one blip when an order is placed, two rising notes when
+  one fills, a low note when one is cancelled — generated in the page
+  with WebAudio, so nothing can be silenced by a blocked network. Off
+  is one click in the taskbar, and so is turning the **keyboard** off
+  entirely: B and S are orders.
+- **One line says whether it is working**, always on screen: green only
+  when both accounts answered AND every enabled ladder is quoting.
 - **Keyboard**: `B` buy at the offer, `S` sell at the bid, `F` flatten,
   `X` cancel this ladder, `1`–`5` arm 1/5/10/50/100, `0` clear, `L`
   lock the scroll, `M` switch LIMIT↔MARKET, `Tab` next ladder, `?` the
@@ -134,6 +152,24 @@ That is the product, so it is the default and it is fast:
 
 Flatten and the global kill still ask once — they are irreversible and
 they are the buttons pressed in a hurry.
+
+## More than one spread
+
+Every pair is its own ladder, and they trade side by side on one
+desktop: Spot silver vs the silver future, WTI vs Brent, gold basis —
+as many as the two accounts carry symbols for.
+
+Add one on **Exchanges → Pairs → New pair**: pick the account and
+symbol for each leg (Find lists what each broker actually offers),
+press **Read both legs from MT5** to derive β, the increment, the
+matched-minimum clip and the minimum notional from the contract specs,
+then Save. The key is built from the two symbols. The launcher restarts
+the engine within a few seconds and the ladder appears.
+
+The **+** button in the taskbar lists every ladder, the Market Grid and
+the Positions window. Windows move by their title bar and resize from
+the corner grip, and where you put them is where they are after a
+reload; **Tidy** puts them back in a row.
 
 ## Running it — one file
 

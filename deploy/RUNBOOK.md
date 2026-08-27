@@ -85,6 +85,24 @@ refusal appears on the ladder in the broker's own words.
 - **Anything at the broker it cannot explain is left alone** and listed
   on a red banner for you to adopt or close by hand.
 
+## The ladder, in one paragraph
+
+The **Asks** column buys the spread (buy leg B, sell leg A); the
+**Bids** column sells it. Clicking at the touch crosses immediately in
+MARKET mode; clicking away from the touch leaves a **working order** at
+that price, and the message says which it did. The ladder keeps the mid
+in the middle and re-centres every few seconds, except while you are
+scrolling it by hand — and **Lock** on the rail stops it moving at all.
+The taskbar has **Sound** and **Keys** switches, and one badge that is
+green only when both accounts answered and every ladder is quoting.
+
+## More than one spread
+
+Each pair is its own ladder and they run side by side. Add one on
+**Exchanges → Pairs → New pair**, pick each leg's account and symbol,
+press **Read both legs from MT5**, then Save. The **+** button lists
+every ladder to open.
+
 ## Margin
 
 The **Accounts** tab of the Positions window shows each account's

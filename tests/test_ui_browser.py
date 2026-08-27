@@ -225,7 +225,31 @@ def test_a_limit_click_places_one_order_and_asks_nothing(page):
     assert command_count(page) == before + 1
     command = last_command(page)
     assert command['kind'] == 'click'
-    assert command['payload']['side'] == 'BUY'
+    # The BIDS column SELLS the spread — sell leg B, buy leg A — and the
+    # Asks column buys it. Getting this pair of columns the wrong way
+    # round is the most expensive mistake this screen could make.
+    assert command['payload']['side'] == 'SELL'
+
+
+def test_the_asks_column_buys_the_spread_and_the_bids_column_sells_it(page):
+    """Stated as its own test because it is a definition, not a
+    preference: buying the spread is buying leg B and selling leg A,
+    and that is what the ASK side of the ladder offers."""
+    page.locator('.ladder tbody tr td.ask').nth(3).click()
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload']['side'] == 'BUY'
+
+    page.locator('.ladder tbody tr td.bid').nth(3).click()
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload']['side'] == 'SELL'
+
+    # ...and the buttons carry the colour of the column they act on.
+    buy = page.locator('.ladder .buy-touch')
+    sell = page.locator('.ladder .sell-touch')
+    assert buy.evaluate('n => getComputedStyle(n).backgroundColor') == \
+        'rgb(176, 28, 28)'
+    assert sell.evaluate('n => getComputedStyle(n).backgroundColor') == \
+        'rgb(26, 111, 181)'
 
 
 def test_three_clicks_at_one_price_send_three_orders(page):
@@ -248,8 +272,11 @@ def test_a_market_click_fires_on_ONE_click(page):
     page.select_option('.ladder .order-type', 'MARKET')
     page.paths['publisher'].order_type = 'MARKET'
     page.wait_for_selector('.window.mode-market', timeout=3000)
-    cursor = page.locator('.ladder tbody td.bid').first.evaluate(
-        'n => getComputedStyle(n).cursor')
+    # Read in ONE evaluate: the ladder repaints on every publish, and a
+    # node resolved in Python can be replaced before the style is read.
+    cursor = page.evaluate(
+        "() => getComputedStyle(document.querySelector("
+        "'.window.mode-market tbody td.bid')).cursor")
     assert cursor == 'crosshair'
 
     before = command_count(page)
@@ -383,7 +410,9 @@ def test_one_key_is_one_order_too(page):
 
     page.keyboard.press('0')                        # back to the default
     page.wait_for_timeout(120)
-    assert page.text_content('.ladder .armed') == '--'
+    # Never blank: the box says what ONE CLICK sends, which with
+    # nothing armed is this ladder's own default size.
+    assert page.text_content('.ladder .armed') == '1'
 
 
 def test_x_pulls_this_ladders_orders_and_l_locks_the_scroll(page):
@@ -730,9 +759,12 @@ def tidy(page):
 def open_ladder(page):
     """The settings tests leave the desk showing their own panel; these
     are about a window, so put one on it."""
+    page.wait_for_function(
+        "() => Object.keys((window.MT5Trader.state.snapshot || {}).pairs "
+        "|| {}).length > 0", timeout=5000)
     page.evaluate("""() => {
         const state = window.MT5Trader.state;
-        const key = Object.keys(state.snapshot.pairs)[0];
+        const key = Object.keys(state.snapshot.pairs || {})[0];
         state.open = [window.MT5Trader.panelId('ladder', key)];
         window.MT5Trader.render();
     }""")
@@ -960,3 +992,117 @@ def test_a_new_pairs_key_is_built_from_its_two_symbols(page):
 
     assert any('XAUUSD%7CGCZ6' in url or 'XAUUSD|GCZ6' in url
                for url in saved), saved
+
+
+def test_the_ladder_centres_on_the_mid_and_leaves_a_hand_scroll_alone(page):
+    """Both halves matter: the market belongs in the middle, and a
+    trader reading a level twenty rows away must not have it snatched
+    back under the cursor."""
+    open_ladder(page)
+    tidy(page)
+    page.evaluate("() => { window.MT5Trader.state.locked = {}; }")
+    page.wait_for_timeout(600)
+
+    centred = page.evaluate("""() => {
+        const grid = document.querySelector('.ladder .grid');
+        const rows = [...document.querySelectorAll('.ladder tbody tr')];
+        const mid = window.MT5Trader.state.snapshot
+            .pairs['XAUUSD_|GC1226'].market.spread;
+        const row = rows.reduce((best, r) =>
+            Math.abs(r.dataset.level - mid) < Math.abs(best.dataset.level - mid)
+                ? r : best);
+        const top = row.offsetTop - grid.scrollTop;
+        return {top: top, height: grid.clientHeight};
+    }""")
+    # The mid row sits in the middle third of the window, not at an edge.
+    assert centred['height'] / 3 < centred['top'] < \
+        centred['height'] * 2 / 3
+
+    # Now scroll by hand and hold it there through several polls.
+    page.evaluate("""() => {
+        const grid = document.querySelector('.ladder .grid');
+        grid.scrollTop = 0;
+        grid.dispatchEvent(new Event('scroll'));
+    }""")
+    page.wait_for_timeout(1200)
+    assert page.evaluate(
+        "() => document.querySelector('.ladder .grid').scrollTop") == 0
+
+
+def test_the_taskbar_says_whether_the_whole_thing_is_working(page):
+    """One line, always on screen: both accounts attached AND every
+    enabled ladder quoting. Anything less is not green."""
+    page.wait_for_timeout(400)
+    badge = page.locator('#link-badge')
+    assert 'LIVE' in badge.text_content()
+    assert 'ok' in (badge.get_attribute('class') or '')
+
+    # A ladder with no quote is not "connected", whatever the accounts
+    # say — the pair cannot be traded.
+    page.evaluate("""() => {
+        const state = window.MT5Trader.state;
+        state.snapshot.pairs['XAUUSD_|GC1226'].market = null;
+        window.MT5Trader.render();
+    }""")
+    assert 'NO QUOTE' in page.text_content('#link-badge')
+
+
+def test_the_keyboard_can_be_turned_off_entirely(page):
+    """B and S are ORDERS. A desk that does not want a keyboard near
+    them can have none — and the buttons still work."""
+    open_ladder(page)
+    page.click('.ladder .titlebar')
+    page.click('#keys-toggle')
+    before = command_count(page)
+
+    page.keyboard.press('b')
+    page.wait_for_timeout(250)
+
+    assert command_count(page) == before
+    assert 'off' in page.text_content('#keys-toggle')
+    # The button beside it still sends: turning the keys off is not
+    # turning trading off.
+    page.click('.ladder .buy-touch')
+    page.wait_for_timeout(250)
+    assert command_count(page) == before + 1
+    page.click('#keys-toggle')
+
+
+def test_every_ladder_is_reachable_from_one_menu(page):
+    """A desk trades several spreads at once — Spot vs Future, WTI vs
+    Brent — and each one is a window on this desktop."""
+    page.click('#add-panel')
+    page.wait_for_selector('#add-menu:not(.hidden)', timeout=5000)
+
+    text = page.text_content('#add-menu')
+    assert 'Gold basis' in text and 'XAUUSD_' in text
+    assert 'Market Grid' in text and 'Positions' in text
+
+    page.click('#add-menu button[data-panel="monitor:"]')
+    page.wait_for_selector('.window.monitor', timeout=5000)
+    assert page.locator('#add-menu.hidden').count() == 1
+    page.click('.window.monitor .titlebar .close')
+
+
+def test_the_sounds_are_generated_here_and_can_be_silenced(page):
+    """No files, nothing fetched: a blocked network must not be able to
+    silence a fill. And silence is a first-class setting."""
+    played = page.evaluate("""() => {
+        const seen = [];
+        const Ctor = window.AudioContext || window.webkitAudioContext;
+        const original = Ctor.prototype.createOscillator;
+        Ctor.prototype.createOscillator = function () {
+            const osc = original.call(this);
+            seen.push(true);
+            return osc;
+        };
+        window.MT5Trader.sound('filled');
+        window.MT5Trader.state.soundOff = true;
+        window.MT5Trader.sound('filled');
+        window.MT5Trader.state.soundOff = false;
+        Ctor.prototype.createOscillator = original;
+        return seen.length;
+    }""")
+    # Two notes for a fill, and nothing at all while it is off.
+    assert played == 2
+    assert page.locator('#sound-toggle').count() == 1

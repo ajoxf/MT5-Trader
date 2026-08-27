@@ -408,6 +408,21 @@ class Coordinator:
         md = self.market.get(pair_key)
         quantity = pair.default_quantity if quantity is None else quantity
 
+        if pair.order_type is OrderType.MARKET and \
+                self._away_from_the_market(pair, side, md, level):
+            # A ladder click away from the touch is an order to WORK,
+            # not an order to refuse. In MARKET mode the trader is
+            # saying "cross now" — but a buy under the offer cannot
+            # cross now at any price, and the only honest readings are
+            # "rest it here" or "do nothing". TT rests it, and so does
+            # this; the toast says which it did, because a market click
+            # that quietly became a working order is a surprise.
+            order = self.book.add_order(pair, side, level, quantity)
+            self.quoter.group_for(pair, order)
+            return {'ok': True, 'order': order.to_dict(), 'rested': True,
+                    'reason': f'{level:g} is away from the market — '
+                              f'resting here as a working order'}
+
         if pair.order_type is OrderType.MARKET:
             result = self.executor.market_entry(pair, side, md, quantity,
                                                 level)
@@ -428,6 +443,30 @@ class Coordinator:
         order = self.book.add_order(pair, side, level, quantity)
         self.quoter.group_for(pair, order)
         return {'ok': True, 'order': order.to_dict()}
+
+    def _away_from_the_market(self, pair, side, md, level):
+        """Is this click at a price the market cannot fill right now?
+
+        A BUY under the offer and a SELL over the bid are the two, and
+        they are the ordinary way a ladder is used: click where you want
+        to be, and wait there. Neither is an error, and refusing them
+        was making the ladder's whole left-hand side dead.
+
+        Unknown prices are NOT "away": with no market the executor's own
+        refusal is the right answer, and it names what is missing.
+        """
+        if not self.config.get('CLICK_AWAY_RESTS', True):
+            return False
+        if not md or level is None:
+            return False
+        side = SpreadSide(getattr(side, 'value', side))
+        increment = pair.effective_increment() or 0.0
+        edge = increment / 2.0
+        if side is SpreadSide.BUY:
+            offer = md.get('long_spread')
+            return offer is not None and level < offer - edge
+        bid = md.get('short_spread')
+        return bid is not None and level > bid + edge
 
     def cancel_order(self, order_id):
         with self.lock:
@@ -760,6 +799,12 @@ class Coordinator:
             'confirm_market_clicks': bool(
                 self.config.get('CONFIRM_MARKET_CLICKS', False)),
             'row_height_px': self.config.get('ROW_HEIGHT_PX', 17),
+            #: How often the ladder re-centres on the mid, and whether a
+            #: click away from the touch rests. Both are read from the
+            #: ENGINE, never from the screen's own idea of them.
+            'recentre_sec': self.config.get('RECENTRE_SEC', 5.0),
+            'click_away_rests': bool(self.config.get('CLICK_AWAY_RESTS',
+                                                     True)),
             'command_poll_sec': self.config.get('COMMAND_POLL_SEC', 0.02),
             # Published so a slow ladder can be blamed on the right
             # process instead of argued about (spec §9).

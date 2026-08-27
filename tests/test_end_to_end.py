@@ -275,26 +275,50 @@ def test_a_click_in_the_browser_reaches_both_brokers(desk, browser_page):
     assert page.errors == []
 
 
-def test_a_click_far_through_the_touch_is_refused_in_words(desk,
-                                                            browser_page):
-    """Market-WITH-protection, end to end: the refusal is made by the
-    engine, and the words that come back are the engine's own."""
+def test_a_click_away_from_the_touch_rests_instead_of_being_refused(
+        desk, browser_page):
+    """A buy under the offer cannot cross at any price. The trader
+    clicking there means "work it here", so it rests — and the toast
+    says so, because a market click that quietly became a working order
+    is a surprise."""
     page = browser_page
     before = len(desk.brokers['spot'].sent)
 
-    # A BUY far BELOW the touch: the market would fill it well through
-    # the price named, which is exactly what the protection is for.
-    # (Above the touch is not a breach — the market there is BETTER than
-    # the price clicked.)
+    # The ASK column BUYS the spread; far down the ladder is a price
+    # well under the offer.
     rows = page.locator('.ladder tbody tr')
-    rows.nth(rows.count() - 3).locator('td.bid').click()
-    page.wait_for_selector('.toast:not(.ok)', timeout=8000)
+    rows.nth(rows.count() - 3).locator('td.ask').click()
+    page.wait_for_selector('.toast', timeout=8000)
 
-    toast = page.text_content('.toast:not(.ok)')
-    assert 'protection' in toast
-    assert 'Nothing was sent' in toast
-    assert len(desk.brokers['spot'].sent) == before      # and nothing was
-    page.click('.toast:not(.ok)')
+    assert 'away from the market' in page.text_content('.toast')
+    assert 'working order' in page.text_content('.toast')
+    # Nothing was sent to either broker: it is resting in the book.
+    assert len(desk.brokers['spot'].sent) == before
+    desk.wait_for(lambda: desk.coordinator.book.orders('XAUUSD_|GC1226'),
+                  'the click never became a working order')
+    page.click('.toast')
+    desk.send('cancel_where', {'pair': 'XAUUSD_|GC1226'})
+    desk.wait_for(lambda: not desk.coordinator.book.orders('XAUUSD_|GC1226'),
+                  'the working order was never pulled')
+
+
+def test_with_resting_turned_off_that_same_click_is_refused_in_words(desk):
+    """The control. With CLICK_AWAY_RESTS off the old behaviour is back
+    — refused, in the engine's own words, and nothing sent."""
+    desk.coordinator.config.settings['CLICK_AWAY_RESTS'] = False
+    before = len(desk.brokers['spot'].sent)
+    md = desk.coordinator.market['XAUUSD_|GC1226']
+
+    answer = desk.send('click', {'pair': 'XAUUSD_|GC1226', 'side': 'BUY',
+                                 'level': md['long_spread'] - 5.0,
+                                 'quantity': 1.0})
+
+    assert answer['ok'] is False or answer['data'].get('refused')
+    words = json.dumps(answer)
+    assert 'protection' in words
+    assert len(desk.brokers['spot'].sent) == before
+    assert not desk.coordinator.book.orders('XAUUSD_|GC1226')
+    desk.coordinator.config.settings['CLICK_AWAY_RESTS'] = True
 
 
 def test_the_position_and_its_legs_appear_on_the_screen(desk, browser_page):

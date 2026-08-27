@@ -63,6 +63,18 @@ DEFAULT_SETTINGS = {
     #: on and every market click asks first; it is a deliberate choice
     #: for a desk that wants the extra gesture, not the default.
     'CONFIRM_MARKET_CLICKS': False,
+    #: A click AWAY from the touch, in MARKET mode, rests as a working
+    #: order instead of being refused. A buy under the offer cannot
+    #: cross at any price, and "rest it here" is what a trader means by
+    #: clicking there — refusing it made the whole far side of the
+    #: ladder dead. Turn this off to have such a click refused instead.
+    'CLICK_AWAY_RESTS': True,
+    #: How often the ladder re-centres itself on the mid, in seconds.
+    #: 0 re-centres only when the market leaves the visible window; the
+    #: Lock tick on the rail stops it entirely. A ladder that re-centres
+    #: under a click is how a trader clicks the wrong price, so this is
+    #: a comfort setting with a real edge to it.
+    'RECENTRE_SEC': 5.0,
     #: Ladder row height in pixels. 17 is the reference screen's; a
     #: bigger target is a faster, safer click on a large monitor.
     'ROW_HEIGHT_PX': 17,

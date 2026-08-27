@@ -25,6 +25,9 @@
     active: null,
     armed: {},           // pair key -> quantity armed on the keypad
     locked: {},          // pair key -> scroll is locked
+    scrolledAt: {},      // pair key -> when the TRADER last scrolled it
+    centredAt: {},       // pair key -> when we last centred it on the mid
+    centring: {},        // pair key -> that scroll event was ours
     filtered: {},        // pair key -> hide rows with nothing on them
     monitorTab: 'positions',
     // Clicks that have been sent but are not in a snapshot yet. The
@@ -33,6 +36,15 @@
     // click clicks again.
     pending: [],
     help: false,
+    // The one-key shortcuts, which a desk may not want at all: B and S
+    // are orders, and a keyboard nobody meant to touch is a click
+    // nobody meant to make.
+    keysOff: false,
+    // Sound on placed / filled / cancelled, and how many positions the
+    // last snapshot had — a resting order that fills is a fill nobody
+    // clicked for.
+    soundOff: false,
+    positionCount: null,
     // The journal, from the database. Not in the snapshot: it is the
     // BROKER's record, it outlives the process, and it is read on its
     // own slow clock rather than three times a second.
@@ -95,6 +107,60 @@
     el('modal')._onConfirm = null;
   }
 
+  // -- sound -------------------------------------------------------------
+  //
+  // Generated here, with WebAudio: no files, nothing fetched, nothing
+  // that a blocked CDN or a missing asset can silence. Three events, and
+  // they are deliberately different in shape rather than in pitch alone
+  // — a desk hears these across a room and must not have to work out
+  // which one it was.
+  //
+  //   placed     one short blip
+  //   filled     two notes, rising — the one that means money moved
+  //   cancelled  one low, flat note
+  //
+  // Off is a first-class setting: some desks want silence, and a sound
+  // nobody asked for is worse than none.
+
+  var TONES = {
+    placed: [{hz: 880, ms: 70, gain: 0.05}],
+    filled: [{hz: 660, ms: 80, gain: 0.07}, {hz: 1040, ms: 130, gain: 0.07}],
+    cancelled: [{hz: 320, ms: 110, gain: 0.05}],
+    refused: [{hz: 180, ms: 200, gain: 0.06}]
+  };
+  var audio = null;
+
+  function sound(name) {
+    if (state.soundOff) { return; }
+    var tones = TONES[name];
+    if (!tones) { return; }
+    try {
+      var Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) { return; }
+      audio = audio || new Ctor();
+      // Browsers start the context suspended until a gesture. Every
+      // sound here follows a click, so this resolves on the first one.
+      if (audio.state === 'suspended') { audio.resume(); }
+      var at = audio.currentTime;
+      tones.forEach(function (tone) {
+        var osc = audio.createOscillator();
+        var gain = audio.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = tone.hz;
+        gain.gain.setValueAtTime(tone.gain, at);
+        // Ramped down rather than cut: a square edge clicks.
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + tone.ms / 1000);
+        osc.connect(gain).connect(audio.destination);
+        osc.start(at);
+        osc.stop(at + tone.ms / 1000);
+        at += tone.ms / 1000;
+      });
+    } catch (e) {
+      // No audio device, or a policy that forbids it. Never a reason
+      // for anything on this screen to stop working.
+    }
+  }
+
   function send(kind, payload, then) {
     return fetch('/api/command', {
       method: 'POST',
@@ -114,6 +180,19 @@
     });
   }
 
+  function soundFor(result) {
+    /* What the ENGINE says happened, not what the click intended: a
+     * market click that was refused must not sound like a fill. */
+    if (!result) { return; }
+    var data = result.data || {};
+    if (result.ok === false || data.refused) { return sound('refused'); }
+    if (data.position) { return sound('filled'); }
+    if (data.order) { return sound('placed'); }
+    if (data.cancelled !== undefined || data.closed !== undefined) {
+      return sound('cancelled');
+    }
+  }
+
   function pollResult(id, then, tries) {
     tries = tries || 0;
     return fetch('/api/result/' + id).then(function (r) { return r.json(); })
@@ -126,6 +205,7 @@
             }, 150);
           });
         }
+        soundFor(result);
         if (result && result.ok === false) {
           toast(result.error || 'the engine refused that');
         } else if (result && result.data && result.data.reason) {
@@ -448,14 +528,24 @@
     node.querySelector('.cxl-all').addEventListener('click', function () {
       send('cancel_where', {pair: key});
     });
+    node.querySelector('.grid').addEventListener('scroll', function () {
+      // A scroll we did not make is the trader looking somewhere:
+      // leave the window where they put it (SCROLL_GRACE_MS).
+      if (state.centring[key]) { return; }
+      state.scrolledAt[key] = Date.now();
+    });
     node.querySelector('tbody').addEventListener('click', function (e) {
       var cell = e.target.closest('td');
       if (!cell) { return; }
       var row = cell.closest('tr');
       var level = parseFloat(row.dataset.level);
-      if (cell.classList.contains('bid')) {
+      if (cell.classList.contains('ask')) {
+        // The ASK side is where you BUY the spread: buy leg B, sell
+        // leg A. The Bids side is the other way round. This mapping is
+        // the desk's, and every colour, tooltip and button on the
+        // window follows it.
         clickLevel(key, 'BUY', level);
-      } else if (cell.classList.contains('ask')) {
+      } else if (cell.classList.contains('bid')) {
         clickLevel(key, 'SELL', level);
       } else if (cell.classList.contains('work') && cell.dataset.orderId) {
         // Click the Work cell to pull ONE of the orders resting there.
@@ -598,8 +688,32 @@
     setValue(node.querySelector('.overnight'), row.overnight);
     setValue(node.querySelector('.increment'), row.increment);
     setValue(node.querySelector('.default-qty'), row.default_quantity);
-    node.querySelector('.armed').textContent =
-      state.armed[key] ? String(state.armed[key]) : '--';
+    var armed = node.querySelector('.armed');
+    // Never blank: this box says what ONE CLICK will send, which is the
+    // armed size if there is one and the ladder's default otherwise.
+    armed.textContent = state.armed[key]
+      ? String(state.armed[key])
+      : (row.default_quantity === null || row.default_quantity === undefined
+          ? '--' : String(row.default_quantity));
+    armed.classList.toggle('on', !!state.armed[key]);
+    Array.prototype.forEach.call(node.querySelectorAll('.keypad .qty'),
+      function (button) {
+        button.classList.toggle('on',
+          !!state.armed[key] &&
+          parseFloat(button.dataset.qty) === state.armed[key]);
+      });
+    // Which accounts this ladder is routed across, and their logins.
+    var accounts = state.snapshot.accounts || {};
+    function routeText(account, symbol) {
+      var info = accounts[account] || {};
+      var login = info.login ? ' #' + info.login : '';
+      return (symbol || '?') + '<div class="hint">' + (account || '?') +
+        login + '</div>';
+    }
+    node.querySelector('.route-a b').innerHTML =
+      routeText(row.account_a, row.symbol_a);
+    node.querySelector('.route-b b').innerHTML =
+      routeText(row.account_b, row.symbol_b);
     node.querySelector('.count-b').textContent = row.working_buys || '';
     node.querySelector('.count-s').textContent = row.working_sells || '';
     node.querySelector('.count-all').textContent =
@@ -632,7 +746,35 @@
       fmt(row.clip_lots_b, 2) + ' B, ' + money(row.spread_units) +
       ' per 1.00';
     node.querySelector('.errors').textContent = (row.errors || []).join(' ');
+    node.querySelector('.legs').innerHTML = legFeed(row, market);
     return node;
+  }
+
+  function legFeed(row, market) {
+    /* Each leg's own quote, and how long since it last CHANGED.
+     *
+     * A spread that is not moving is one leg that is not moving, and
+     * without this the screen cannot say which — the trader is left
+     * looking at a still number with no way to tell a quiet market from
+     * a dead feed. Ages come from the engine's quote-identity tracker,
+     * so a broker that re-sends the same tick does not read as fresh.
+     */
+    if (!market || market.leg_a_bid === undefined) {
+      return '<span class="bad">no quote from either leg yet</span>';
+    }
+    function leg(label, symbol, bid, ask, age) {
+      var stale = age !== null && age !== undefined && age > 5;
+      return '<span class="' + (stale ? 'bad' : '') + '">' + label + ' ' +
+        (symbol || '?') + ' ' + fmt(bid, 2) + '/' + fmt(ask, 2) +
+        (age === null || age === undefined
+          ? '' : ' ' + age.toFixed(1) + 's') + '</span>';
+    }
+    return leg('A', row.symbol_a, market.leg_a_bid, market.leg_a_ask,
+               market.leg_a_quote_age_sec) + ' &nbsp; ' +
+      leg('B', row.symbol_b, market.leg_b_bid, market.leg_b_ask,
+          market.leg_b_quote_age_sec) + ' &nbsp; ' +
+      'spread ' + fmt(market.short_spread, 4) + ' / ' +
+      fmt(market.long_spread, 4);
   }
 
   function badgeClass(badge) {
@@ -713,12 +855,14 @@
           'engine">' + ghostQty + '</span>' : '') + '</td>';
       // MT5 publishes no depth for a spread, so only the touch is real.
       html += '<td class="bid' + (line.is_best_bid ? ' has-qty' : '') +
-        '" title="Click: BUY the spread at ' + fmt(level, 4) + '">' +
+        '" title="Click: SELL the spread at ' + fmt(level, 4) +
+        ' (sell leg B, buy leg A)">' +
         (line.is_best_bid ? '▲' : '') + '</td>';
       html += '<td class="price' + (isLast ? ' last-trade' : '') + '">' +
         fmt(level, digitsFor(row.increment)) + '</td>';
       html += '<td class="ask' + (line.is_best_ask ? ' has-qty' : '') +
-        '" title="Click: SELL the spread at ' + fmt(level, 4) + '">' +
+        '" title="Click: BUY the spread at ' + fmt(level, 4) +
+        ' (buy leg B, sell leg A)">' +
         (line.is_best_ask ? '▼' : '') + '</td>';
       html += '<td class="ltq' + (isLast ? ' print' : '') + '">' +
         (isLast ? fmt(lastPrint.quantity, 2) : '') + '</td>';
@@ -726,25 +870,68 @@
     });
     body.innerHTML = html;
 
-    if (!state.locked[key]) {
-      // Centre BETWEEN the two touches, not on one of them: on a wide
-      // book the other side is otherwise scrolled off the screen, and a
-      // side you cannot see is a side you cannot trade. LOCKED, nothing
-      // moves — a ladder that re-centres under a click is how a trader
-      // clicks the wrong price.
-      var bidRow = body.querySelector('tr.market-line');
-      var askRows = body.querySelectorAll('tr.in-ask');
-      var askRow = askRows.length ? askRows[askRows.length - 1] : null;
-      var anchor = bidRow || askRow;
-      if (anchor) {
-        var middle = askRow && bidRow
-          ? (askRow.offsetTop + bidRow.offsetTop + bidRow.offsetHeight) / 2
-          : anchor.offsetTop;
-        var grid = node.querySelector('.grid');
-        grid.scrollTop = middle - grid.clientHeight / 2;
+    if (shouldRecentre(key, node, market)) { centreOnMid(node, key, market); }
+  }
+
+  //: How long the ladder leaves a hand-scrolled window alone before it
+  //: re-centres. A ladder that snaps back while the trader is reading
+  //: a level twenty rows away is a ladder they cannot use.
+  var SCROLL_GRACE_MS = 4000;
+
+  function shouldRecentre(key, node, market) {
+    if (state.locked[key]) { return false; }        // Lock means LOCKED
+    if (market.spread === undefined || market.spread === null) {
+      return false;
+    }
+    var grid = node.querySelector('.grid');
+    var now = Date.now();
+    if (now - (state.scrolledAt[key] || 0) < SCROLL_GRACE_MS) {
+      // The trader is working somewhere else on the ladder. Free
+      // scrolling is the point: orders get placed away from the touch.
+      return false;
+    }
+    if (!state.centredAt[key]) { return true; }     // first draw
+    var row = midRow(node, market);
+    if (row) {
+      // Out of sight is always a reason: a market that has left the
+      // window is a ladder showing prices nobody is trading.
+      var top = row.offsetTop - grid.scrollTop;
+      if (top < 0 || top > grid.clientHeight - row.offsetHeight) {
+        return true;
       }
     }
+    var every = state.snapshot.recentre_sec;
+    if (every === undefined || every === null) { every = 5; }
+    if (!every) { return false; }                   // 0 = only when lost
+    return now - state.centredAt[key] >= every * 1000;
   }
+
+  function midRow(node, market) {
+    /* The row the CURRENT MID sits on — the middle of the book, which
+     * is where the ladder centres. Centring on a touch puts the other
+     * side against an edge, and a side you cannot see is a side you
+     * cannot trade. */
+    var best = null;
+    var closest = Infinity;
+    Array.prototype.forEach.call(node.querySelectorAll('tbody tr'),
+      function (row) {
+        var away = Math.abs(parseFloat(row.dataset.level) - market.spread);
+        if (away < closest) { closest = away; best = row; }
+      });
+    return best;
+  }
+
+  function centreOnMid(node, key, market) {
+    var row = midRow(node, market);
+    var grid = node.querySelector('.grid');
+    if (!row || !grid.clientHeight) { return; }
+    state.centring[key] = true;                     // our scroll, not theirs
+    grid.scrollTop = row.offsetTop -
+      (grid.clientHeight - row.offsetHeight) / 2;
+    state.centredAt[key] = Date.now();
+    window.setTimeout(function () { state.centring[key] = false; }, 0);
+  }
+
 
   function digitsFor(increment) {
     if (!increment) { return 4; }
@@ -1441,6 +1628,70 @@
 
   // -- the whole screen ---------------------------------------------------
 
+  function linkState() {
+    /* "Is it working?" answered in one line, from three facts: the
+     * engine is publishing, both accounts answered, and every enabled
+     * ladder has a two-sided quote. Anything less is not green — a
+     * screen that says CONNECTED while one leg is dark is the failure
+     * this whole banner exists to prevent.
+     */
+    var snapshot = state.snapshot;
+    if (snapshot.engine !== 'up') {
+      return {state: 'bad', text: 'ENGINE DOWN',
+              detail: snapshot.engine_note || 'the coordinator is not running'};
+    }
+    var health = (snapshot.account_health || {}).accounts || {};
+    var names = Object.keys(health);
+    var known = names.filter(function (name) { return health[name].known; });
+    if (!names.length) {
+      return {state: 'bad', text: 'NO ACCOUNTS',
+              detail: 'no account is configured — open Exchanges'};
+    }
+    if (known.length < names.length) {
+      var dark = names.filter(function (name) { return !health[name].known; });
+      return {state: 'bad', text: known.length + '/' + names.length +
+              ' ACCOUNTS',
+              detail: dark.join(', ') + ' could not be read — check that ' +
+                      'terminal is open and logged in'};
+    }
+    var pairs = snapshot.pairs || {};
+    var enabled = Object.keys(pairs).filter(function (key) {
+      return pairs[key].enabled !== false;
+    });
+    var quiet = enabled.filter(function (key) {
+      var market = pairs[key].market;
+      return !market || market.short_spread === null ||
+        market.short_spread === undefined;
+    });
+    if (enabled.length && quiet.length) {
+      return {state: 'warn', text: known.length + '/' + names.length +
+              ' ACCOUNTS · NO QUOTE',
+              detail: quiet.join(', ') + ': both terminals are attached, ' +
+                      'but no two-sided quote has arrived — check the ' +
+                      'symbols on the Exchanges page'};
+    }
+    var stale = enabled.filter(function (key) {
+      return (pairs[key].market || {}).stale_reason;
+    });
+    if (stale.length) {
+      return {state: 'warn', text: 'QUOTES STALE',
+              detail: (pairs[stale[0]].market || {}).stale_reason};
+    }
+    return {state: 'ok',
+            text: 'LIVE · ' + known.length + '/' + names.length +
+                  ' accounts',
+            detail: 'both terminals attached and every enabled ladder is ' +
+                    'quoting'};
+  }
+
+  function renderLink() {
+    var link = linkState();
+    var badge = el('link-badge');
+    badge.textContent = link.text;
+    badge.className = 'link ' + link.state;
+    badge.title = link.detail;
+  }
+
   function renderStatusLine() {
     /* The two things that change on every poll whether or not the
      * coordinator published anything: whether it is alive, and how old
@@ -1455,6 +1706,7 @@
     } else {
       banner.classList.add('hidden');
     }
+    renderLink();
     var loop = snapshot.loop_interval_sec;
     el('loop-stat').textContent = loop
       ? 'loop ' + (loop * 1000).toFixed(0) + 'ms · snapshot ' +
@@ -1580,6 +1832,10 @@
     var tag = (document.activeElement || {}).tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') { return; }
     if (e.metaKey || e.ctrlKey || e.altKey) { return; }
+    // Turned off in the taskbar: B and S are ORDERS, and a desk that
+    // does not want a keyboard near them can have none. Escape and ?
+    // above still work — neither of them trades.
+    if (state.keysOff) { return; }
 
     if (e.key === '?') {
       el('help-overlay').classList.toggle('hidden');
@@ -1663,6 +1919,17 @@
         // exactly when the operator is trying to fix it — costs one
         // banner update per poll instead of a full redraw of every
         // ladder, the grid and the monitor.
+        // A RESTING order that fills does so without a click, so the
+        // sound has to come from the book changing rather than from a
+        // command's answer.
+        var positions = 0;
+        Object.keys(snapshot.pairs || {}).forEach(function (key) {
+          positions += (snapshot.pairs[key].positions || []).length;
+        });
+        if (state.positionCount !== null && positions > state.positionCount) {
+          sound('filled');
+        }
+        state.positionCount = positions;
         var published = snapshot.at !== state.lastAt;
         state.lastAt = snapshot.at;
         if (published || state.pending.length) {
@@ -1679,8 +1946,45 @@
   }
 
   function start() {
-    el('add-panel').addEventListener('click', function () {
-      openPanel(panelId('grid'));
+    el('add-panel').addEventListener('click', function (e) {
+      e.stopPropagation();
+      var menu = el('add-menu');
+      if (!menu.classList.contains('hidden')) {
+        return menu.classList.add('hidden');
+      }
+      var pairs = state.snapshot.pairs || {};
+      var html = '<div class="menu-title">Ladders</div>';
+      var keys = Object.keys(pairs);
+      keys.forEach(function (key) {
+        var pair = pairs[key];
+        var open = state.open.indexOf(panelId('ladder', key)) >= 0;
+        html += '<button data-panel="' + panelId('ladder', key) + '">' +
+          (pair.name || key) + '<small>' + (pair.symbol_a || '?') + ' / ' +
+          (pair.symbol_b || '?') + (open ? ' · open' : '') + '</small>' +
+          '</button>';
+      });
+      if (!keys.length) {
+        html += '<div class="menu-note">No pair is configured yet — add ' +
+          'one on the Exchanges page. Each pair is its own ladder, and ' +
+          'they trade side by side on this desktop.</div>';
+      }
+      html += '<div class="menu-title">Windows</div>' +
+        '<button data-panel="' + panelId('grid') + '">Market Grid' +
+        '<small>every ladder on one row each</small></button>' +
+        '<button data-panel="' + panelId('monitor') + '">Positions' +
+        '<small>positions, orders, fills, slippage, accounts</small>' +
+        '</button>';
+      menu.innerHTML = html;
+      menu.classList.remove('hidden');
+    });
+    el('add-menu').addEventListener('click', function (e) {
+      var button = e.target.closest('button');
+      if (!button) { return; }
+      el('add-menu').classList.add('hidden');
+      openPanel(button.dataset.panel);
+    });
+    window.addEventListener('click', function () {
+      el('add-menu').classList.add('hidden');
     });
     el('tabs').addEventListener('click', function (e) {
       var button = e.target.closest('.tab');
@@ -1709,6 +2013,46 @@
             send('close_unclaimed', {account: button.dataset.account,
                                      ticket: button.dataset.ticket});
           });
+    });
+    try {
+      state.keysOff =
+        window.localStorage.getItem('mt5trader.keysOff') === '1';
+    } catch (e) { state.keysOff = false; }
+    function paintKeys() {
+      var button = el('keys-toggle');
+      button.textContent = 'Keys: ' + (state.keysOff ? 'off' : 'on');
+      button.classList.toggle('off', state.keysOff);
+    }
+    paintKeys();
+    try {
+      state.soundOff =
+        window.localStorage.getItem('mt5trader.soundOff') === '1';
+    } catch (e) { state.soundOff = false; }
+    function paintSound() {
+      var button = el('sound-toggle');
+      button.textContent = 'Sound: ' + (state.soundOff ? 'off' : 'on');
+      button.classList.toggle('off', state.soundOff);
+    }
+    paintSound();
+    el('sound-toggle').addEventListener('click', function () {
+      state.soundOff = !state.soundOff;
+      try {
+        window.localStorage.setItem('mt5trader.soundOff',
+                                    state.soundOff ? '1' : '0');
+      } catch (e) { /* a preference that does not survive a reload */ }
+      paintSound();
+      if (!state.soundOff) { sound('placed'); }   // so it is heard once
+    });
+    el('keys-toggle').addEventListener('click', function () {
+      state.keysOff = !state.keysOff;
+      try {
+        window.localStorage.setItem('mt5trader.keysOff',
+                                    state.keysOff ? '1' : '0');
+      } catch (e) { /* a preference that does not survive a reload */ }
+      paintKeys();
+      toast(state.keysOff
+        ? 'keyboard shortcuts are OFF — the buttons and the ladder still work'
+        : 'keyboard shortcuts are back on', 'ok');
     });
     el('help').addEventListener('click', function () {
       el('help-overlay').classList.toggle('hidden');
@@ -1751,6 +2095,6 @@
     state: state, render: render, toast: toast, ask: ask, send: send,
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
-    tidyWindows: tidyWindows
+    tidyWindows: tidyWindows, sound: sound
   };
 })();

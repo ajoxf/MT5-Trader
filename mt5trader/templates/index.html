@@ -29,9 +29,19 @@
 <!-- The bottom taskbar: one tab per open panel, a working-order count
      badge on each, and + to open the Market Grid and pick another. -->
 <div id="taskbar">
-  <button id="add-panel" class="tab plus" title="Open the Market Grid">+</button>
+  <button id="add-panel" class="tab plus" title="Open a ladder, the Market Grid or the Positions window">+</button>
+  <!-- Every ladder this installation has, in one list. A desk trades
+       several spreads at once — Spot vs Future, WTI vs Brent — and each
+       one is a window on this desktop. -->
+  <div id="add-menu" class="menu hidden"></div>
   <div id="tabs"></div>
   <div class="taskbar-right">
+    <!-- One line that says whether this thing is actually working:
+         both terminals attached, and quotes arriving on every enabled
+         ladder. Green only when BOTH are true. -->
+    <span id="link-badge" class="link unknown" title="Both accounts, and whether quotes are arriving">checking…</span>
+    <button id="sound-toggle" class="tab" title="A blip when an order is placed, two rising notes when one fills, a low note when one is cancelled">Sound: on</button>
+    <button id="keys-toggle" class="tab" title="Turn the one-key shortcuts (B, S, F, X…) off or on">Keys: on</button>
     <button id="tidy" class="tab" title="Put every window back in a row">Tidy</button>
     <button id="open-settings" class="tab" title="Accounts, pairs and connection">Exchanges</button>
     <span id="loop-stat" class="stat" title="The coordinator's achieved loop interval, and how old this snapshot is">—</span>
@@ -109,7 +119,13 @@
     </div>
     <div class="body">
       <div class="rail">
-        <select class="route-select" disabled></select>
+        <!-- Which two accounts this ladder is routed across, with their
+             MT5 logins: two accounts is the whole architecture, and
+             which one a leg is on is not something to go and look up. -->
+        <div class="route-box" title="Leg A and leg B, with the MT5 login each is on">
+          <div class="route-leg route-a">A <b>—</b></div>
+          <div class="route-leg route-b">B <b>—</b></div>
+        </div>
         <label class="check"><input type="checkbox" class="filter"> Filter</label>
         <select class="order-type">
           <option value="LIMIT">Limit</option>
@@ -119,12 +135,13 @@
           <option value="DAY">Day</option>
           <option value="GTC">GTC</option>
         </select>
-        <div class="armed">--</div>
+        <label class="rail-label">Qty per click</label>
+        <div class="armed" title="What one click will send. The keypad below arms a size; CLR goes back to this ladder's default.">--</div>
         <!-- The three fastest actions on the ladder, without hunting
              for a row: hit the bid, lift the offer, get flat. -->
         <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY <small>lift</small></button>
         <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL <small>hit</small></button>
-        <button class="quick flatten" title="Flatten this pair at market (F)">FLAT</button>
+        <button class="quick flatten" title="Close every open position on this pair, at market, by ticket. Asks once (F)">FLATTEN</button>
         <div class="keypad">
           <button class="qty" data-qty="1">1</button>
           <button class="qty" data-qty="5">5</button>
@@ -164,6 +181,10 @@
     </div>
     <div class="footer">
       <span class="feed" title="The staleness and jump guards (a guard may withhold an order; it never prevents a close)">—</span>
+      <!-- The two legs' own quotes, as they arrive. A spread that is
+           not moving is one leg that is not moving, and this is where
+           you see WHICH. -->
+      <span class="legs" title="Each leg's bid/ask and how long since it last changed">—</span>
       <span class="pos">flat</span>
       <span class="pnl">—</span>
       <span class="clip" title="One spread, in leg lots, and the dollars per 1.00 of spread">—</span>
