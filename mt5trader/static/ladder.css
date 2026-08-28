@@ -619,6 +619,17 @@ td.work.sell { background: var(--ask-cell); color: #fff; cursor: pointer; }
 /* A click that has been SENT but is not in a snapshot yet. Hatched, and
  * never added into the working total — a ghost is not an order yet, and
  * a trader who cannot see their click clicks again. */
+/* Clicked, in the book, and NOT at the broker — the guards hold a
+   synthetic order back while the feed reads stale or desynced. It used
+   to be drawn exactly like an order resting at the broker, so a trader
+   watched a level they believed was working while nothing of theirs
+   was in the market. Hollow and amber: present, but not placed. */
+td.work.held {
+  background: #fff;
+  color: #8a6100;
+  font-style: italic;
+  box-shadow: inset 0 0 0 2px #d9a520;
+}
 td.work.pending .ghost {
   display: inline-block;
   margin-left: 3px;

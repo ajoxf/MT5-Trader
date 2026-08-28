@@ -1156,6 +1156,22 @@
     var rows = row.rows || [];
     var market = row.market || {};
     var lastPrint = row.last_print || {};
+    // Which of our working orders are NOT actually resting at the
+    // broker. A synthetic order joins the book the instant it is
+    // clicked, but the real pending on the quoting leg is only placed
+    // once the guards are clear (quoter._rest_or_repeg) — so while the
+    // feed reads stale or desynced, the order exists here and NOWHERE
+    // else. It looked exactly like one resting at the broker, and the
+    // only hint was W:8 (broker 0) in small text in the footer.
+    var heldOff = {};
+    (row.quotes || []).forEach(function (quote) {
+      if (quote.ticket) { return; }             // really is at the broker
+      (quote.orders || []).forEach(function (id) {
+        heldOff[id] = quote.reason ||
+          'not resting at the broker yet';
+      });
+    });
+
     var ordersByLevel = {};
     (row.orders || []).forEach(function (order) {
       var bucket = ordersByLevel[order.level.toFixed(6)] ||
@@ -1196,11 +1212,23 @@
 
       html += '<tr class="' + classes.join(' ') + '" data-level="' + level + '">';
       var ghostSide = ghosts.length ? ghosts[0].side.toLowerCase() : '';
+      // ANY order here not at the broker marks the cell: a level that
+      // is half resting is still a level the trader must not read as
+      // fully working.
+      var heldReason = null;
+      orders.forEach(function (order) {
+        heldReason = heldReason || heldOff[order.order_id] || null;
+      });
       html += '<td class="work' +
         (work ? ' ' + work.side.toLowerCase() : '') +
+        (heldReason ? ' held' : '') +
         (ghosts.length ? ' pending ' + ghostSide : '') + '"' +
         (work ? ' data-order-id="' + work.order_id + '" title="' +
-          orders.length + ' order(s) here — click to pull one"' : '') + '>' +
+          (heldReason
+            ? 'NOT at the broker: ' + heldReason.replace(/"/g, '') +
+              '. Click to pull it.'
+            : orders.length + ' order(s) here — click to pull one') +
+          '"' : '') + '>' +
         (workQty ? workQty : '') +
         (ghostQty ? '<span class="ghost" title="sent — waiting for the ' +
           'engine">' + ghostQty + '</span>' : '') + '</td>';

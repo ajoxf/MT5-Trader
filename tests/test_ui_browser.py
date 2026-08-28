@@ -2012,3 +2012,49 @@ def test_the_screen_does_not_repaint_under_a_drag(page):
         return section.innerHTML.indexOf('wiped') < 0;
     }""")
     assert repainted, 'the table stopped repainting even when not dragging'
+
+
+def test_an_order_held_back_from_the_broker_does_not_look_like_one_resting(page):
+    """A synthetic order joins the book the instant it is clicked, but
+    the real pending on the quoting leg is only placed once the guards
+    are clear (quoter._rest_or_repeg holds off on stale or desynced). So
+    while the feed is bad the order exists HERE and nowhere else — and
+    it used to be drawn exactly like one resting at the broker. The only
+    hint was W:n (broker 0) in small text in the footer, and a trader
+    watched a level they believed was working while nothing of theirs
+    was in the market.
+    """
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr td.work', timeout=5000)
+
+    def put_order(ticket):
+        """One working order at a level, with its quote group either
+        holding a broker ticket or not."""
+        page.evaluate("""(ticket) => {
+            const state = window.MT5Trader.state;
+            const row = state.snapshot.pairs['XAUUSD_|GC1226'];
+            const level = row.rows[5].level;
+            row.orders = [{order_id: 'O1', level: level, side: 'BUY',
+                           quantity: 1, filled_quantity: 0,
+                           state: 'WORKING'}];
+            row.quotes = [{pair_key: 'XAUUSD_|GC1226', side: 'BUY',
+                           level: level, leg: 'B', ticket: ticket,
+                           reason: ticket ? null : 'the spread is stale'
+                               + ' — holding off',
+                           orders: ['O1']}];
+            window.MT5Trader.render();
+        }""", ticket)
+
+    # Held back: no ticket at the broker.
+    put_order(None)
+    held = page.locator('.ladder .grid td.work.held')
+    assert held.count() == 1, 'a held-off order is not marked'
+    assert 'NOT at the broker' in (held.first.get_attribute('title') or '')
+    assert 'holding off' in (held.first.get_attribute('title') or '')
+
+    # CONTROL: the same order, now actually resting, is NOT marked — or
+    # the mark would mean nothing.
+    put_order(987654)
+    assert page.locator('.ladder .grid td.work.held').count() == 0, \
+        'an order resting at the broker was marked as held off'
+    assert page.locator('.ladder .grid td.work[data-order-id]').count() == 1
