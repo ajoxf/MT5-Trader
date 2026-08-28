@@ -26,6 +26,10 @@ def engine(config, pair, legs):
     clock = FakeClock()
     coordinator = Coordinator(config, legs, monotonic=clock,
                               sleep=lambda s: None)
+    # The self-healing re-subscribe is OFF here: these tests keep a leg
+    # deliberately frozen, and an engine that fixes it mid-test would be
+    # testing the nursing rather than the guard.
+    config.settings['AUTO_REFRESH_STALE_SEC'] = 0
     coordinator.resolve_symbols()
     pair.clip_lots_a, pair.clip_lots_b = 0.1, 0.1
     return coordinator, clock
@@ -323,3 +327,35 @@ def test_a_terminal_on_the_WRONG_account_is_logged_in():
     assert fake.calls[0] == {}                       # tried attaching
     assert 'shutdown' in fake.calls                  # let it go
     assert fake.calls[-1]['login'] == 100006         # then logged in
+
+
+def test_a_stale_pair_re_subscribes_itself(engine, legs, pair):
+    """Some terminals drop a subscription silently: the ladder ticks for
+    a few seconds after a refresh and then goes quiet again, and
+    pressing Feed brings it back every time. A machine that needs the
+    same button pressed every twenty seconds should press it itself."""
+    coordinator, clock = engine
+    coordinator.config.settings['AUTO_REFRESH_STALE_SEC'] = 20.0
+    coordinator.poll_once()
+
+    for _ in range(12):                      # frozen, well past the limit
+        clock.advance(3.0)
+        coordinator.poll_once()
+
+    assert legs['acct_a'].broker.resubscribed, 'nobody pressed Feed'
+    assert legs['acct_b'].broker.resubscribed
+
+
+def test_it_can_be_turned_off_and_then_nothing_touches_the_feed(engine, legs):
+    """The control: a desk that wants the button pressed by a person
+    sets the interval to zero, and the engine leaves the subscription
+    exactly as it found it."""
+    coordinator, clock = engine
+    coordinator.config.settings['AUTO_REFRESH_STALE_SEC'] = 0
+    coordinator.poll_once()
+
+    for _ in range(12):
+        clock.advance(3.0)
+        coordinator.poll_once()
+
+    assert not getattr(legs['acct_a'].broker, 'resubscribed', [])

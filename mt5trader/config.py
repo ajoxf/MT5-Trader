@@ -102,6 +102,14 @@ DEFAULT_SETTINGS = {
     #: simply slow. 15s still catches a leg that has actually STOPPED,
     #: which is what it is for. 0 = off.
     'MAX_QUOTE_AGE_SEC': 15.0,
+    #: While a leg is stale, re-subscribe it this often (seconds; 0 =
+    #: never, do it by hand with the Feed button). Some terminals drop
+    #: a symbol's subscription silently — the ladder ticks for a few
+    #: seconds after a refresh and then goes quiet again — and a
+    #: re-subscribe is what brings it back. It is logged every time, so
+    #: a feed being nursed along like this is visible rather than
+    #: hidden by the nursing.
+    'AUTO_REFRESH_STALE_SEC': 20.0,
     'MAX_SPREAD_JUMP_SIGMA': 5.0,      # 0 = off
     'JUMP_SETTLE_SEC': 2.0,
     'SIGMA_WINDOW_QUOTES': 600,

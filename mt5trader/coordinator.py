@@ -83,6 +83,8 @@ class Coordinator:
         self._margin_cache = {}
         #: pair key -> when a stale leg was last written to the log
         self._stale_logged = {}
+        #: pair key -> when a stale pair last re-subscribed itself
+        self._auto_refreshed = {}
         self._loop_interval = None
         self._last_poll = None
         self._stop = threading.Event()
@@ -341,6 +343,7 @@ class Coordinator:
             md['stale_reason'] = stale
             if stale:
                 self._log_stale(key, pair, md)
+                self._auto_refresh(key, md)
             md['jump_reason'] = jumped
             md['guard_reason'] = stale or jumped
             # The badge the ladder shows continuously, so a trader can
@@ -515,6 +518,32 @@ class Coordinator:
                 stats = None
         self._session_cache[(account, symbol)] = (now, stats)
         return stats
+
+    def _auto_refresh(self, key, md):
+        """Re-subscribe a stale pair by itself, now and then.
+
+        Some terminals drop a symbol's subscription silently: the
+        ladder ticks for a few seconds after a refresh and then goes
+        quiet again, and pressing Feed brings it back every time. A
+        machine that needs the same button pressed every twenty seconds
+        should press it itself.
+
+        Logged on every attempt. A feed being nursed along is a fact
+        the operator needs — nursing it quietly would hide exactly the
+        problem worth fixing at the broker or the terminal.
+        """
+        every = float(self.config.get('AUTO_REFRESH_STALE_SEC', 20.0) or 0)
+        if not every:
+            return
+        now = self.clock()
+        if now - self._auto_refreshed.get(key, 0.0) < every:
+            return
+        self._auto_refreshed[key] = now
+        answer = self.refresh_feed(key)
+        logging.warning('%s: stale — re-subscribed both legs automatically '
+                        '(%s). If this repeats, the terminal is dropping the '
+                        'subscription: add both symbols to Market Watch and '
+                        'leave them there.', key, answer.get('reason'))
 
     def _log_stale(self, key, pair, md):
         """Say what a frozen leg actually looks like, once a minute.

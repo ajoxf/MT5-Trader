@@ -143,6 +143,13 @@ The three ordinary causes, in order of likelihood:
    moving. The badge carries the number it tripped at, so you can set
    the limit from what you actually see rather than from a guess.
 
+The engine also presses it ITSELF, every `AUTO_REFRESH_STALE_SEC`
+(20 seconds) while a pair is stale, and writes a line to the console
+each time it does. If you see that line repeating, the terminal is
+dropping the subscription: add both symbols to Market Watch and leave
+them there. Set the interval to 0 if you would rather press the button
+yourself.
+
 **↻ Feed**, on the ladder's footer, is the thing to press: it takes
 both symbols out of Market Watch in their terminals and puts them back,
 which is what restarts a feed the terminal has gone quiet on, and it
@@ -176,6 +183,22 @@ published, or that none are — that is the broker, not this software.
 Where there is no book the columns stay EMPTY. They are never filled
 with one leg's size, which would show a hundred available on a spread
 that can do four.
+
+## Ports
+
+One port per ACCOUNT, not per pair. Each account has a leg runner
+listening on `127.0.0.1:<port>` — 9101 and 9102 in the example config —
+and every pair that trades on those two accounts uses the same two
+runners. Adding pairs never needs a new port.
+
+A THIRD account (another broker, another terminal) gets the next free
+one: 9103, then 9104. They are localhost only and nothing but this
+software talks to them.
+
+The web page is separate, on 8000. Starting a second copy of the
+software refuses that port rather than serving you a stale screen from
+the first — use `python start.py --web-port 8001` if a second copy is
+what you want.
 
 ## More than one spread
 
