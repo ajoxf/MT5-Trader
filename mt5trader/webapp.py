@@ -662,6 +662,17 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             blockers.append(snapshot.get('engine_note') or
                             'the coordinator is not running')
 
+        # "Everything passed" and "there was nothing to check" are not
+        # the same answer. With no pair configured the feed loop below
+        # never runs, so nothing objects — and the banner then reports a
+        # system ready to trade instruments it does not have.
+        configured = raw.get('pairs') or {}
+        if not configured:
+            blockers.append('no pairs are configured yet')
+        elif not [key for key, pair in configured.items()
+                  if (pair or {}).get('enabled', True)]:
+            blockers.append('every pair is disabled')
+
         feeds = []
         for key, pair in (snapshot.get('pairs') or {}).items():
             if not pair.get('enabled'):
@@ -682,8 +693,14 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             'engine': snapshot.get('engine'),
             'broker_clock': snapshot.get('broker_clock'),
             'blockers': blockers,
-            'summary': ('Connected — both accounts logged in, Algo Trading '
-                        'on, and prices arriving. You can trade.'
+            # Count them. "both" was hard coded, so ONE account with no
+            # pairs at all still read "both accounts logged in ... You
+            # can trade" — the screen asserting a second leg that was
+            # never configured.
+            'summary': (f'Connected — {len(accounts)} account'
+                        f'{"" if len(accounts) == 1 else "s"} logged in, '
+                        f'Algo Trading on, and prices arriving. '
+                        f'You can trade.'
                         if not blockers else
                         'Not ready to trade: ' + blockers[0]),
         })
