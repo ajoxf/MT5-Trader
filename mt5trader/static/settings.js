@@ -182,14 +182,69 @@
     });
   }
 
+  function stampRendered(section) {
+    // What each field was RENDERED with. Comparing against this is how
+    // an operator's unapplied edit is told apart from a value that
+    // simply came back unchanged from the server.
+    Array.prototype.forEach.call(section.querySelectorAll('input'),
+      function (input) {
+        input.dataset.rendered = input.type === 'checkbox'
+          ? String(input.checked) : input.value;
+      });
+  }
+
+  function editedFields(section) {
+    // Settings the operator has CHANGED but not yet applied, or null.
+    //
+    // The same hazard as the new-account row, one section over: the 5s
+    // connection poll repaints this form from the SAVED settings, and
+    // isTyping() stops protecting the moment focus leaves the field. So
+    // a number typed and then clicked away from silently reverts — and
+    // Apply, reading the form, then saves the OLD value back over the
+    // new one. Live: the stale-quote limit was set to 15 three times
+    // and stayed 5.
+    //
+    // Keyed by class, which is unique per field in this form. The
+    // accounts table repeats classes down its rows and is carried by
+    // newAccountDraft() instead.
+    if (!section || !section.querySelector('.s-stale')) { return null; }
+    var edited = null;
+    Array.prototype.forEach.call(section.querySelectorAll('input'),
+      function (input) {
+        if (input.dataset.rendered === undefined) { return; }
+        var now = input.type === 'checkbox'
+          ? String(input.checked) : input.value;
+        if (now === input.dataset.rendered) { return; }
+        edited = edited || {};
+        edited[input.className] = now;
+      });
+    return edited;
+  }
+
+  function restoreEdited(section, edited) {
+    if (!edited) { return; }
+    Object.keys(edited).forEach(function (cls) {
+      var input = section.querySelector('.' + cls);
+      if (!input) { return; }
+      if (input.type === 'checkbox') {
+        input.checked = edited[cls] === 'true';
+      } else {
+        input.value = edited[cls];
+      }
+    });
+  }
+
   function redraw(section, build) {
     if (!section) { return; }
     if (isTyping(section)) { return; }
-    // Sections with no new-account row give a null draft, so this is a
-    // no-op everywhere except the accounts table.
+    // Sections without a new-account row or a settings form give null
+    // for their half of this, so each is a no-op outside its own table.
     var draft = newAccountDraft(section);
+    var edited = editedFields(section);
     section.innerHTML = build();
+    stampRendered(section);
     restoreNewAccount(section, draft);
+    restoreEdited(section, edited);
   }
 
   function isTyping(section) {

@@ -1859,3 +1859,58 @@ def test_the_two_columns_say_what_they_are(page):
     text = page.text_content('#help-overlay')
     assert 'RESTING orders' in text and 'last FILL' in text
     page.click('#help-close')
+
+
+def test_an_unapplied_setting_survives_the_connection_repaint(page):
+    """The 5s connection poll repaints the Trading form from the SAVED
+    settings, and isTyping() stops protecting a field the moment focus
+    leaves it. So a number typed and then clicked away from reverted —
+    and Apply, which reads the form, saved the OLD value back over it.
+    Live: the stale-quote limit was set to 15 three times and stayed 5.
+    """
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .trading .s-stale')
+
+    # A value that differs from the saved one, or the assertion below
+    # would pass on a form that reverted perfectly.
+    was = page.input_value('.window.settings .s-stale')
+    assert was != '22', 'pick a value the config does not already hold'
+    page.fill('.window.settings .s-stale', '22')
+    # Focus LEAVES the field — the operator clicks Apply, or tabs away,
+    # or the window loses focus. isTyping() protects nothing from here.
+    page.evaluate('() => document.activeElement.blur()')
+
+    # The repaint the poll would do.
+    page.evaluate('() => window.MT5Settings.render()')
+
+    assert page.input_value('.window.settings .s-stale') == '22'
+
+    # And the CONTROL: a field nobody touched still follows the server,
+    # or this would be a form frozen against its own data.
+    rendered = page.evaluate(
+        '() => document.querySelector(".window.settings .s-repeg")'
+        '.dataset.rendered')
+    assert page.input_value('.window.settings .s-repeg') == rendered
+
+
+def test_the_close_button_sits_at_the_right_of_the_title_bar(page):
+    """It merely followed the title, which looks right only while the
+    window is narrow enough for the title to fill the bar. The wide
+    Exchanges window put it against the title, on the left."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .titlebar .winbtns')
+
+    bar = page.evaluate(
+        '() => document.querySelector(".window.settings .titlebar")'
+        '.getBoundingClientRect().right')
+    button = page.evaluate(
+        '() => document.querySelector(".window.settings .titlebar .winbtns")'
+        '.getBoundingClientRect().right')
+    title = page.evaluate(
+        '() => document.querySelector(".window.settings .titlebar .title")'
+        '.getBoundingClientRect().right')
+
+    # Hard against the right edge, and nowhere near the title it used to
+    # sit beside.
+    assert bar - button < 12, f'close button is {bar - button:.0f}px from the right'
+    assert button - title > 100
