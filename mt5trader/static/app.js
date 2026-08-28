@@ -775,6 +775,15 @@
             ? '' : String(row.default_quantity));
     }
     armed.classList.toggle('on', !!state.armed[key]);
+    // The size goes ON the two buttons as well. A trader arming 10 and
+    // then pressing SELL should not have to look back at a box on the
+    // other side of the rail to know what they are about to send.
+    var size = state.armed[key] || row.default_quantity;
+    var sized = (size === null || size === undefined) ? '' : ' ' + size;
+    node.querySelector('.buy-touch').innerHTML =
+      'BUY' + sized + ' <small>lift</small>';
+    node.querySelector('.sell-touch').innerHTML =
+      'SELL' + sized + ' <small>hit</small>';
     Array.prototype.forEach.call(node.querySelectorAll('.keypad .qty'),
       function (button) {
         button.classList.toggle('on',

@@ -1768,3 +1768,22 @@ def test_the_unclaimed_notice_is_one_line_and_the_table_is_where_it_acts(page):
     page.paths['publisher'].unclaimed = None
     page.paths['publisher'].publish()
     page.evaluate("() => window.MT5Trader.closePanel('monitor:')")
+
+
+def test_the_size_is_on_the_two_buttons_as_well_as_in_the_box(page):
+    """A trader who arms 10 and then presses SELL should not have to
+    look back at a box on the other side of the rail to know what they
+    are about to send."""
+    open_ladder(page)
+    page.click('.ladder .keypad button[data-qty="10"]')
+    page.wait_for_timeout(150)
+
+    assert 'BUY 10' in page.text_content('.ladder .buy-touch')
+    assert 'SELL 10' in page.text_content('.ladder .sell-touch')
+
+    page.click('.ladder .keypad button.clr')
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .buy-touch')"
+        ".textContent.indexOf('BUY 1 ') === 0", timeout=5000)
+    # CLR is the ladder's own default, not a blank button.
+    assert 'SELL 1' in page.text_content('.ladder .sell-touch')

@@ -317,9 +317,17 @@ body {
 .rail input[type="number"] {
   width: 100%;
   font: 11px var(--font);
-  padding: 1px 2px;
-  background: #fff;
+  padding: 3px 3px;
+  background: linear-gradient(#ffffff, #ececec);
   border: 1px solid var(--frame-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 #fff;
+}
+.rail select { cursor: pointer; font-weight: 600; }
+.rail select:hover { background: linear-gradient(#ffffff, #e0e0e0); }
+.rail input[type="number"] {
+  background: #fff;                 /* a FIELD, not a key */
+  box-shadow: inset 1px 1px 2px rgba(0, 0, 0, .12);
 }
 .rail .check { font-size: 10px; color: var(--frame-text); }
 .rail .fair {
@@ -442,24 +450,43 @@ table.exits td:nth-child(3) { color: #a33; }
 .route-box .hint { color: var(--frame-muted); font-size: 9px; }
 .keypad { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
 .keypad button {
-  font: 11px var(--font);
-  background: #fff;
+  font: 600 11px var(--font);
+  background: linear-gradient(#ffffff, #e6e6e6);
   border: 1px solid var(--frame-line);
+  border-radius: 2px;
   cursor: pointer;
-  padding: 1px 0;
+  padding: 3px 0;
+  box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0, 0, 0, .18);
 }
+.keypad button:hover { background: linear-gradient(#ffffff, #dcdcdc); }
 .keypad button:hover { background: #fff; }
 .default-qty { font-family: var(--mono); text-align: center; }
 
 /* The three fastest actions on the ladder. Big targets on purpose:
  * these are pressed in a hurry, and a missed click is a missed trade —
  * or the wrong one. */
+/* Everything on the rail is a KEY: raised, with a highlight along the
+ * top and a shadow under it, and it goes down when it is pressed. On a
+ * trading screen that is not decoration — a control that looks pressed
+ * is the only feedback between the click and the fill. */
 .quick {
+  position: relative;
   font: 700 12px var(--font);
-  padding: 4px 0;
-  border: 1px solid var(--chrome-dark);
+  padding: 5px 0;
+  border: 1px solid rgba(0, 0, 0, .35);
+  border-radius: 2px;
   cursor: pointer;
   color: #fff;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, .35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35),
+              0 1px 2px rgba(0, 0, 0, .3);
+}
+.quick:active,
+.keypad button:active,
+.cxl:not(:disabled):active,
+.btn:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 3px rgba(0, 0, 0, .35);
 }
 .quick small { font-weight: 400; opacity: .85; }
 /* The button takes the colour of the COLUMN it acts on: buying the
@@ -472,17 +499,19 @@ table.exits td:nth-child(3) { color: #a33; }
 .quick:hover { filter: brightness(1.15); }
 
 .cxl {
-  font: 11px var(--font);
+  font: 600 11px var(--font);
   text-align: left;
-  padding: 1px 4px;
+  padding: 3px 5px;
   border: 1px solid var(--frame-line);
+  border-radius: 2px;
   cursor: pointer;
-  background: #fff;
+  background: linear-gradient(#ffffff, #e6e6e6);
+  box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0, 0, 0, .18);
 }
 /* Tinted with the side they pull, as on the reference screen: the sell
  * button carries the ask's red, the buy button the bid's blue. */
-.cxl-s { background: #e8a0a3; }
-.cxl-b { background: #7fc2e8; }
+.cxl-s { background: linear-gradient(#f0b9bb, #dd8f92); }
+.cxl-b { background: linear-gradient(#9fd3f0, #6fb2dc); }
 /* The count of orders the button would pull — how the trader knows it
  * will do something before pressing it. */
 .cxl sup { font-size: 9px; margin-left: 2px; }
@@ -881,12 +910,15 @@ table.unclaimed th, table.unclaimed td {
 .link.bad { background: var(--ask); }
 .link.unknown { background: #6a6a6a; }
 .tab.off { opacity: .6; text-decoration: line-through; }
+.tab:active { transform: translateY(1px); box-shadow: inset 0 2px 3px rgba(0, 0, 0, .3); }
 .tab {
   display: flex;
   align-items: center;
   gap: 5px;
-  font: 11px var(--font);
-  background: var(--panel);
+  font: 600 11px var(--font);
+  background: linear-gradient(#ffffff, #e2e2e2);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0, 0, 0, .2);
   border: 1px solid var(--chrome-dark);
   padding: 2px 8px;
   cursor: pointer;
@@ -941,12 +973,15 @@ table.keys td { padding: 2px 0; font-size: 12px; }
 .modal-box p { margin: 0 0 12px; font-size: 12px; white-space: pre-wrap; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .btn {
-  font: 12px var(--font);
+  font: 600 12px var(--font);
   padding: 3px 12px;
   border: 1px solid var(--chrome-dark);
-  background: var(--panel);
+  border-radius: 2px;
+  background: linear-gradient(#ffffff, #e4e4e4);
+  box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0, 0, 0, .18);
   cursor: pointer;
 }
+.btn:hover { background: linear-gradient(#ffffff, #dadada); }
 .btn.danger { background: var(--ask); color: #fff; border-color: #7a1010; }
 
 #toasts {
