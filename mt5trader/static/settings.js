@@ -237,6 +237,10 @@
   function redraw(section, build) {
     if (!section) { return; }
     if (isTyping(section)) { return; }
+    // Nor while a window is being dragged: these three sections are
+    // large tables, and rebuilding them under the pointer is most of
+    // why this window moved like treacle.
+    if (document.querySelector('.window.dragging')) { return; }
     // Sections without a new-account row or a settings form give null
     // for their half of this, so each is a no-op outside its own table.
     var draft = newAccountDraft(section);
