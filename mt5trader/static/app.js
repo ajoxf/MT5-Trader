@@ -860,7 +860,8 @@
      * shows what the carry says the spread should be, and by how much
      * the market differs. Nothing here places or withholds an order. */
     var fair = row.fair || {};
-    node.querySelector('.fair-value').textContent = fmt(fair.fair_spread, 4);
+    node.querySelector('.fair-value').textContent =
+      fmt(fair.fair_spread, digitsFor(row.increment));
     var gap = node.querySelector('.fair-gap');
     if (fair.gap === null || fair.gap === undefined) {
       gap.textContent = '';
@@ -869,11 +870,23 @@
       // Rich = trading above its own carry, which is the side a trader
       // sells. Said in the word as well as the sign: the direction of a
       // basis is the thing everyone gets backwards once.
-      gap.textContent = (fair.gap > 0 ? '+' : '') + fmt(fair.gap, 4) +
+      gap.textContent = (fair.gap > 0 ? '+' : '') +
+        fmt(fair.gap, digitsFor(row.increment)) +
         (fair.rich ? ' rich' : ' cheap');
       gap.className = 'fair-gap ' + (fair.rich ? 'down' : 'up');
     }
-    node.querySelector('.fair-note').textContent = fair.note || '';
+    // The rail is 100px wide: a sentence does not fit in it, and a
+    // sentence that wraps four lines pushes the Exit box off the
+    // bottom. The short form is what is shown; the engine's full
+    // wording is the tooltip.
+    var note = node.querySelector('.fair-note');
+    note.textContent = fair.fair_spread === null ||
+      fair.fair_spread === undefined
+      ? 'set expiry + swap'
+      : (fair.swap_per_day !== null && fair.swap_per_day !== undefined
+          ? fmt(fair.swap_per_day, 2) + '/d x ' + fair.days_to_expiry + 'd'
+          : '');
+    note.title = fair.note || '';
     renderExit(node, row);
   }
 
@@ -891,17 +904,50 @@
      * market is not a take-profit.
      */
     var exit = row.exit || {};
-    node.querySelector('.be-buy').textContent = fmt(exit.break_even_buy, 4);
-    node.querySelector('.be-sell').textContent = fmt(exit.break_even_sell, 4);
-    node.querySelector('.tp-buy').textContent = fmt(exit.tp_buy, 4);
-    node.querySelector('.tp-sell').textContent = fmt(exit.tp_sell, 4);
-    var note = exit.note || '';
+    // The LADDER's own precision, not four decimals: the rail is 100px
+    // wide and two seven-character numbers side by side collide into
+    // one unreadable string. A price is shown here the way it is shown
+    // in the price column.
+    var digits = digitsFor(row.increment);
+    // What the exit is BUILT from, in the order it is built: the round
+    // turn the market charges, the commission the broker charges, the
+    // profit the target asks for — then break-even and the target
+    // price themselves.
+    node.querySelector('.x-width').textContent =
+      fmt(exit.spread_width, digits);
+    node.querySelector('.x-comm').textContent =
+      exit.commission === null || exit.commission === undefined
+        ? DASH : money(exit.commission);
+    var target = node.querySelector('.x-target');
+    target.textContent = exit.target_money === null ||
+      exit.target_money === undefined ? DASH : money(exit.target_money);
+    target.title = exit.target_pct
+      ? exit.target_pct + '% of ' + money(exit.margin_per_spread) +
+        ' margin per spread'
+      : 'set TP_TARGET_PCT_OF_MARGIN in Settings';
+    node.querySelector('.be-buy').textContent =
+      fmt(exit.break_even_buy, digits);
+    node.querySelector('.be-sell').textContent =
+      fmt(exit.break_even_sell, digits);
+    node.querySelector('.tp-buy').textContent = fmt(exit.tp_buy, digits);
+    node.querySelector('.tp-sell').textContent = fmt(exit.tp_sell, digits);
+    var short = '';
+    if (exit.target_pct && exit.margin_per_spread) {
+      short = exit.target_pct + '% of ' + money(exit.margin_per_spread);
+    } else if (exit.break_even_buy !== null &&
+               exit.break_even_buy !== undefined) {
+      short = 'B/E only';
+    }
     var open = (row.positions || [])[0];
     if (open && open.exit) {
-      note = open.side + ' on: out at ' + fmt(open.exit.tp, 4) +
-        ', flat at ' + fmt(open.exit.break_even, 4);
+      short = open.side[0] + ' out ' + fmt(open.exit.tp, 4);
     }
-    node.querySelector('.exit-note').textContent = note;
+    var line = node.querySelector('.exit-note');
+    line.textContent = short;
+    line.title = (open && open.exit
+      ? open.side + ' on: out at ' + fmt(open.exit.tp, 4) + ', flat at ' +
+        fmt(open.exit.break_even, 4) + '. '
+      : '') + (exit.note || '');
   }
 
   function legFeed(row, market) {
@@ -964,6 +1010,7 @@
     if (!badge) { return ''; }
     if (badge.indexOf('OK') === 0) { return 'ok'; }
     if (badge === 'warming up') { return 'warn'; }
+    if (badge.indexOf('stale') === 0) { return 'warn'; }
     return 'bad';
   }
 
@@ -1904,8 +1951,16 @@
       return (pairs[key].market || {}).stale_reason;
     });
     if (stale.length) {
-      return {state: 'warn', text: 'QUOTES STALE',
-              detail: (pairs[stale[0]].market || {}).stale_reason};
+      // With the leg and the number in the badge itself: "stale" alone
+      // sends the operator looking for a fault when the market may
+      // simply be quiet.
+      var worst = (pairs[stale[0]].market || {}).stale_reason || '';
+      return {state: 'warn',
+              text: 'QUOTES STALE · ' + (pairs[stale[0]].name || stale[0]),
+              detail: worst + '. If this instrument is simply quiet, ' +
+                      'raise MAX_QUOTE_AGE_SEC in Settings; if the ' +
+                      'terminal has lost its feed, the price is frozen ' +
+                      'in MT5 too.'};
     }
     return {state: 'ok',
             text: 'LIVE · ' + known.length + '/' + names.length +

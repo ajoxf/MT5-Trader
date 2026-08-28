@@ -39,7 +39,7 @@ def test_a_frozen_leg_withholds_the_order_and_the_other_leg_keeps_ticking(
     executor = PairExecutor(config, legs, sleep=lambda s: None)
 
     coordinator.poll_once()
-    for tick in range(4):
+    for tick in range(10):
         clock.advance(2.0)
         # Leg B ticks the spread hard; leg A has stopped.
         legs['acct_b'].broker.quote('GC1226', 4351.0 + tick, 4351.4 + tick)
@@ -47,7 +47,11 @@ def test_a_frozen_leg_withholds_the_order_and_the_other_leg_keeps_ticking(
 
     md = coordinator.market[pair.key]
     assert md['stale_reason'] and 'Leg A' in md['stale_reason']
-    assert md['feed_badge'] == 'stale'
+    # The badge carries the NUMBER: "stale" alone says nothing about
+    # whether the feed died or the market is quiet, and those want
+    # different answers.
+    assert md['feed_badge'].startswith('stale ')
+    assert 's' in md['feed_badge']
 
     refusal = executor.precheck(pair, SpreadSide.BUY, md, 1.0)
     assert refusal and 'stale' in refusal

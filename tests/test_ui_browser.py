@@ -39,6 +39,13 @@ class Publisher:
         #: it — the banner under test is driven from the SNAPSHOT, not
         #: from a value poked into the page that the next poll erases.
         self.same_login = None
+        #: One leg frozen, as the age tracker reports it.
+        self.stale_leg = False
+        #: Orders the broker refused, as the engine republishes them.
+        self.dead_orders = None
+        #: Break-even and take-profit, and any open position.
+        self.exits = None
+        self.positions = None
         self.live = threading.Event()
         self.live.set()
         self.stop = threading.Event()
@@ -51,7 +58,9 @@ class Publisher:
             time.sleep(self.every)
 
     def publish(self, at=None):
-        payload = snapshot(self.order_type, self.confirm, self.same_login)
+        payload = snapshot(self.order_type, self.confirm, self.same_login,
+                           self.stale_leg, self.dead_orders, self.exits,
+                           self.positions)
         if at is not None:
             payload['at'] = at
         tmp = self.path + '.tmp'
@@ -86,7 +95,9 @@ def server(tmp_path_factory):
     httpd.shutdown()
 
 
-def snapshot(order_type='LIMIT', confirm=False, same_login=None):
+def snapshot(order_type='LIMIT', confirm=False, same_login=None,
+             stale_leg=False, dead_orders=None, exits=None,
+             positions=None):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -134,11 +145,20 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None):
                 'short_spread': 59.09, 'long_spread': 59.11,
                 'market': {'spread': 59.10, 'short_spread': 59.09,
                            'long_spread': 59.11, 'net_change': -0.61,
+                           # The two legs' own books, as the engine
+                           # always publishes them.
+                           'leg_a_bid': 4607.38, 'leg_a_ask': 4607.63,
+                           'leg_b_bid': 4660.40, 'leg_b_ask': 4660.80,
+                           'leg_a_quote_age_sec': 0.3,
+                           'leg_b_quote_age_sec': 9.0 if stale_leg else 1.5,
                            'feed_badge': 'OK (oldest leg 0.2s)',
                            'session': {'open': 59.71, 'high': 59.80,
                                        'low': 58.90, 'volume': 0.0,
                                        'ours': True}},
-                'rows': rows, 'orders': [], 'quotes': [], 'positions': [],
+                'rows': rows, 'orders': [], 'quotes': [],
+                'positions': positions or [],
+                'dead_orders': dead_orders or [],
+                'exit': exits or {},
                 'working_buys': 0, 'working_sells': 0, 'net_position': 0.0,
                 'avg_entry': None, 'open_pnl': None, 'last_print': None,
                 'errors': [],
@@ -190,8 +210,10 @@ def test_the_page_loads_without_a_single_script_error(page):
 
 
 def test_the_ladder_draws_the_reference_screens_columns(page):
+    # Scoped to the GRID: the footer's leg table has headers of its own
+    # now, and they are not these.
     headers = page.eval_on_selector_all(
-        '.ladder thead th', 'nodes => nodes.map(n => n.textContent)')
+        '.ladder .grid thead th', 'nodes => nodes.map(n => n.textContent)')
     assert headers == ['Work', 'Bids', 'Price', 'Asks', 'LTQ']
     assert page.locator('.ladder .grid tbody tr').count() == 41
 
@@ -224,9 +246,9 @@ def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
     # Softened for a light frame, but the CONVENTION is what is being
     # pinned: bid is blue, ask is red, in every table on the screen.
     assert bid.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(110, 163, 208)'
+        'rgb(31, 122, 181)'
     assert ask.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(205, 123, 123)'
+        'rgb(192, 32, 38)'
 
 
 def test_a_limit_click_places_one_order_and_asks_nothing(page):
@@ -261,9 +283,9 @@ def test_the_asks_column_buys_the_spread_and_the_bids_column_sells_it(page):
     # One step deeper than the bands: a button carries white text and
     # needs the contrast, while a band is data and gets out of the way.
     assert buy.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(180, 95, 95)'
+        'rgb(192, 32, 38)'
     assert sell.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(74, 127, 174)'
+        'rgb(31, 122, 181)'
 
 
 def test_three_clicks_at_one_price_send_three_orders(page):
@@ -1448,15 +1470,6 @@ def test_each_legs_book_is_laid_out_with_its_width(page):
     for the spread, whose width IS the round turn. Read by comparing
     them, so it is a table."""
     open_ladder(page)
-    page.evaluate("""() => {
-        const market = window.MT5Trader.state.snapshot
-            .pairs['XAUUSD_|GC1226'].market;
-        market.leg_a_bid = 4607.38; market.leg_a_ask = 4607.63;
-        market.leg_b_bid = 4660.40; market.leg_b_ask = 4660.80;
-        market.leg_a_quote_age_sec = 0.3;
-        market.leg_b_quote_age_sec = 9.0;
-        window.MT5Trader.render();
-    }""")
     page.wait_for_selector('table.legbook', timeout=5000)
 
     rows = page.locator('table.legbook tbody tr')
@@ -1466,7 +1479,13 @@ def test_each_legs_book_is_laid_out_with_its_width(page):
     # A leg that has stopped is marked — on its AGE cell, not down the
     # whole line: painting the row red made a quiet market look like a
     # fault.
+    assert page.locator('table.legbook td.age').count() == 3
+    page.paths['publisher'].stale_leg = True
+    page.paths['publisher'].publish()
+    page.wait_for_selector('table.legbook td.age.bad', timeout=5000)
     assert page.locator('table.legbook td.age.bad').count() == 1
+    page.paths['publisher'].stale_leg = False
+    page.paths['publisher'].publish()
     spread = rows.nth(2).text_content()
     assert '59.0900' in spread and '59.1100' in spread
     assert '0.0200' in spread                      # one round turn
@@ -1478,18 +1497,15 @@ def test_an_order_the_broker_refused_is_said_out_loud_and_kept_on_screen(page):
     the click was accepted, and the trader is left with a green toast
     and an empty Work column."""
     open_ladder(page)
-    page.evaluate("""() => {
-        const state = window.MT5Trader.state;
-        state.reported = {};
-        state.snapshot.pairs['XAUUSD_|GC1226'].dead_orders = [{
-            order_id: 'SO-DEAD', pair_key: 'XAUUSD_|GC1226', side: 'BUY',
-            level: 59.05, quantity: 2, filled_quantity: 0,
-            order_type: 'LIMIT', time_in_force: 'DAY', state: 'REJECTED',
-            pending_ticket: null,
-            reason: '10016 Invalid stops — the price is inside the ' +
-                    "broker's stops level"}];
-        window.MT5Trader.render();
-    }""")
+    page.evaluate('() => { window.MT5Trader.state.reported = {}; }')
+    page.paths['publisher'].dead_orders = [{
+        'order_id': 'SO-DEAD', 'pair_key': 'XAUUSD_|GC1226', 'side': 'BUY',
+        'level': 59.05, 'quantity': 2, 'filled_quantity': 0,
+        'order_type': 'LIMIT', 'time_in_force': 'DAY', 'state': 'REJECTED',
+        'pending_ticket': None,
+        'reason': "10016 Invalid stops — the price is inside the broker's "
+                  "stops level"}]
+    page.paths['publisher'].publish()
 
     # Said once, in the broker's own words, and errors do not auto-hide.
     page.wait_for_selector('.toast', timeout=5000)
@@ -1509,12 +1525,9 @@ def test_an_order_the_broker_refused_is_said_out_loud_and_kept_on_screen(page):
     assert 'REJECTED' in text and '10016' in text
 
     page.click('.toast')
-    page.evaluate("""() => {
-        delete window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']
-            .dead_orders;
-        window.MT5Trader.closePanel('monitor:');
-    }""")
-
+    page.paths['publisher'].dead_orders = None
+    page.paths['publisher'].publish()
+    page.evaluate("() => window.MT5Trader.closePanel('monitor:')")
 
 def test_the_leg_panel_never_runs_off_the_edge_of_the_ladder(page):
     """It was laid out in `ch` units, which is fine until the prices are
@@ -1552,42 +1565,45 @@ def test_the_exit_price_is_on_the_rail_for_both_directions(page):
     """The trader wants one number back when they click: where do I get
     out? Break-even first, then break-even plus the target — and both
     directions, because a long leaves on the bid and a short buys back
-    on the offer."""
+    on the offer. At the LADDER's precision: the rail is 100px wide and
+    two seven-character numbers side by side collide."""
     open_ladder(page)
-    page.evaluate("""() => {
-        const row = window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226'];
-        row.exit = {break_even_buy: 59.21, break_even_sell: 58.99,
-                    tp_buy: 60.21, tp_sell: 57.99,
-                    target_money: 10.0, target_pct: 2.0,
-                    margin_per_spread: 500.0,
-                    note: '2% of 500.00 margin per spread = 10.00, ' +
-                          'over commission'};
-        window.MT5Trader.render();
-    }""")
+    page.paths['publisher'].exits = {
+        'break_even_buy': 59.21, 'break_even_sell': 58.99,
+        'tp_buy': 60.21, 'tp_sell': 57.99, 'target_money': 10.0,
+        'target_pct': 2.0, 'margin_per_spread': 500.0,
+        'note': '2% of 500.00 margin per spread = 10.00, over commission'}
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .tp-buy')"
+        " && document.querySelector('.ladder .tp-buy').textContent"
+        " === '60.21'", timeout=5000)
 
-    assert page.text_content('.ladder .be-buy') == '59.2100'
-    assert page.text_content('.ladder .tp-buy') == '60.2100'
-    assert page.text_content('.ladder .tp-sell') == '57.9900'
-    assert 'margin per spread' in page.text_content('.ladder .exit-note')
+    assert page.text_content('.ladder .be-buy') == '59.21'
+    assert page.text_content('.ladder .tp-sell') == '57.99'
+    # The long wording is the tooltip; the rail carries the short form.
+    assert '2% of' in page.text_content('.ladder .exit-note')
+    assert 'over commission' in page.get_attribute('.ladder .exit-note',
+                                                    'title')
 
     # A position that is ON gets its own line, anchored on the price it
     # was ENTERED at.
-    page.evaluate("""() => {
-        const row = window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226'];
-        row.positions = [{position_id: 'P1', side: 'BUY', quantity: 1,
-                          entry_spread: 59.11, spread_units: 10,
-                          order_type: 'MARKET', leg_a: null, leg_b: null,
-                          exit: {break_even: 59.21, tp: 60.21, side: 'BUY'}}];
-        window.MT5Trader.render();
-    }""")
-    note = page.text_content('.ladder .exit-note')
-    assert 'out at 60.2100' in note and 'flat at 59.2100' in note
+    page.paths['publisher'].positions = [{
+        'position_id': 'P1', 'side': 'BUY', 'quantity': 1,
+        'entry_spread': 59.11, 'spread_units': 10, 'order_type': 'MARKET',
+        'leg_a': None, 'leg_b': None, 'net_pnl': None, 'gross_pnl': None,
+        'closing_spread': None,
+        'exit': {'break_even': 59.21, 'tp': 60.21, 'side': 'BUY'}}]
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .exit-note')"
+        ".textContent.indexOf('out') >= 0", timeout=5000)
+    assert 'flat at 59.2100' in page.get_attribute('.ladder .exit-note',
+                                                    'title')
 
-    page.evaluate("""() => {
-        const row = window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226'];
-        row.positions = []; delete row.exit;
-    }""")
-
+    page.paths['publisher'].exits = None
+    page.paths['publisher'].positions = None
+    page.paths['publisher'].publish()
 
 def test_nothing_about_the_take_profit_is_sent_to_the_broker():
     """It is a price on the SCREEN. No bracket order, no broker-side
@@ -1598,3 +1614,86 @@ def test_nothing_about_the_take_profit_is_sent_to_the_broker():
     for forbidden in ('place_limit', 'order(', 'send_market_order',
                       'sl=', 'tp='):
         assert forbidden not in source, forbidden
+
+
+def test_the_ladder_grows_in_both_directions_and_the_grid_takes_the_room(page):
+    """Wider means a wider price column and a wider leg table under it;
+    taller means more price rows on screen, which is the whole point of
+    a ladder."""
+    open_ladder(page)
+    tidy(page)
+    page.evaluate("""() => {
+        const market = window.MT5Trader.state.snapshot
+            .pairs['XAUUSD_|GC1226'].market;
+        market.leg_a_bid = 4607.38; market.leg_a_ask = 4607.63;
+        market.leg_b_bid = 4660.40; market.leg_b_ask = 4660.80;
+        market.leg_a_quote_age_sec = 0.3;
+        market.leg_b_quote_age_sec = 1.5;
+        window.MT5Trader.render();
+    }""")
+    before = page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        const rows = node.querySelectorAll('.grid tbody tr').length;
+        const grid = node.querySelector('.grid').getBoundingClientRect();
+        return {w: node.getBoundingClientRect().width,
+                gridW: grid.width, gridH: grid.height, rows: rows};
+    }""")
+
+    grip = page.locator('.window.ladder .grip').first.bounding_box()
+    page.mouse.move(grip['x'] + 6, grip['y'] + 6)
+    page.mouse.down()
+    page.mouse.move(grip['x'] + 246, grip['y'] - 106, steps=8)
+    page.mouse.up()
+
+    after = page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        const grid = node.querySelector('.grid').getBoundingClientRect();
+        const table = node.querySelector('table.legbook')
+            .getBoundingClientRect();
+        const win = node.getBoundingClientRect();
+        return {w: win.width, gridW: grid.width, gridH: grid.height,
+                tableInside: table.right <= win.right + 1};
+    }""")
+
+    assert after['w'] - before['w'] == pytest.approx(240, abs=10)
+    # The extra width goes to the ladder itself, not to the rail.
+    assert after['gridW'] - before['gridW'] == pytest.approx(240, abs=12)
+    assert after['gridH'] < before['gridH']          # shorter, as dragged
+    assert after['tableInside']
+    tidy(page)
+
+
+def test_the_exit_box_shows_the_figures_it_is_built_from(page):
+    """Break-even with no workings is a number to be trusted or not.
+    With them it can be checked: the round turn the market charges, the
+    commission the broker charges, and the profit the target asks for —
+    and every one of them fits in a 100px rail."""
+    open_ladder(page)
+    page.paths['publisher'].exits = {
+        'break_even_buy': 59.21, 'break_even_sell': 58.99,
+        'tp_buy': 60.21, 'tp_sell': 57.99, 'target_money': 10.0,
+        'target_pct': 2.0, 'margin_per_spread': 500.0,
+        'spread_width': 0.02, 'commission': 1.0,
+        'note': '2% of 500.00 margin per spread = 10.00, over commission'}
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .x-comm')"
+        " && document.querySelector('.ladder .x-comm').textContent"
+        " !== '\\u2014'", timeout=5000)
+
+    assert page.text_content('.ladder .x-width') == '0.02'
+    assert page.text_content('.ladder .x-comm') == '$1.00'
+    assert page.text_content('.ladder .x-target') == '$10.00'
+    assert '2% of' in page.get_attribute('.ladder .x-target', 'title')
+
+    # Nothing overflows the rail it lives in.
+    fits = page.evaluate("""() => {
+        const rail = document.querySelector('.ladder .rail');
+        const box = rail.getBoundingClientRect();
+        return [...rail.querySelectorAll('.exits td, .exits th')].every(
+            cell => cell.getBoundingClientRect().right <= box.right + 1
+                 && cell.scrollWidth <= cell.clientWidth + 1);
+    }""")
+    assert fits, 'a figure in the Exit box is wider than the rail'
+    page.paths['publisher'].exits = None
+    page.paths['publisher'].publish()

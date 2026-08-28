@@ -22,28 +22,28 @@
    * The BANDS stay the softened ones — on a light frame the saturated
    * pair shouts, and a band that shouts makes the size printed in it
    * harder to read. */
-  --frame: #d2d2d2;
-  --frame-dark: #c2c2c2;
-  --frame-line: #ababab;
-  --frame-text: #1c1c1c;
-  --frame-muted: #6a6a6a;
-  --price-cell: #ffffff;      /* the price column */
-  --price-line: #d9d9d9;
+  --frame: #a9a9a9;           /* the reference screen's rail grey */
+  --frame-dark: #9a9a9a;
+  --frame-line: #8a8a8a;
+  --frame-text: #101010;
+  --frame-muted: #3d3d3d;
+  --price-cell: #d9d9d9;      /* the price column */
+  --price-line: #ffffff;
 
   /* Softened, deliberately. The saturated pair was right for a dark
    * frame and is loud on a light one — and a band that shouts makes
    * the SIZE printed in it harder to read, which is the number being
    * traded off. The hues are unchanged: bid is blue, ask is red, and
    * that convention is global. */
-  --bid: #6ea3d0;             /* the solid blue bid band */
-  --bid-cell: #a9cdea;        /* a quantity inside it */
-  --ask: #cd7b7b;             /* the solid red ask band */
-  --ask-cell: #e6afaf;
+  --bid: #1f7ab5;             /* the solid blue bid band */
+  --bid-cell: #4fb3ec;        /* a quantity inside it */
+  --ask: #c02026;             /* the solid red ask band */
+  --ask-cell: #e0474d;
   /* One step deeper, for BUTTONS only. A band is data and gets out of
    * the way; a button is an action and has white text on it, which
    * needs the contrast. */
-  --bid-strong: #4a7fae;
-  --ask-strong: #b45f5f;
+  --bid-strong: #1f7ab5;
+  --ask-strong: #c02026;
   --traded: #4a9c5d;          /* LTQ print, positive change */
   --down: #c0504d;
   --last-trade: #e6e0f5;      /* the tinted last-traded price cell */
@@ -119,8 +119,14 @@ body {
   /* Never shrink. A ladder squeezed narrow by the panel beside it puts
    * the price column somewhere the trader is not expecting it. */
   flex: 0 0 auto;
-  width: 360px;
+  /* Wide enough for the price column, the two bands and the leg table
+   * beneath them at a readable size. Drag the corner grip for more, in
+   * either direction — the ladder grid takes the width and the rows
+   * take the height. */
+  width: 390px;
+  min-width: 240px;
   max-height: 100%;
+  resize: none;
   background: var(--chrome);
   border: 1px solid var(--chrome-dark);
   box-shadow: 1px 1px 0 rgba(0, 0, 0, .3);
@@ -273,7 +279,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  width: 92px;
+  width: 116px;
   padding: 4px;
   /* The rail is taller than a short window. It scrolls; it is never
    * cut off, because the overnight selector and the Fair box live at
@@ -289,6 +295,8 @@ body {
   width: 100%;
   font: 11px var(--font);
   padding: 1px 2px;
+  background: #fff;
+  border: 1px solid var(--frame-line);
 }
 .rail .check { font-size: 10px; color: var(--frame-text); }
 .rail .fair {
@@ -299,31 +307,74 @@ body {
 }
 .rail .fair-value {
   display: block;
-  font: 700 13px var(--mono);
+  font: 700 11px var(--mono);
   color: var(--frame-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.rail .fair-gap { font: 700 11px var(--mono); }
+.rail .fair-gap {
+  font: 700 10px var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .rail .fair-gap.up { color: #2f7d3f; }
 .rail .fair-gap.down { color: #b03030; }
-.rail .fair-note { font-size: 9px; color: var(--frame-muted); }
+.rail .fair-note {
+  font-size: 9px;
+  color: var(--frame-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .rail .exit {
   margin-top: 4px;
   padding: 3px;
   background: #ffffff;
   border: 1px solid var(--frame-line);
 }
-table.exits { width: 100%; border-collapse: collapse; font: 10px var(--mono); }
+/* Tight on purpose: the rail is 100px wide, so the columns are
+ * initials and the numbers are the only long thing allowed in them. */
+table.exits {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font: 9px var(--mono);
+}
 table.exits th {
   text-align: left;
   color: var(--frame-muted);
   font-weight: 400;
+  width: 22%;
 }
-table.exits td { text-align: right; }
+table.exits th.col-b, table.exits th.col-s { text-align: right; width: 32%; }
+table.exits th {
+  width: 36%;
+  font-size: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+table.exits tr.heads th { color: var(--frame-muted); }
+table.exits td {
+  text-align: right;
+  /* A little air between the two columns: without it 59.21 and 58.99
+   * meet in the middle and read as one number. */
+  padding-left: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+}
 /* The two directions keep the ladder's colours: a long leaves on the
  * blue side, a short buys back on the red. */
 table.exits td:nth-child(2) { color: #1f5f96; }
 table.exits td:nth-child(3) { color: #a33; }
-.rail .exit-note { font-size: 9px; color: var(--frame-muted); }
+.rail .exit-note {
+  font-size: 9px;
+  color: var(--frame-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .rail-label { font-size: 10px; color: var(--frame-muted); margin-top: 4px; }
 .rail .armed {
   width: 100%;
@@ -369,8 +420,8 @@ table.exits td:nth-child(3) { color: #a33; }
 .keypad { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
 .keypad button {
   font: 11px var(--font);
-  background: var(--panel);
-  border: 1px solid var(--chrome-dark);
+  background: #fff;
+  border: 1px solid var(--frame-line);
   cursor: pointer;
   padding: 1px 0;
 }
@@ -401,12 +452,14 @@ table.exits td:nth-child(3) { color: #a33; }
   font: 11px var(--font);
   text-align: left;
   padding: 1px 4px;
-  border: 1px solid var(--chrome-dark);
+  border: 1px solid var(--frame-line);
   cursor: pointer;
-  background: var(--panel);
+  background: #fff;
 }
-.cxl-s { background: #f3c9c9; }
-.cxl-b { background: #c9dcf3; }
+/* Tinted with the side they pull, as on the reference screen: the sell
+ * button carries the ask's red, the buy button the bid's blue. */
+.cxl-s { background: #e8a0a3; }
+.cxl-b { background: #7fc2e8; }
 /* The count of orders the button would pull — how the trader knows it
  * will do something before pressing it. */
 .cxl sup { font-size: 9px; margin-left: 2px; }
@@ -427,7 +480,7 @@ table.exits td:nth-child(3) { color: #a33; }
   /* The Work and LTQ columns either side of the coloured bands: near
    * white, as on the reference screen, so the two bands are the only
    * colour on the ladder. */
-  background: #f4f4f4;
+  background: #ebebeb;
 }
 .grid table {
   border-collapse: collapse;
@@ -462,10 +515,10 @@ table.exits td:nth-child(3) { color: #a33; }
  * everything at or above the best ask is the ask side. */
 /* The bands, and the implied SIZE printed in them — dark on the softer
  * colour, because the number is what is being traded off. */
-tr.in-bid td.bid { background: var(--bid); color: #0d2135; }
-tr.in-ask td.ask { background: var(--ask); color: #3a0f0f; }
-td.bid.has-qty { background: var(--bid-cell); color: #10263a; }
-td.ask.has-qty { background: var(--ask-cell); color: #3d1010; }
+tr.in-bid td.bid { background: var(--bid); color: #ffffff; }
+tr.in-ask td.ask { background: var(--ask); color: #ffffff; }
+td.bid.has-qty { background: var(--bid-cell); color: #ffffff; }
+td.ask.has-qty { background: var(--ask-cell); color: #ffffff; }
 
 /* The inside market is drawn by the two BANDS meeting — the blue ends
  * where the bids end and the red begins at the offers, which is the
@@ -584,7 +637,7 @@ table.legbook {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
-  font: 10px/1.5 var(--mono);
+  font: 10px/1.45 var(--mono);
   color: var(--frame-text);
   /* No box: it belongs to the footer it sits in. A panel with its own
    * background and border read as a separate window stuck to the
@@ -594,7 +647,7 @@ table.legbook {
 }
 table.legbook th,
 table.legbook td {
-  padding: 0 4px;
+  padding: 0 3px;
   text-align: right;
   white-space: nowrap;
   overflow: hidden;
@@ -620,7 +673,7 @@ table.legbook .sym {
 table.legbook .c-bid { width: 21%; color: #1f5f96; }
 table.legbook .c-ask { width: 21%; color: #a33; }
 table.legbook .c-width { width: 14%; color: var(--frame-text); }
-table.legbook .c-age { width: 10%; color: var(--frame-muted); }
+table.legbook .c-age { width: 11%; color: var(--frame-muted); }
 table.legbook td.age.bad { color: #b03030; font-weight: 700; }
 table.legbook tr.spread th,
 table.legbook tr.spread td {

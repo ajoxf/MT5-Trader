@@ -66,6 +66,12 @@ def describe(pair, md, settings, margin_per_spread=None, quantity=1.0,
     """
     body = {'break_even_buy': None, 'break_even_sell': None,
             'tp_buy': None, 'tp_sell': None,
+            # The three figures the exit is BUILT from, published beside
+            # it: the round turn the market charges, the commission the
+            # broker charges, and the profit the target asks for. A
+            # break-even with no workings is a number to be trusted or
+            # not; with them it can be checked.
+            'spread_width': None, 'commission': None,
             'target_money': None, 'target_pct': None,
             'margin_per_spread': margin_per_spread, 'note': None}
     if not md:
@@ -74,7 +80,13 @@ def describe(pair, md, settings, margin_per_spread=None, quantity=1.0,
 
     long_spread = md.get('long_spread')      # what a BUY pays
     short_spread = md.get('short_spread')    # what a SELL receives
+    if long_spread is not None and short_spread is not None:
+        # One round turn of both legs' bid-ask, in spread points. It is
+        # already inside the two prices below; it is shown because it is
+        # the cost of the trade the trader is about to do.
+        body['spread_width'] = long_spread - short_spread
     fees = commission(pair, settings, quantity)
+    body['commission'] = fees
     fee_points = points(fees, spread_units, quantity)
     if fee_points is None:
         fee_points = 0.0 if fees in (None, 0.0) else None

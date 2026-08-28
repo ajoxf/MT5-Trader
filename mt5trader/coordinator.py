@@ -1283,12 +1283,16 @@ def _meta_from_report(report):
 
 def _badge(md, stale, jumped):
     """The feed badge: OK / oldest leg 2.3s / desynced."""
+    ages = [md.get('leg_a_quote_age_sec'), md.get('leg_b_quote_age_sec')]
+    ages = [a for a in ages if a is not None]
     if jumped:
         return 'desynced'
     if stale:
-        return 'stale'
-    ages = [md.get('leg_a_quote_age_sec'), md.get('leg_b_quote_age_sec')]
-    ages = [a for a in ages if a is not None]
+        # WITH the number. "stale" alone says nothing about whether the
+        # feed died or the market is simply quiet, and those want
+        # different answers: one is a terminal to re-log in, the other
+        # is a limit to raise.
+        return f'stale {max(ages):.0f}s' if ages else 'stale'
     if not ages:
         return 'warming up'
     return f'OK (oldest leg {max(ages):.1f}s)'

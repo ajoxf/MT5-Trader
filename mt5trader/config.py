@@ -94,7 +94,14 @@ DEFAULT_SETTINGS = {
     'SLIPPAGE_POINTS': 1.0,
 
     # --- guards on the price itself (spec §8) -------------------------
-    'MAX_QUOTE_AGE_SEC': 5.0,          # 0 = off
+    #: How long a leg's quote may go UNCHANGED before the spread is
+    #: called stale and orders are withheld. 5s was tuned on a futures
+    #: feed that ticks constantly; on a CFD account — and on any demo —
+    #: a perfectly healthy leg is quiet for longer than that between
+    #: trades, and the guard then fires all day on a market that is
+    #: simply slow. 15s still catches a leg that has actually STOPPED,
+    #: which is what it is for. 0 = off.
+    'MAX_QUOTE_AGE_SEC': 15.0,
     'MAX_SPREAD_JUMP_SIGMA': 5.0,      # 0 = off
     'JUMP_SETTLE_SEC': 2.0,
     'SIGMA_WINDOW_QUOTES': 600,

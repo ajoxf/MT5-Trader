@@ -99,7 +99,9 @@ green only when both accounts answered and every ladder is quoting.
 ## "QUOTES STALE"
 
 The badge turns amber when one leg's quote has not CHANGED for longer
-than `MAX_QUOTE_AGE_SEC` (5 seconds by default). It is not about the
+than `MAX_QUOTE_AGE_SEC` (15 seconds by default — 5 was tuned on a
+futures feed that ticks constantly, and fired all day on a CFD account
+that is simply slow between trades). It is not about the
 connection — a leg that is being re-sent unchanged still reads as
 stale, which is the point: the spread is a difference, so one frozen
 leg makes the whole number fictitious while the other ticks perfectly.
@@ -115,11 +117,13 @@ The three ordinary causes, in order of likelihood:
 2. **That terminal has lost its feed.** Look at the symbol in that
    MT5's Market Watch: if the numbers are frozen there too, it is the
    terminal, not this software. Re-log that terminal in.
-3. **The instrument genuinely ticks slowly.** An illiquid future can be
-   quiet for more than five seconds in normal trading. Raise
-   `MAX_QUOTE_AGE_SEC` in Settings → Trading if that is what you are
-   trading — deliberately, because the guard exists to stop an order
-   being priced off a book that has stopped moving.
+3. **The instrument genuinely ticks slowly.** A CFD or an illiquid
+   future can be quiet for a good deal longer than fifteen seconds
+   between trades. Raise `MAX_QUOTE_AGE_SEC` in Settings → Trading if
+   that is what you are trading — deliberately, because the guard
+   exists to stop an order being priced off a book that has stopped
+   moving. The badge carries the number it tripped at, so you can set
+   the limit from what you actually see rather than from a guess.
 
 While it is stale, ORDERS are withheld and say so. Closing is never
 withheld: a guard may hold back an order, and must never prevent a
