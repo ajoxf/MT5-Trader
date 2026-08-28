@@ -840,7 +840,7 @@
       fmt(row.clip_lots_b, 2) + ' B, ' + money(row.spread_units) +
       ' per 1.00';
     node.querySelector('.errors').textContent = (row.errors || []).join(' ');
-    node.querySelector('.legs').innerHTML = legFeed(row, market);
+    renderLegBook(node, row, market);
     renderFair(node, row);
     return node;
   }
@@ -855,13 +855,31 @@
     return text.replace(/\.00$/, '');
   }
 
+  function renderLegBook(node, row, market) {
+    /* The two legs' books, at the BOTTOM of the window.
+     *
+     * Moved there rather than merely placed there: a page served from
+     * a template an older process cached can have this panel somewhere
+     * else entirely, and where it sits is not a detail — it is beside
+     * the ladder's own prices, where it would be read as part of them.
+     * One line here makes the position true of whatever markup the
+     * browser was given.
+     */
+    var legs = node.querySelector('.legs');
+    var footer = node.querySelector('.footer');
+    if (!legs || !footer) { return; }
+    if (legs.parentNode !== footer) { footer.appendChild(legs); }
+    legs.innerHTML = legFeed(row, market);
+  }
+
   function renderFair(node, row) {
     /* Fair value beside the market. Never an instruction: the ladder
      * shows what the carry says the spread should be, and by how much
      * the market differs. Nothing here places or withholds an order. */
     var fair = row.fair || {};
-    node.querySelector('.fair-value').textContent =
-      fmt(fair.fair_spread, digitsFor(row.increment));
+    var value = node.querySelector('.fair-value');
+    if (!value) { return; }        // a page from an older template
+    value.textContent = fmt(fair.fair_spread, digitsFor(row.increment));
     var gap = node.querySelector('.fair-gap');
     if (fair.gap === null || fair.gap === undefined) {
       gap.textContent = '';
@@ -904,6 +922,7 @@
      * market is not a take-profit.
      */
     var exit = row.exit || {};
+    if (!node.querySelector('.be-buy')) { return; }   // older template
     // The LADDER's own precision, not four decimals: the rail is 100px
     // wide and two seven-character numbers side by side collide into
     // one unreadable string. A price is shown here the way it is shown

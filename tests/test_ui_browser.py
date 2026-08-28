@@ -1697,3 +1697,31 @@ def test_the_exit_box_shows_the_figures_it_is_built_from(page):
     assert fits, 'a figure in the Exit box is wider than the rail'
     page.paths['publisher'].exits = None
     page.paths['publisher'].publish()
+
+
+def test_the_leg_book_is_moved_to_the_bottom_whatever_the_markup_says(page):
+    """Where this panel sits is not a detail: beside the ladder's own
+    prices it reads as part of them. A page served from a template an
+    older process cached can put it anywhere, so the position is made
+    true at render time rather than assumed from the markup."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .footer table.legbook', timeout=5000)
+
+    # Put it back in the quote strip, as an older page had it, and let
+    # one render pass happen.
+    page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        node.querySelector('.quotestrip').appendChild(
+            node.querySelector('.legs'));
+        window.MT5Trader.render();
+    }""")
+
+    assert page.locator('.ladder .footer .legs').count() == 1
+    assert page.locator('.ladder .quotestrip .legs').count() == 0
+    # ...and it is still the last thing in the window, under the ladder.
+    assert page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        const grid = node.querySelector('.grid').getBoundingClientRect();
+        const legs = node.querySelector('.legs').getBoundingClientRect();
+        return legs.top >= grid.top;
+    }""")
