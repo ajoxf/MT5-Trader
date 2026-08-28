@@ -89,7 +89,14 @@ class LocalLeg:
         if not t:
             return None
         return {'bid': t.bid, 'ask': t.ask, 'last': t.last,
-                'time': getattr(t, 'time', time.time())}
+                'time': getattr(t, 'time', time.time()),
+                # The BROKER's own millisecond stamp, and whether the
+                # symbol was in Market Watch when this was read. A leg
+                # that looks frozen is one of two faults — not
+                # subscribed, or subscribed and receiving nothing — and
+                # these two fields are what tell them apart.
+                'time_msc': getattr(t, 'time_msc', None),
+                'visible': self.broker.last_visible.get(symbol)}
 
     def session_stats(self, symbol):
         return self.broker.session_stats(symbol)

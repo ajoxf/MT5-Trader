@@ -81,6 +81,8 @@ class Coordinator:
         self._depth_cache = {}
         #: pair key -> (at, margin for ONE spread across both accounts)
         self._margin_cache = {}
+        #: pair key -> when a stale leg was last written to the log
+        self._stale_logged = {}
         self._loop_interval = None
         self._last_poll = None
         self._stop = threading.Event()
@@ -337,6 +339,8 @@ class Coordinator:
                 self.config.get('MAX_SPREAD_JUMP_SIGMA'),
                 self.config.get('JUMP_SETTLE_SEC'))
             md['stale_reason'] = stale
+            if stale:
+                self._log_stale(key, pair, md)
             md['jump_reason'] = jumped
             md['guard_reason'] = stale or jumped
             # The badge the ladder shows continuously, so a trader can
@@ -511,6 +515,29 @@ class Coordinator:
                 stats = None
         self._session_cache[(account, symbol)] = (now, stats)
         return stats
+
+    def _log_stale(self, key, pair, md):
+        """Say what a frozen leg actually looks like, once a minute.
+
+        The two faults are indistinguishable on the screen and have
+        different answers: a symbol that is NOT VISIBLE is not
+        subscribed, and re-subscribing fixes it; a visible symbol whose
+        broker stamp is not advancing is a terminal receiving nothing,
+        and the answer is in MT5. Printing both, with the stamps, turns
+        "it goes stale again" into a fact somebody can act on.
+        """
+        every = float(self.config.get('STALE_LOG_EVERY_SEC', 60.0))
+        now = self.clock()
+        if now - self._stale_logged.get(key, 0.0) < every:
+            return
+        self._stale_logged[key] = now
+        for leg, symbol in (('a', pair.symbol_a), ('b', pair.symbol_b)):
+            logging.warning(
+                "%s leg %s (%s): visible=%s broker stamp=%s last change "
+                "%.1fs ago", key, leg.upper(), symbol,
+                md.get(f'leg_{leg}_visible'),
+                md.get(f'leg_{leg}_tick_time'),
+                md.get(f'leg_{leg}_quote_age_sec') or 0.0)
 
     def _observe_session(self, key, md, pair=None):
         """The session line above the ladder.

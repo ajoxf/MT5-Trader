@@ -73,6 +73,10 @@ class FakeBroker:
         #: Margin per lot this terminal reports, or None for a broker
         #: that cannot price it.
         self.margin_per_lot = None
+        #: symbol -> was it in Market Watch when a tick was last read?
+        #: The real one records this on every read; the fake says every
+        #: symbol it knows is watched.
+        self.last_visible = {}
         self.next_ticket = 1000
         self.next_deal = 500000
         self.connected = False
@@ -124,7 +128,10 @@ class FakeBroker:
             profit=sum(p.get('profit', 0.0) for p in self.positions.values()))
 
     def ensure_symbol(self, symbol):
-        return self.symbols.get(symbol)
+        info = self.symbols.get(symbol)
+        if info is not None:
+            self.last_visible[symbol] = True
+        return info
 
     def resubscribe(self, symbol):
         """Dropped from Market Watch and taken back. The fake counts

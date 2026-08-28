@@ -216,7 +216,9 @@ def test_the_ladder_is_the_reference_screens_five_columns():
     """`Work | Bids | Price | Asks | LTQ`, in that order — the layout is
     a specification, not a preference."""
     html = (TEMPLATES / 'index.html').read_text(encoding='utf-8')
-    headers = re.findall(r'<th class="c-(\w+)">([^<]+)</th>', html)
+    # The headers carry tooltips now, so match the class and the text
+    # without assuming nothing sits between them.
+    headers = re.findall(r'<th class="c-(\w+)"[^>]*>([^<]+)</th>', html)
     assert [name for name, _ in headers] == ['work', 'bid', 'price', 'ask',
                                              'ltq']
     assert [label for _, label in headers] == ['Work', 'Bids', 'Price',

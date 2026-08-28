@@ -1839,3 +1839,23 @@ def test_the_feed_can_be_refreshed_from_the_ladder(page):
     command = last_command(page)
     assert command['kind'] == 'refresh_feed'
     assert command['payload']['pair'] == 'XAUUSD_|GC1226'
+
+
+def test_the_two_columns_say_what_they_are(page):
+    """Work and LTQ are the two easiest things on a ladder to confuse:
+    one is an order that is still live, the other is a trade that
+    already happened."""
+    open_ladder(page)
+
+    work = page.get_attribute('.ladder .grid th.c-work', 'title')
+    ltq = page.get_attribute('.ladder .grid th.c-ltq', 'title')
+
+    assert 'resting orders' in work and 'pull one order' in work
+    assert 'most recent FILL' in ltq
+    assert 'not an order' in ltq
+
+    page.click('#help')
+    page.wait_for_selector('#help-overlay:not(.hidden)')
+    text = page.text_content('#help-overlay')
+    assert 'RESTING orders' in text and 'last FILL' in text
+    page.click('#help-close')

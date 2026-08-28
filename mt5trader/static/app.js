@@ -1051,14 +1051,19 @@
       return '<td class="age c-age' + (seconds > 5 ? ' bad' : '') + '">' +
         seconds.toFixed(1) + 's</td>';
     }
-    function line(label, symbol, bid, ask, seconds) {
+    function line(label, symbol, bid, ask, seconds, visible, stamp) {
       // The tooltip carries what a stale age actually means: this is
       // how long since the QUOTE CHANGED, not since we last asked.
       var note = (symbol || '?') +
         (seconds === null || seconds === undefined ? ''
-          : ' — last change ' + seconds.toFixed(1) + 's ago. If the ' +
-            'price is moving in MT5 but not here, that symbol is not ' +
-            'in that terminal\'s Market Watch.');
+          : ' — last change ' + seconds.toFixed(1) + 's ago') +
+        (visible === undefined || visible === null ? ''
+          : (visible ? '. In Market Watch: the terminal is subscribed, so '
+                     + 'a frozen age here means it is receiving nothing — '
+                     + 'look at this symbol in MT5'
+                     : '. NOT in Market Watch — not subscribed. Press '
+                     + 'Feed, and add it in the terminal')) +
+        (stamp ? '. Broker stamp ' + stamp : '');
       return '<tr><th>' + label + '</th><td class="sym" title="' + note +
         '">' + (symbol || '?') + '</td>' +
         cell(bid, 'c-bid') + cell(ask, 'c-ask') +
@@ -1069,9 +1074,11 @@
       '<th class="c-ask">Ask</th><th class="c-width">Width</th>' +
       '<th class="c-age">Age</th></tr></thead><tbody>';
     html += line('A', row.symbol_a, market.leg_a_bid, market.leg_a_ask,
-                 market.leg_a_quote_age_sec);
+                 market.leg_a_quote_age_sec, market.leg_a_visible,
+                 market.leg_a_tick_time);
     html += line('B', row.symbol_b, market.leg_b_bid, market.leg_b_ask,
-                 market.leg_b_quote_age_sec);
+                 market.leg_b_quote_age_sec, market.leg_b_visible,
+                 market.leg_b_tick_time);
     html += '<tr class="spread"><th></th><td class="sym">spread</td>' +
       cell(market.short_spread, 'c-bid') +
       cell(market.long_spread, 'c-ask') +

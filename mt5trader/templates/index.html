@@ -86,6 +86,12 @@
       <tr><th>M</th><td>switch this ladder between LIMIT and MARKET</td></tr>
       <tr><th>Tab</th><td>focus the next ladder</td></tr>
       <tr><th>Esc</th><td>close this, or any open dialog</td></tr>
+      <tr><th>Work</th><td>your RESTING orders — appears when a click is
+        accepted, goes when it fills or is pulled. Click the cell to
+        pull one</td></tr>
+      <tr><th>LTQ</th><td>the last FILL at that price, in green. A
+        print, not an order: it means the trade happened, not that
+        anything is still working</td></tr>
       <tr><th>Drag</th><td>move a window by its title bar — it stays
         where you put it, and comes back there after a reload.
         <b>Tidy</b> in the taskbar puts them all back in a row</td></tr>
@@ -200,11 +206,11 @@
         <table>
           <thead>
             <tr>
-              <th class="c-work">Work</th>
-              <th class="c-bid">Bids</th>
-              <th class="c-price">Price</th>
-              <th class="c-ask">Asks</th>
-              <th class="c-ltq">LTQ</th>
+              <th class="c-work" title="Work — YOUR resting orders at this level, blue for a buy and red for a sell. It appears the moment the click is accepted and stays until the order fills or is pulled. Click the cell to pull one order from it.">Work</th>
+              <th class="c-bid" title="Bids — the size the two books can do on the SELL side, in spreads. Click here to sell the spread at that level.">Bids</th>
+              <th class="c-price" title="The spread, B − β × A, one row per increment.">Price</th>
+              <th class="c-ask" title="Asks — the size the two books can do on the BUY side, in spreads. Click here to buy the spread at that level.">Asks</th>
+              <th class="c-ltq" title="LTQ — last traded quantity: the size of the most recent FILL at this price. It is a print, not an order: history, and it never means anything is still working.">LTQ</th>
             </tr>
           </thead>
           <tbody></tbody>

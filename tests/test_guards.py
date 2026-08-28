@@ -243,3 +243,83 @@ def test_a_refresh_that_answers_with_nothing_says_so(engine, pair):
 
     assert answer['ok'] is False
     assert 'check the terminals' in answer['reason']
+
+
+def test_attaching_to_the_right_terminal_does_not_log_it_in_again():
+    """`initialize(login=...)` makes the terminal re-authenticate even
+    when it is ALREADY logged into that account, and a re-login drops
+    Market Watch and interrupts the feed. With two runners on one
+    terminal that happens twice at every start — and the symptom is a
+    spread that ticks for a few seconds and then reads stale again."""
+    import mt5trader.broker as broker_module
+    from types import SimpleNamespace
+
+    class FakeMT5:
+        def __init__(self, login):
+            self.login = login
+            self.calls = []
+
+        def initialize(self, **kwargs):
+            self.calls.append(kwargs)
+            return True
+
+        def account_info(self):
+            return SimpleNamespace(login=self.login, server='S', name='n')
+
+        def shutdown(self):
+            self.calls.append('shutdown')
+
+        def last_error(self):
+            return (0, 'ok')
+
+    account = SimpleNamespace(name='a', login=100006, password='p',
+                              server='S', terminal_path=None)
+    fake = FakeMT5(login=100006)
+    original, broker_module.mt5 = broker_module.mt5, fake
+    try:
+        assert broker_module.BrokerSession(account).initialize() is True
+    finally:
+        broker_module.mt5 = original
+
+    # Attached, and NOT logged in again: one call, with no credentials.
+    assert fake.calls == [{}]
+
+
+def test_a_terminal_on_the_WRONG_account_is_logged_in():
+    """The control. Attaching to whatever is open must never mean
+    trading someone else's account."""
+    import mt5trader.broker as broker_module
+    from types import SimpleNamespace
+
+    class FakeMT5:
+        def __init__(self):
+            self.login = 999999            # not the account we want
+            self.calls = []
+
+        def initialize(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs.get('login'):
+                self.login = kwargs['login']
+            return True
+
+        def account_info(self):
+            return SimpleNamespace(login=self.login, server='S', name='n')
+
+        def shutdown(self):
+            self.calls.append('shutdown')
+
+        def last_error(self):
+            return (0, 'ok')
+
+    account = SimpleNamespace(name='a', login=100006, password='p',
+                              server='S', terminal_path=None)
+    fake = FakeMT5()
+    original, broker_module.mt5 = broker_module.mt5, fake
+    try:
+        assert broker_module.BrokerSession(account).initialize() is True
+    finally:
+        broker_module.mt5 = original
+
+    assert fake.calls[0] == {}                       # tried attaching
+    assert 'shutdown' in fake.calls                  # let it go
+    assert fake.calls[-1]['login'] == 100006         # then logged in

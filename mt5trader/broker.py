@@ -51,6 +51,8 @@ class BrokerSession:
         #: subscription is made once; a refusal is remembered too, so a
         #: broker with no depth is not asked three times a second.
         self._depth_symbols = {}
+        #: symbol -> was it in Market Watch when we last read a tick?
+        self.last_visible = {}
 
     def initialize(self):
         """Connect this process to one MT5 terminal.
@@ -84,10 +86,21 @@ class BrokerSession:
             attempts.append(("terminal path + credentials",
                              dict(credentials,
                                   path=self.account.terminal_path)))
+        else:
+            # ATTACH FIRST, log in only if the terminal is on the wrong
+            # account. `initialize(login=...)` makes the terminal
+            # re-authenticate even when it is already logged into that
+            # very account, and a re-login drops Market Watch and
+            # interrupts the feed for a moment. With two runners
+            # attached to one terminal that happens twice a start, and
+            # the symptom is a spread that ticks for a few seconds and
+            # then reads stale again.
+            attempts.append(("running terminal (already logged in)", {}))
         if credentials:
             attempts.append(("running terminal + credentials",
                              dict(credentials)))
-        attempts.append(("running terminal (already logged in)", {}))
+        if self.account.terminal_path:
+            attempts.append(("running terminal (already logged in)", {}))
 
         for label, kwargs in attempts:
             # Announce BEFORE the call, at INFO. mt5.initialize(path=)
@@ -118,8 +131,22 @@ class BrokerSession:
                 except Exception:
                     pass
             if ok:
-                self.connected = True
                 info = mt5.account_info()
+                if (not kwargs.get('login') and self.account.login and info
+                        and info.login != self.account.login):
+                    # Attached to a terminal on the WRONG account. Let
+                    # go and try the credentialed form rather than
+                    # trading someone else's account.
+                    logging.info(
+                        "[%s] the running terminal is logged into %s, not "
+                        "%s — logging in", self.account.name, info.login,
+                        self.account.login)
+                    try:
+                        mt5.shutdown()
+                    except Exception:
+                        pass
+                    continue
+                self.connected = True
                 if info:
                     logging.info("Connected [%s] via %s: %s / %s (login %s)",
                                  self.account.name, label, info.server,
@@ -212,8 +239,16 @@ class BrokerSession:
         """
         if mt5 is None:
             return None
-        self.ensure_symbol(symbol)
-        return mt5.symbol_info_tick(symbol)
+        info = self.ensure_symbol(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is not None:
+            # Carried with the price so the screen can say WHY a leg
+            # looks frozen: a symbol that is not visible is not
+            # subscribed, and a tick whose own stamp is not advancing
+            # is the terminal receiving nothing — two different faults
+            # with two different fixes.
+            self.last_visible[symbol] = bool(getattr(info, 'visible', False))
+        return tick
 
     def find_symbols(self, pattern, limit=40):
         """Symbols on THIS broker whose name or description matches —

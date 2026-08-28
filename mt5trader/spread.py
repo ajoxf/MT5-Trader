@@ -59,6 +59,13 @@ def compute_spread(pair, tick_a, tick_b, hedge_ratio=1.0, clock=time_mod.time):
         'quote_id_b': quote_id_b,
         'leg_a_bid': bid_a, 'leg_a_ask': ask_a, 'leg_a_mid': mid_a,
         'leg_b_bid': bid_b, 'leg_b_ask': ask_b, 'leg_b_mid': mid_b,
+        # The broker's own stamps, and whether each symbol was in
+        # Market Watch when it was read. A frozen leg is either not
+        # subscribed or subscribed and receiving nothing.
+        'leg_a_tick_time': tick_a.get('time'),
+        'leg_b_tick_time': tick_b.get('time'),
+        'leg_a_visible': tick_a.get('visible'),
+        'leg_b_visible': tick_b.get('visible'),
         'leg_a_width': ask_a - bid_a,
         'leg_b_width': ask_b - bid_b,
         'hedge_ratio': beta,
