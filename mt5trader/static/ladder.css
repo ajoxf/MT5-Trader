@@ -22,12 +22,15 @@
    * The BANDS stay the softened ones — on a light frame the saturated
    * pair shouts, and a band that shouts makes the size printed in it
    * harder to read. */
-  --frame: #a9a9a9;           /* the reference screen's rail grey */
-  --frame-dark: #9a9a9a;
-  --frame-line: #8a8a8a;
-  --frame-text: #101010;
-  --frame-muted: #3d3d3d;
-  --price-cell: #d9d9d9;      /* the price column */
+  /* Light grey, and softer than the reference screen's: this is looked
+   * at for eight hours at a time, and the mid grey that photographs
+   * well is tiring to sit in front of. */
+  --frame: #dcdcdc;
+  --frame-dark: #cccccc;
+  --frame-line: #b2b2b2;
+  --frame-text: #1c1c1c;
+  --frame-muted: #5a5a5a;
+  --price-cell: #eeeeee;      /* the price column */
   --price-line: #ffffff;
 
   /* Softened, deliberately. The saturated pair was right for a dark
@@ -35,15 +38,19 @@
    * the SIZE printed in it harder to read, which is the number being
    * traded off. The hues are unchanged: bid is blue, ask is red, and
    * that convention is global. */
-  --bid: #1f7ab5;             /* the solid blue bid band */
-  --bid-cell: #4fb3ec;        /* a quantity inside it */
-  --ask: #c02026;             /* the solid red ask band */
-  --ask-cell: #e0474d;
+  /* The reference screen's hues, taken down a step. Bid is blue, ask
+   * is red — that convention is global — but neither shouts, and the
+   * size printed in the band stays readable, which is the number being
+   * traded off. */
+  --bid: #6fa8d6;             /* the solid blue bid band */
+  --bid-cell: #a7ccea;        /* a quantity inside it */
+  --ask: #d08a86;             /* the solid red ask band */
+  --ask-cell: #e8b6b3;
   /* One step deeper, for BUTTONS only. A band is data and gets out of
    * the way; a button is an action and has white text on it, which
    * needs the contrast. */
-  --bid-strong: #1f7ab5;
-  --ask-strong: #c02026;
+  --bid-strong: #4a86b8;
+  --ask-strong: #b56b66;
   --traded: #4a9c5d;          /* LTQ print, positive change */
   --down: #c0504d;
   --last-trade: #e6e0f5;      /* the tinted last-traded price cell */
@@ -480,7 +487,7 @@ table.exits td:nth-child(3) { color: #a33; }
   /* The Work and LTQ columns either side of the coloured bands: near
    * white, as on the reference screen, so the two bands are the only
    * colour on the ladder. */
-  background: #ebebeb;
+  background: #f7f7f7;
 }
 .grid table {
   border-collapse: collapse;
@@ -515,10 +522,13 @@ table.exits td:nth-child(3) { color: #a33; }
  * everything at or above the best ask is the ask side. */
 /* The bands, and the implied SIZE printed in them — dark on the softer
  * colour, because the number is what is being traded off. */
-tr.in-bid td.bid { background: var(--bid); color: #ffffff; }
-tr.in-ask td.ask { background: var(--ask); color: #ffffff; }
-td.bid.has-qty { background: var(--bid-cell); color: #ffffff; }
-td.ask.has-qty { background: var(--ask-cell); color: #ffffff; }
+/* Dark text on the softer bands: white on a pale blue is the first
+ * thing to become unreadable, and the size is the number being traded
+ * off. */
+tr.in-bid td.bid { background: var(--bid); color: #10263a; }
+tr.in-ask td.ask { background: var(--ask); color: #3a1210; }
+td.bid.has-qty { background: var(--bid-cell); color: #10263a; }
+td.ask.has-qty { background: var(--ask-cell); color: #3a1210; }
 
 /* The inside market is drawn by the two BANDS meeting — the blue ends
  * where the bids end and the red begins at the offers, which is the

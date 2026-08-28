@@ -246,9 +246,9 @@ def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
     # Softened for a light frame, but the CONVENTION is what is being
     # pinned: bid is blue, ask is red, in every table on the screen.
     assert bid.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(31, 122, 181)'
+        'rgb(111, 168, 214)'
     assert ask.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(192, 32, 38)'
+        'rgb(208, 138, 134)'
 
 
 def test_a_limit_click_places_one_order_and_asks_nothing(page):
@@ -283,9 +283,9 @@ def test_the_asks_column_buys_the_spread_and_the_bids_column_sells_it(page):
     # One step deeper than the bands: a button carries white text and
     # needs the contrast, while a band is data and gets out of the way.
     assert buy.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(192, 32, 38)'
+        'rgb(181, 107, 102)'
     assert sell.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(31, 122, 181)'
+        'rgb(74, 134, 184)'
 
 
 def test_three_clicks_at_one_price_send_three_orders(page):
