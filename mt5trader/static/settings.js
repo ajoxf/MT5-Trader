@@ -42,11 +42,28 @@
   }
 
   function api(path, options) {
+    // Every caller reads `result.body`, and NO call site has a .catch().
+    // So a failure has to arrive AS a body: an unhandled rejection here
+    // is a button that does nothing at all — no toast, no error, no
+    // clue why. Both ways a request can fail without ever producing
+    // JSON land in the two handlers below: an answer that is not JSON
+    // (a traceback, a proxy page), and a fetch that never connected.
+    function failed(status, error) {
+      return {ok: false, status: status, body: {error: error}};
+    }
     return fetch(path, options).then(function (response) {
       return response.json().then(function (body) {
         return {ok: response.ok && body.ok !== false, status: response.status,
                 body: body};
+      }, function () {
+        return failed(response.status,
+          'the server answered ' + response.status + ' with something that ' +
+          'is not JSON — check the launcher console for a traceback');
       });
+    }, function (e) {
+      return failed(0, 'could not reach the server (' +
+        ((e && e.message) || 'connection failed') +
+        ') — is the launcher still running?');
     });
   }
 
@@ -124,10 +141,55 @@
     redraw(panel.querySelector('.pairs'), pairsHtml);
   }
 
+  //: The blank "new account" row's fields, in render order.
+  var NEW_ACCOUNT_FIELDS = ['f-name', 'f-terminal', 'f-login', 'f-server',
+                            'f-endpoint', 'f-password'];
+
+  function newAccountDraft(section) {
+    // What is half-typed into the NEW account row, or null.
+    //
+    // The connection poll repaints this table every 5 seconds and
+    // `innerHTML =` throws away anything not yet saved. isTyping()
+    // only protects a field that HAS FOCUS, so the moment the operator
+    // clicks Save — or leaves the window to copy a terminal path — the
+    // row empties under them, and the save then refuses for a missing
+    // name while the screen shows no reason at all. The row is unsaved
+    // work: carry it across the repaint.
+    if (!section) { return null; }
+    var row = section.querySelector('tr.new');
+    if (!row) { return null; }
+    var draft = {};
+    NEW_ACCOUNT_FIELDS.forEach(function (field) {
+      var input = row.querySelector('.' + field);
+      draft[field] = input ? input.value : '';
+    });
+    // The endpoint arrives PRE-FILLED with the next free port, so it
+    // alone is not the operator having started: carrying it would pin
+    // the row to a port that may no longer be free.
+    var started = NEW_ACCOUNT_FIELDS.some(function (field) {
+      return field !== 'f-endpoint' && draft[field];
+    });
+    return started ? draft : null;
+  }
+
+  function restoreNewAccount(section, draft) {
+    if (!draft || !section) { return; }
+    var row = section.querySelector('tr.new');
+    if (!row) { return; }
+    NEW_ACCOUNT_FIELDS.forEach(function (field) {
+      var input = row.querySelector('.' + field);
+      if (input) { input.value = draft[field]; }
+    });
+  }
+
   function redraw(section, build) {
     if (!section) { return; }
     if (isTyping(section)) { return; }
+    // Sections with no new-account row give a null draft, so this is a
+    // no-op everywhere except the accounts table.
+    var draft = newAccountDraft(section);
     section.innerHTML = build();
+    restoreNewAccount(section, draft);
   }
 
   function isTyping(section) {
@@ -720,12 +782,23 @@
   function refreshConnection() {
     return api('/api/connection').then(function (result) {
       var was = local.connection && local.connection.connected;
-      local.connection = result.body;
+      // A real answer always carries `blockers` (possibly empty). Any
+      // body without it is api()'s failure shape — render THAT as the
+      // reason, rather than an empty banner that reads like a
+      // considered "not ready".
+      local.connection = result.body && result.body.blockers
+        ? result.body
+        : {connected: false,
+           summary: (result.body && result.body.error) ||
+             'the connection check did not answer',
+           blockers: [(result.body && result.body.error) ||
+             'the connection check did not answer']};
       // Say it ONCE when it becomes true, rather than every poll: a
-      // banner that never changes is a banner nobody reads.
+      // banner that never changes is a banner nobody reads. The words
+      // are the SERVER's — a second copy here drifts from it, and this
+      // one still said "both accounts" with one account configured.
       if (local.connection.connected && was === false) {
-        UI.toast('Connected — both accounts logged in, Algo Trading on, ' +
-                 'prices arriving. You can trade.', 'ok');
+        UI.toast(local.connection.summary, 'ok');
       }
       render(false);
     });
@@ -783,6 +856,14 @@
       }
       UI.toast('saved ' + name + ' — restart the launcher for it to take ' +
                'effect', 'ok');
+      // This row has BECOME an account. Clear it, or the draft the
+      // repaint carries across would reappear in the next blank row.
+      if (!row.dataset.account) {
+        NEW_ACCOUNT_FIELDS.forEach(function (field) {
+          var input = row.querySelector('.' + field);
+          if (input) { input.value = ''; }
+        });
+      }
       refresh();
     });
   }
