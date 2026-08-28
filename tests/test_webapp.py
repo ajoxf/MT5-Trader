@@ -713,3 +713,17 @@ def test_the_snapshot_is_only_re_read_when_it_has_actually_changed(client,
     finally:
         builtins.open = real_open
     assert first['pairs']
+
+
+def test_the_page_is_rebuilt_when_the_template_changes(paths, tmp_path):
+    """Jinja compiles a template once and caches it for the life of the
+    process. Without auto-reload a `git pull` updated the CSS and the JS
+    — those are fetched by URL with a stamp — while the HTML stayed on
+    the version the process started with: new handlers against old
+    markup, elements missing, and a screen that looks like the pull
+    never landed."""
+    app = create_app(paths['status'], paths['commands'], paths['results'],
+                     paths['config'])
+
+    assert app.jinja_env.auto_reload is True
+    assert app.config['TEMPLATES_AUTO_RELOAD'] is True

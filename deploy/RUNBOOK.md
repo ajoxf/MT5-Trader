@@ -36,6 +36,12 @@ git pull
 `git pull` never touches `config.json`, `.env` or `mt5trader.db` —
 those are yours and are not in the repository.
 
+**Restart after a pull.** The engine reads its code when it starts, so
+a pull into a running instance leaves the old one working. Close the
+black window and double-click START TRADING again (or Ctrl-C and
+`python start.py`). The browser needs nothing: the page stamps its own
+CSS and JS, and the HTML is re-read per request.
+
 ## Every day
 
 1. Connect to the machine (RDP, or your usual shortcut).

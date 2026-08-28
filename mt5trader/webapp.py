@@ -42,6 +42,15 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                results_path='results.json', config_path='config.json',
                db_path='mt5trader.db'):
     app = Flask(__name__)
+    # The TEMPLATE is compiled once and cached for the life of the
+    # process unless this is on. A `git pull` therefore updated the CSS
+    # and the JS — they are fetched by URL with a stamp — while the
+    # HTML stayed on the version the process started with: new
+    # handlers, old markup, elements missing, and a screen that looks
+    # like the pull did not land. It is one file read per request, and
+    # it makes a pull enough on its own.
+    app.config['TEMPLATES_AUTO_RELOAD'] = True
+    app.jinja_env.auto_reload = True
     commands = CommandLog(command_path)
 
     def store():
