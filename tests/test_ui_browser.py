@@ -441,6 +441,7 @@ def test_one_key_is_one_order_too(page):
     page.keyboard.press('3')                        # arm 10 spreads
     page.wait_for_timeout(120)
     assert page.input_value('.ladder .armed') == '10'
+    assert page.input_value('.ladder .sell-qty') == '10'
 
     page.keyboard.press('b')
     page.wait_for_timeout(250)
@@ -481,7 +482,7 @@ def test_a_key_typed_into_a_field_is_never_an_order(page):
     """The one way a shortcut becomes dangerous: typing a quantity and
     having the B in 'BUY' fire."""
     before = command_count(page)
-    page.click('.ladder .default-qty')
+    page.click('.ladder .sell-qty')
     page.keyboard.type('b')
     page.keyboard.press('s')
     page.wait_for_timeout(250)
@@ -1337,6 +1338,7 @@ def test_the_armed_size_applies_to_both_sides(page):
     page.click('.ladder .keypad button[data-qty="10"]')
     page.wait_for_timeout(150)
     assert page.input_value('.ladder .armed') == '10'
+    assert page.input_value('.ladder .sell-qty') == '10'
 
     page.click('.ladder .buy-touch')
     page.wait_for_timeout(250)
@@ -1389,6 +1391,41 @@ def test_the_mid_carries_a_rule_of_its_own(page):
         "'.ladder tr.mid-line td')).borderTopWidth")
     assert border == '3px'
     assert page.locator('.ladder tr.mid-line').count() == 1
+
+
+def test_each_side_can_carry_its_own_size(page):
+    """Usually they are the same — the keypad sets both — but a desk
+    that wants to lift 1 and offer 5 types each one, in the box beside
+    the button that will send it."""
+    open_ladder(page)
+    page.click('.ladder .keypad button[data-qty="1"]')
+    page.fill('.ladder .sell-qty', '5')
+    page.wait_for_timeout(150)
+
+    assert 'BUY 1' in page.text_content('.ladder .buy-touch')
+    assert 'SELL 5' in page.text_content('.ladder .sell-touch')
+
+    page.click('.ladder .buy-touch')
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload']['quantity'] == 1
+
+    page.click('.ladder .sell-touch')
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload']['quantity'] == 5
+
+    # ...and a ladder click takes the size of the side it is on: the
+    # Asks column buys, the Bids column sells.
+    page.locator('.ladder .grid tbody tr td.ask').nth(3).click()
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload'] ['side'] == 'BUY'
+    assert last_command(page)['payload']['quantity'] == 1
+
+    page.locator('.ladder .grid tbody tr td.bid').nth(3).click()
+    page.wait_for_timeout(250)
+    assert last_command(page)['payload']['side'] == 'SELL'
+    assert last_command(page)['payload']['quantity'] == 5
+
+    page.click('.ladder .keypad button.clr')
 
 
 def test_any_size_from_0_01_can_be_typed_into_the_qty_box(page):

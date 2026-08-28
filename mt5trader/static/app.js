@@ -25,7 +25,11 @@
     closed: {},          // panels the TRADER closed — they stay closed
     reveal: null,        // a panel just opened: scroll it into view once
     active: null,
-    armed: {},           // pair key -> quantity armed on the keypad
+    // pair key -> {buy, sell}: a size per SIDE. They are usually the
+    // same — the keypad sets both — but a desk that wants to lift 1 and
+    // offer 5 can type each one, and the box each size sits in is
+    // beside the button that will send it.
+    armed: {},
     locked: {},          // pair key -> scroll is locked
     scrolledAt: {},      // pair key -> when the TRADER last scrolled it
     centredAt: {},       // pair key -> when we last centred it on the mid
@@ -553,9 +557,7 @@
     node.querySelector('.increment').addEventListener('change', function (e) {
       setPair(key, {increment: parseFloat(e.target.value)});
     });
-    node.querySelector('.default-qty').addEventListener('change', function (e) {
-      setPair(key, {default_quantity: parseFloat(e.target.value)});
-    });
+
     node.querySelector('.lock-scroll').addEventListener('change', function (e) {
       state.locked[key] = e.target.checked;
     });
@@ -567,13 +569,28 @@
       // Typed sizes are armed the moment they are typed: no Enter, no
       // second gesture. Blank goes back to the ladder's default rather
       // than arming zero, which would be a click that sends nothing.
-      var value = parseFloat(e.target.value);
-      state.armed[key] = (isFinite(value) && value > 0) ? value : null;
+      setArmed(key, 'buy', e.target.value);
+      // Redraw THIS ladder as it is typed, so the button beside the box
+      // carries the size before the next poll. The box being typed into
+      // is never written back over — it has focus.
+      if (state.snapshot.pairs[key]) {
+        renderLadder(key, state.snapshot.pairs[key]);
+      }
+    });
+    node.querySelector('.sell-qty').addEventListener('input', function (e) {
+      setArmed(key, 'sell', e.target.value);
+      if (state.snapshot.pairs[key]) {
+        renderLadder(key, state.snapshot.pairs[key]);
+      }
     });
     node.querySelector('.keypad').addEventListener('click', function (e) {
       var button = e.target.closest('.qty');
       if (!button) { return; }
-      state.armed[key] = button.dataset.qty ? parseFloat(button.dataset.qty) : null;
+      // The keypad arms BOTH sides: they are the same size in almost
+      // every case, and the two boxes are there for the exception.
+      var size = button.dataset.qty || '';
+      setArmed(key, 'buy', size);
+      setArmed(key, 'sell', size);
       render();
     });
     node.querySelector('.buy-touch').addEventListener('click', function () {
@@ -620,11 +637,25 @@
     });
   }
 
+  function setArmed(key, side, value) {
+    var size = parseFloat(value);
+    var armed = state.armed[key] || (state.armed[key] = {});
+    // Blank goes back to the ladder's default rather than arming zero,
+    // which would be a click that sends nothing.
+    armed[side] = (isFinite(size) && size > 0) ? size : null;
+  }
+
+  function armedFor(key, side) {
+    var armed = state.armed[key] || {};
+    return armed[String(side).toLowerCase()] || null;
+  }
+
   function clickLevel(key, side, level) {
     var pair = state.snapshot.pairs[key] || {};
-    var quantity = state.armed[key] || pair.default_quantity;
+    var armed = armedFor(key, side);
+    var quantity = armed || pair.default_quantity;
     var payload = {pair: key, side: side, level: level};
-    if (state.armed[key]) { payload.quantity = state.armed[key]; }
+    if (armed) { payload.quantity = armed; }
 
     // ONE CLICK IS ONE ORDER. A market click crosses both accounts
     // immediately — that is the product. The arming is what carries the
@@ -762,33 +793,34 @@
     setValue(node.querySelector('.tif'), row.time_in_force);
     setValue(node.querySelector('.overnight'), row.overnight);
     setValue(node.querySelector('.increment'), row.increment);
-    setValue(node.querySelector('.default-qty'), row.default_quantity);
-    var armed = node.querySelector('.armed');
-    // Never blank: this box says what ONE CLICK will send, which is the
-    // armed size if there is one and the ladder's default otherwise.
-    // Never written while it is being TYPED IN, either — the poll would
-    // otherwise eat the size as it is entered.
-    if (document.activeElement !== armed) {
-      armed.value = state.armed[key]
-        ? String(state.armed[key])
-        : (row.default_quantity === null || row.default_quantity === undefined
-            ? '' : String(row.default_quantity));
-    }
-    armed.classList.toggle('on', !!state.armed[key]);
-    // The size goes ON the two buttons as well. A trader arming 10 and
-    // then pressing SELL should not have to look back at a box on the
-    // other side of the rail to know what they are about to send.
-    var size = state.armed[key] || row.default_quantity;
-    var sized = (size === null || size === undefined) ? '' : ' ' + size;
-    node.querySelector('.buy-touch').innerHTML =
-      'BUY' + sized + ' <small>lift</small>';
-    node.querySelector('.sell-touch').innerHTML =
-      'SELL' + sized + ' <small>hit</small>';
+
+    // One box per SIDE, each beside the button that sends it. Never
+    // blank — a box shows the size that click WILL send, which is the
+    // armed one if there is one and the ladder's default otherwise —
+    // and never written while it is being typed in, or the poll would
+    // eat the size as it is entered.
+    ['buy', 'sell'].forEach(function (side) {
+      var box = node.querySelector(side === 'buy' ? '.armed' : '.sell-qty');
+      var armed = armedFor(key, side);
+      if (document.activeElement !== box) {
+        box.value = armed ? String(armed)
+          : (row.default_quantity === null ||
+             row.default_quantity === undefined
+              ? '' : String(row.default_quantity));
+      }
+      box.classList.toggle('on', !!armed);
+      var size = armed || row.default_quantity;
+      var sized = (size === null || size === undefined) ? '' : ' ' + size;
+      var button = node.querySelector(
+        side === 'buy' ? '.buy-touch' : '.sell-touch');
+      button.innerHTML = (side === 'buy' ? 'BUY' : 'SELL') + sized +
+        ' <small>' + (side === 'buy' ? 'lift' : 'hit') + '</small>';
+    });
     Array.prototype.forEach.call(node.querySelectorAll('.keypad .qty'),
       function (button) {
+        var size = parseFloat(button.dataset.qty);
         button.classList.toggle('on',
-          !!state.armed[key] &&
-          parseFloat(button.dataset.qty) === state.armed[key]);
+          armedFor(key, 'buy') === size && armedFor(key, 'sell') === size);
       });
     // Which accounts this ladder is routed across, and their logins.
     var accounts = state.snapshot.accounts || {};
@@ -2300,10 +2332,15 @@
     var lower = e.key.toLowerCase();
 
     if (QUANTITY_KEYS[e.key] !== undefined) {
-      state.armed[key] = QUANTITY_KEYS[e.key];
+      setArmed(key, 'buy', QUANTITY_KEYS[e.key]);
+      setArmed(key, 'sell', QUANTITY_KEYS[e.key]);
       return render();
     }
-    if (e.key === '0') { state.armed[key] = null; return render(); }
+    if (e.key === '0') {
+      setArmed(key, 'buy', '');
+      setArmed(key, 'sell', '');
+      return render();
+    }
     if (lower === 'b') { return atTouch(key, 'BUY'); }
     if (lower === 's') { return atTouch(key, 'SELL'); }
     if (lower === 'f') { return flatten(key); }

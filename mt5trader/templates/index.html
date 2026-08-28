@@ -144,10 +144,10 @@
         <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL <small>hit</small></button>
         <button class="quick flatten" title="Close every open position on this pair, at market, by ticket. It does not touch working orders — use Cancel all for those. Asks once (F)">CLOSE ALL</button>
         <label class="rail-label">Qty</label>
-        <!-- Typed or armed, it is the same number: the size ONE click
-             sends, on both sides. Lots go down to 0.01. -->
+        <!-- One box per side, each beside the button that sends it.
+             The keypad sets both; type in one to differ. -->
         <input class="armed" type="number" min="0.01" step="0.01"
-               title="The size ONE click sends, on both sides: BUY and SELL alike. Type any size from 0.01, or use the keypad; CLR goes back to this ladder's default.">
+               title="The size a BUY sends. The keypad sets both sides; type here to buy a different size from the one you sell.">
         <div class="keypad">
           <button class="qty" data-qty="1">1</button>
           <button class="qty" data-qty="5">5</button>
@@ -156,7 +156,8 @@
           <button class="qty" data-qty="100">100</button>
           <button class="qty clr" data-qty="">CLR</button>
         </div>
-        <input class="default-qty" type="number" min="0" step="0.01">
+        <input class="sell-qty" type="number" min="0.01" step="0.01"
+               title="The size a SELL sends. The keypad sets both sides; type here to sell a different size from the one you buy.">
         <button class="cxl cxl-s" title="Cancel this ladder's working SELL orders">CXL S<sup class="count-s"></sup></button>
         <button class="cxl cxl-all" title="Cancel every working order on this ladder (X)">CXL All<sup class="count-all"></sup></button>
         <button class="cxl cxl-b" title="Cancel this ladder's working BUY orders">CXL B<sup class="count-b"></sup></button>
