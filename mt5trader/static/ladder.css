@@ -242,6 +242,12 @@ body {
 .window.mode-market .titlebar .mode-badge { background: var(--ask); }
 .titlebar button,
 .titlebar select { cursor: default; }
+/* The close button belongs at the FAR right of the title bar. Without
+   this it merely follows the title, which looks correct only while the
+   window is narrow enough for the title to fill the bar — the ladders.
+   The wide Exchanges window put its close button against the title, on
+   the left, where every other window on the screen has none. */
+.titlebar .winbtns { margin-left: auto; }
 .winbtn {
   background: var(--chrome);
   border: 1px solid #666;
