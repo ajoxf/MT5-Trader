@@ -227,3 +227,32 @@ def test_a_second_launcher_refuses_the_port_instead_of_being_invisible(
 
     # The control: a free port is not refused.
     assert start.port_in_use('127.0.0.1', port) is False
+
+
+def test_a_runner_port_still_held_is_named_before_the_engine_starts(
+        workdir, monkeypatch, capsys):
+    """A port still held is a leg runner from the last start, still
+    attached to the terminal. Two clients logging one terminal in is a
+    feed that ticks for a few seconds and then goes quiet — it must not
+    be left to look like a broken market."""
+    import socket
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    (workdir / 'config.json').write_text(json.dumps({
+        'accounts': {'leg_a': {'endpoint': f'127.0.0.1:{port}'}},
+        'pairs': {}}), encoding='utf-8')
+    FakeChild.started = []
+    monkeypatch.setattr(start, 'Child', FakeChild)
+    monkeypatch.setattr(start.time, 'sleep', lambda seconds: None)
+    engine = start.Engine(_args(workdir))
+    try:
+        engine.restart()
+    finally:
+        listener.close()
+
+    printed = capsys.readouterr().out
+    assert 'ALREADY IN USE' in printed
+    assert "account 'leg_a'" in printed
+    assert 'two clients on one terminal' in printed

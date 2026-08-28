@@ -36,6 +36,16 @@ git pull
 `git pull` never touches `config.json`, `.env` or `mt5trader.db` —
 those are yours and are not in the repository.
 
+**"no leg runner" on a pair, or a feed that keeps dropping.** Both mean
+the same thing nine times out of ten: a runner from a previous start is
+still alive and holding that account's port. The new one cannot bind,
+so the pair has no leg — and while two runners are attached to one
+terminal, each `initialize` re-authenticates it and drops the feed
+every few seconds. Close every black window, end any stray `python.exe`
+in Task Manager, and start once. The launcher now names the account
+whose port is held, and a runner that cannot bind says so and stops
+instead of looping.
+
 **Only one instance.** If a previous one is still running, the browser
 is being served by THAT one — old page, old engine — and a pull looks
 like it did nothing however many times you run it. Starting a second

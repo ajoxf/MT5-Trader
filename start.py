@@ -304,6 +304,24 @@ class Engine:
     def restart(self):
         self.stop('picking up a configuration change')
         config = TraderConfig.from_file(self.args.config)
+        # A port still held is a runner from the last start, still
+        # attached to the terminal. Two clients logging one terminal in
+        # is a feed that ticks for a few seconds and then goes quiet —
+        # so it is named here rather than left to look like a broken
+        # market.
+        for name, account in config.accounts.items():
+            if not account.endpoint:
+                continue
+            try:
+                host, port = parse_endpoint(account.endpoint)
+            except ValueError:
+                continue
+            if port_in_use(host, port):
+                print(f"[launcher] account '{name}': {account.endpoint} is "
+                      f"ALREADY IN USE. A leg runner from a previous start "
+                      f"is still there — close the other window or end its "
+                      f"python.exe, or this account will have two clients "
+                      f"on one terminal and a feed that keeps dropping.")
         self.children = [
             Child(f'leg:{name}',
                   [sys.executable, 'run_leg.py',

@@ -18,6 +18,7 @@ symbols are right, and these are the tools for finding out.
 
 import argparse
 import logging
+import os
 import socket
 import sys
 import threading
@@ -39,7 +40,17 @@ class LegServer:
         # coordinator was connected.
         self._lock = threading.Lock()
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # NOT SO_REUSEADDR on Windows: there it means "bind even if
+        # another socket is already listening here", which lets a
+        # second runner start beside a zombie from the last run. Two
+        # runners on one terminal fight over it — each
+        # `initialize(login=...)` re-authenticates the terminal and
+        # drops its Market Watch, which is a feed that ticks for a few
+        # seconds and then goes quiet, over and over. On POSIX the flag
+        # only means "reuse a socket in TIME_WAIT", which is what it is
+        # wanted for.
+        if os.name != 'nt':
+            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind((host, port))
         self.server.listen(8)
         self.host, self.port = self.server.getsockname()
@@ -211,7 +222,22 @@ def main():
               f"check terminal_path/login/server/.env")
         sys.exit(1)
 
-    server = LegServer(broker, host, port)
+    try:
+        server = LegServer(broker, host, port)
+    except OSError as e:
+        # Almost always the previous runner for this account, still
+        # alive. Two of them on one terminal is the fault that looks
+        # like a broken feed.
+        print(f"\nAccount '{args.account}': port {port} is already in "
+              f"use ({e}).\n"
+              f"  A leg runner for this account is almost certainly still "
+              f"running from a previous start — and while it is, the "
+              f"terminal has TWO clients logging it in, which drops the "
+              f"feed every few seconds.\n"
+              f"  Close the other black window, or end the stray "
+              f"python.exe in Task Manager, then start again.\n")
+        broker.shutdown()
+        sys.exit(1)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
