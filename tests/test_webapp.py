@@ -277,7 +277,7 @@ class FakeRemoteLeg:
         'XAUUSD_': {'symbol': 'XAUUSD_', 'found': True, 'bid': 4292.00,
                     'ask': 4292.20, 'contract_size': 100.0, 'tick_size': 0.01,
                     'volume_min': 0.01, 'volume_step': 0.01,
-                    'volume_max': 100.0},
+                    'volume_max': 100.0, 'depth_levels': 0},
         'GC1226': {'symbol': 'GC1226', 'found': True, 'bid': 4351.00,
                    'ask': 4351.40, 'contract_size': 100.0, 'tick_size': 0.01,
                    'volume_min': 0.10, 'volume_step': 0.10,
@@ -727,3 +727,27 @@ def test_the_page_is_rebuilt_when_the_template_changes(paths, tmp_path):
 
     assert app.jinja_env.auto_reload is True
     assert app.config['TEMPLATES_AUTO_RELOAD'] is True
+
+
+def test_diagnose_says_whether_the_broker_publishes_a_book(wired, paths):
+    """"Why are the size columns empty?" is a question about the BROKER,
+    and the checklist can answer it: most retail CFD accounts publish no
+    depth beyond the touch, and the ladder leaves those columns empty
+    rather than inventing a number from one leg."""
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
+                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'pairs': {'XAUUSD_|GC1226': {
+            'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+            'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
+            'hedge_ratio': 1.0, 'hedge_ratio_for': 'XAUUSD_|GC1226'}}})
+
+    body = wired.get('/api/accounts/spot/diagnose').get_json()
+
+    depth = [check for check in body['checks']
+             if 'depth of market' in check['name']]
+    assert depth, [check['name'] for check in body['checks']]
+    assert depth[0]['status'] == 'INFO'
+    assert 'the broker' in depth[0]['message']
+    # ...and how to see it for themselves.
+    assert any('Alt+B' in step for step in depth[0]['fix'])

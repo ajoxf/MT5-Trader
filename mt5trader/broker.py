@@ -388,6 +388,12 @@ class BrokerSession:
                                getattr(mt5, 'SYMBOL_TRADE_MODE_CLOSEONLY',
                                        -1))),
             'expiry': int(getattr(info, 'expiration_time', 0) or 0),
+            # How many DEPTH levels this broker publishes for the
+            # symbol, or 0 for none. Most retail CFD accounts publish
+            # none at all, and then the ladder's size columns stay
+            # empty — which is the broker, not this software, and the
+            # checklist should be able to say so.
+            'depth_levels': len(self.depth(symbol) or ()),
             'swap_long': getattr(info, 'swap_long', None),
             'swap_short': getattr(info, 'swap_short', None),
             # WHAT swap_long/short are denominated in. Without it the

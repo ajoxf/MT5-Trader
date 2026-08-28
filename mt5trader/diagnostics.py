@@ -196,6 +196,22 @@ def check_symbol(checklist, scope, report, role=None):
                       ['Add it to Market Watch in the terminal, and keep '
                        'it there'])
 
+    levels = report.get('depth_levels')
+    if levels:
+        checklist.add(scope, f'{label} depth of market', PASS,
+                      f'{levels} level(s) published — the ladder shows the '
+                      f'size the two books can actually do')
+    elif levels is not None:
+        checklist.add(scope, f'{label} depth of market', INFO,
+                      'none published for this symbol. That is the broker, '
+                      'not this software: most retail CFD accounts publish '
+                      'no book beyond the touch. The ladder leaves its size '
+                      'columns empty rather than inventing a number from '
+                      'one leg',
+                      ['Check it yourself in MT5: right-click the symbol, '
+                       'Depth of Market (Alt+B). What you see there is what '
+                       'this can use'])
+
     if report.get('bid') and report.get('ask'):
         checklist.add(scope, f'{label} price', PASS,
                       f"{report['bid']} / {report['ask']}")

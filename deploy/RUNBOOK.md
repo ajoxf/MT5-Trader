@@ -153,6 +153,30 @@ While it is stale, ORDERS are withheld and say so. Closing is never
 withheld: a guard may hold back an order, and must never prevent a
 close.
 
+## The size columns (depth of market)
+
+The **Bids** and **Asks** columns show how many SPREADS the two order
+books can actually do at each level — the worse of the two legs,
+converted through each leg's clip, matched best against best.
+
+That needs the broker to publish a **DOM** (depth of market): the
+resting orders beyond the best price. Two things decide whether you
+have one:
+
+1. **The broker.** Most retail CFD and forex accounts publish nothing
+   beyond the touch; exchange-routed and ECN accounts usually do. Check
+   it yourself in MT5: right-click the symbol, **Depth of Market**
+   (Alt+B). What you see there is exactly what this can use.
+2. **Market Watch.** A symbol has to be subscribed for its book to
+   arrive. This selects it automatically, and Diagnose says if it was
+   hidden.
+
+**Exchanges → Diagnose** now reports it per symbol: how many levels are
+published, or that none are — that is the broker, not this software.
+Where there is no book the columns stay EMPTY. They are never filled
+with one leg's size, which would show a hundred available on a spread
+that can do four.
+
 ## More than one spread
 
 Each pair is its own ladder and they run side by side. Add one on
