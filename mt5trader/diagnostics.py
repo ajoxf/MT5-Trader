@@ -186,10 +186,15 @@ def check_symbol(checklist, scope, report, role=None):
 
     if not report.get('visible'):
         checklist.add(scope, f'{label} in Market Watch', WARN,
-                      'hidden — it will be selected automatically, but a '
-                      'symbol the terminal is not watching can be slow to '
-                      'start ticking',
-                      ['Add it to Market Watch in the terminal'])
+                      'hidden — a symbol the terminal is not watching '
+                      'answers with the last price it happened to have, '
+                      'for as long as it stays hidden. The chart moves; '
+                      'the API does not; the spread reads STALE while the '
+                      'market runs. It is selected automatically on every '
+                      'read now, but a terminal that keeps dropping it is '
+                      'worth fixing at the source',
+                      ['Add it to Market Watch in the terminal, and keep '
+                       'it there'])
 
     if report.get('bid') and report.get('ask'):
         checklist.add(scope, f'{label} price', PASS,

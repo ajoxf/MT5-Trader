@@ -158,3 +158,45 @@ def test_a_guard_never_prevents_a_close(engine, config, pair, legs):
     assert closed['ok']
     assert legs['acct_a'].broker.open_positions() == []
     assert legs['acct_b'].broker.open_positions() == []
+
+
+def test_a_tick_is_only_read_from_a_symbol_in_market_watch():
+    """The failure this prevents: a symbol the terminal is not
+    subscribed to still answers symbol_info_tick — with the last value
+    it happened to have, for ever. The chart in front of the trader
+    updates, the API returns the same bid and ask for twenty-five
+    minutes, and this system correctly calls its own feed stale while
+    the market moves.
+    """
+    import mt5trader.broker as broker_module
+
+    class FakeMT5:
+        def __init__(self):
+            self.selected = set()
+            self.reads = []
+
+        def symbol_info(self, symbol):
+            from types import SimpleNamespace
+            return SimpleNamespace(visible=symbol in self.selected)
+
+        def symbol_select(self, symbol, on):
+            self.selected.add(symbol)
+            return True
+
+        def symbol_info_tick(self, symbol):
+            self.reads.append(symbol)
+            from types import SimpleNamespace
+            return SimpleNamespace(bid=1.0, ask=1.1, last=1.05, time=1)
+
+    fake = FakeMT5()
+    original, broker_module.mt5 = broker_module.mt5, fake
+    try:
+        from types import SimpleNamespace
+        session = broker_module.BrokerSession(SimpleNamespace(name='a'))
+        tick = session.symbol_tick('SIU6')
+    finally:
+        broker_module.mt5 = original
+
+    assert tick is not None
+    assert 'SIU6' in fake.selected, 'the tick was read from a hidden symbol'
+    assert fake.reads == ['SIU6']

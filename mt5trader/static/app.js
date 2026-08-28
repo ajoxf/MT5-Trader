@@ -1044,8 +1044,15 @@
         seconds.toFixed(1) + 's</td>';
     }
     function line(label, symbol, bid, ask, seconds) {
-      return '<tr><th>' + label + '</th><td class="sym" title="' +
-        (symbol || '?') + '">' + (symbol || '?') + '</td>' +
+      // The tooltip carries what a stale age actually means: this is
+      // how long since the QUOTE CHANGED, not since we last asked.
+      var note = (symbol || '?') +
+        (seconds === null || seconds === undefined ? ''
+          : ' — last change ' + seconds.toFixed(1) + 's ago. If the ' +
+            'price is moving in MT5 but not here, that symbol is not ' +
+            'in that terminal\'s Market Watch.');
+      return '<tr><th>' + label + '</th><td class="sym" title="' + note +
+        '">' + (symbol || '?') + '</td>' +
         cell(bid, 'c-bid') + cell(ask, 'c-ask') +
         width(bid, ask) + age(seconds) + '</tr>';
     }

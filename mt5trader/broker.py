@@ -182,7 +182,23 @@ class BrokerSession:
         return info
 
     def symbol_tick(self, symbol):
-        return mt5.symbol_info_tick(symbol) if mt5 else None
+        """The last tick — from a symbol that is IN Market Watch.
+
+        A symbol the terminal is not subscribed to still answers
+        `symbol_info_tick`: it answers with the last value it happened
+        to have, for ever. The chart in front of the trader updates, the
+        API returns the same bid and ask for twenty-five minutes, and
+        this system correctly calls its own feed stale while the market
+        moves. Selecting it is idempotent and costs a local lookup, so
+        it is done on the read rather than hoped for at startup — a
+        terminal can drop a symbol from Market Watch at any time, and
+        the second account attached to one terminal does exactly that
+        when it switches login.
+        """
+        if mt5 is None:
+            return None
+        self.ensure_symbol(symbol)
+        return mt5.symbol_info_tick(symbol)
 
     def find_symbols(self, pattern, limit=40):
         """Symbols on THIS broker whose name or description matches —

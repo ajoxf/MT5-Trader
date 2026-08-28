@@ -129,6 +129,12 @@ The three ordinary causes, in order of likelihood:
 2. **That terminal has lost its feed.** Look at the symbol in that
    MT5's Market Watch: if the numbers are frozen there too, it is the
    terminal, not this software. Re-log that terminal in.
+
+   If the price is MOVING in MT5 but the age here keeps climbing, the
+   symbol is not in that terminal's Market Watch — a hidden symbol
+   answers the API with the last price it happened to have, for as long
+   as it stays hidden. It is now selected automatically on every read;
+   add it to Market Watch and leave it there if it keeps happening.
 3. **The instrument genuinely ticks slowly.** A CFD or an illiquid
    future can be quiet for a good deal longer than fifteen seconds
    between trades. Raise `MAX_QUOTE_AGE_SEC` in Settings → Trading if
