@@ -82,6 +82,22 @@ body {
   background: #e8dcc0;
   border-bottom: 1px solid #9c8850;
 }
+/* Both notices are one line. They are for reference: they name the
+ * thing and where to deal with it, and they close. */
+.banner-open {
+  float: right;
+  margin-left: 8px;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, .3);
+  border: 1px solid rgba(255, 255, 255, .6);
+  color: inherit;
+  cursor: pointer;
+}
+.banner {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .banner-close {
   float: right;
   margin-left: 12px;

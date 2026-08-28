@@ -333,3 +333,55 @@ def test_the_reconciler_runs_on_its_own_interval(engine):
     coordinator._last_reconcile -= 21.0
     coordinator.reconcile_if_due()
     assert len(runs) == 2
+
+
+def test_our_own_leg_seen_through_a_second_account_is_not_an_orphan(engine,
+                                                                    legs):
+    """Two configured accounts attached to ONE MT5 terminal see each
+    other's positions. Every leg we open then appears on the other
+    account with no entry in our book — and the reconciler closed it
+    within seconds of it being placed. On a live box that ate every
+    trade the desk tried to put on.
+
+    A ticket we already hold is ours, whichever account name it comes
+    back under: tickets are unique inside a terminal, and two accounts
+    reporting the same one are one terminal.
+    """
+    coordinator = engine
+    pair = list(coordinator.config.pairs.values())[0]
+    from mt5trader.models import OrderType
+    pair.order_type = OrderType.MARKET          # a POSITION, not an order
+    answer = coordinator.click(
+        pair.key, SpreadSide.BUY,
+        coordinator.market[pair.key]['long_spread'])
+    assert answer.get('ok'), answer
+    assert coordinator.book.positions()
+
+    # The other terminal connection now reports the same tickets.
+    for name, leg in legs.items():
+        for other_name, other in legs.items():
+            if other_name == name:
+                continue
+            for ticket, position in list(other.broker.positions.items()):
+                leg.broker.positions.setdefault(ticket, dict(position))
+
+    closed = []
+    for _ in range(5):                       # well past the strike count
+        closed += coordinator.reconciler.run()['closed']
+
+    assert closed == [], closed
+    assert coordinator.book.positions(), 'our own position was cleared'
+
+
+def test_a_genuine_orphan_is_still_closed(engine, legs):
+    """The control. Without it the fix above would pass on a reconciler
+    that never closes anything — and an unhedged leg left by a crash is
+    exactly what this machinery is for."""
+    coordinator = engine
+    an_orphan(legs)
+
+    closed = []
+    for _ in range(5):
+        closed += coordinator.reconciler.run()['closed']
+
+    assert closed, 'a real orphan was left at the broker'

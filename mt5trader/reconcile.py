@@ -83,6 +83,17 @@ class Reconciler:
             broker[name] = {str(p['ticket']): p for p in positions}
 
         known = self.known_tickets()
+        # The same TICKET seen under another account name is the same
+        # position seen through a second connection to one terminal —
+        # which is what two configured accounts sharing an MT5 login
+        # are. Without this, every leg we open is read as an orphan on
+        # the other account and closed within seconds of being placed;
+        # that is not a theory, it happened on a live box and cost the
+        # trader every trade they tried to put on. Two brokers CAN
+        # issue the same ticket number, so this errs towards leaving a
+        # stray position alone and listing it — never towards closing
+        # something that might be ours.
+        known_ids = {ticket for _, ticket in known}
         report = {'at': self.last_run, 'orphans': [], 'ghosts': [],
                   'closed': [], 'escalated': [],
                   'unknown_accounts': list(self.unknown_accounts)}
@@ -92,7 +103,7 @@ class Reconciler:
 
         for account, positions in broker.items():
             for ticket, position in positions.items():
-                if (account, ticket) in known:
+                if (account, ticket) in known or ticket in known_ids:
                     continue
                 key = (account, ticket)
                 if key in self.escalated:

@@ -46,6 +46,8 @@ class Publisher:
         #: Break-even and take-profit, and any open position.
         self.exits = None
         self.positions = None
+        #: Positions at the broker that our book cannot explain.
+        self.unclaimed = None
         self.live = threading.Event()
         self.live.set()
         self.stop = threading.Event()
@@ -60,7 +62,7 @@ class Publisher:
     def publish(self, at=None):
         payload = snapshot(self.order_type, self.confirm, self.same_login,
                            self.stale_leg, self.dead_orders, self.exits,
-                           self.positions)
+                           self.positions, self.unclaimed)
         if at is not None:
             payload['at'] = at
         tmp = self.path + '.tmp'
@@ -97,7 +99,7 @@ def server(tmp_path_factory):
 
 def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              stale_leg=False, dead_orders=None, exits=None,
-             positions=None):
+             positions=None, unclaimed=None):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -130,7 +132,8 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                            'so_call': 100.0, 'so_so': 50.0, 'our_lots': 0.1,
                            'our_units': 10.0, 'our_legs': 1, 'tight': True}}},
         'reconciler': {'untracked_closes': [], 'escalated': [],
-                       'unknown_accounts': []},
+                       'unknown_accounts': [],
+                       'unclaimed': unclaimed or []},
         'hedge_times_ms': [], 'click_to_on_ms': [],
         'pairs': {
             'XAUUSD_|GC1226': {
@@ -1421,7 +1424,11 @@ def test_the_shared_account_notice_can_be_put_away_and_comes_back(page):
     page.paths['publisher'].publish()
     page.wait_for_selector('#same-login-banner:not(.hidden)', timeout=5000)
     assert '#100006' in page.text_content('#same-login-banner')
-    assert 'one pool' in page.text_content('#same-login-banner')
+    # One LINE on the screen; the full reading of it is the tooltip, and
+    # the button goes where it is fixed.
+    assert 'One account, not two' in page.text_content('#same-login-banner')
+    assert 'one pool' in page.get_attribute('#same-login-banner', 'title')
+    assert page.locator('#same-login-banner .banner-open').count() == 1
 
     page.click('#same-login-banner .banner-close')
     page.wait_for_selector('#same-login-banner.hidden', state='attached',
@@ -1725,3 +1732,39 @@ def test_the_leg_book_is_moved_to_the_bottom_whatever_the_markup_says(page):
         const legs = node.querySelector('.legs').getBoundingClientRect();
         return legs.top >= grid.top;
     }""")
+
+
+def test_the_unclaimed_notice_is_one_line_and_the_table_is_where_it_acts(page):
+    """A position at the broker our book cannot explain is exactly the
+    one an automatic close must never touch, so it has to be said. A
+    wall of table across the top of the screen is not how to say it:
+    the line names the number, and the table lives with the buttons
+    that act on it."""
+    page.evaluate('() => { window.MT5Trader.state.dismissed = {}; }')
+    page.paths['publisher'].unclaimed = [
+        {'account': 'acct_a', 'ticket': 1326, 'symbol': 'GCZ6',
+         'side': 'BUY', 'volume': 0.01, 'price_open': 4631.84}]
+    page.paths['publisher'].publish()
+    page.wait_for_selector('#unclaimed-banner:not(.hidden)', timeout=5000)
+
+    text = page.text_content('#unclaimed-banner')
+    assert '1 position(s)' in text
+    assert 'Nothing is closed automatically' in text
+    assert 'GCZ6' not in text                     # the table is elsewhere
+    assert 'GCZ6' in page.get_attribute('#unclaimed-banner', 'title')
+
+    # Review opens the Reconciler, where the position and its Close it
+    # button are.
+    page.click('#unclaimed-banner .banner-open')
+    page.wait_for_selector('.monitor table.unclaimed', timeout=5000)
+    row = page.text_content('.monitor table.unclaimed')
+    assert 'GCZ6' in row and '1326' in row
+    assert page.locator('.monitor .close-unclaimed').count() == 1
+
+    # ...and the notice can be put away.
+    page.click('#unclaimed-banner .banner-close')
+    page.wait_for_selector('#unclaimed-banner.hidden', state='attached',
+                           timeout=5000)
+    page.paths['publisher'].unclaimed = None
+    page.paths['publisher'].publish()
+    page.evaluate("() => window.MT5Trader.closePanel('monitor:')")

@@ -1884,7 +1884,29 @@
 
   function reconcileTable() {
     var reconciler = state.snapshot.reconciler || {};
-    var html = '<table><thead><tr><th>When</th><th>Symbol</th><th>Ticket</th>' +
+    var html = '';
+    var unclaimed = reconciler.unclaimed || [];
+    if (unclaimed.length) {
+      // The positions nothing will close automatically, with the two
+      // things a person can do about them.
+      html += '<div class="note mismatch">' + unclaimed.length +
+        ' position(s) at the broker carry our magic but are not in our ' +
+        'book. Nothing is closed automatically: adopt one into a pair, ' +
+        'or close it by hand.</div>';
+      html += '<table class="unclaimed"><thead><tr><th>Account</th>' +
+        '<th>Ticket</th><th>Symbol</th><th>Side</th><th>Volume</th>' +
+        '<th>Open</th><th></th></tr></thead><tbody>';
+      unclaimed.forEach(function (row) {
+        html += '<tr><td>' + row.account + '</td><td>' + row.ticket +
+          '</td><td>' + row.symbol + '</td><td>' + row.side + '</td><td>' +
+          fmt(row.volume, 2) + '</td><td>' + fmt(row.price_open, 4) +
+          '</td><td><button class="btn close-unclaimed" data-account="' +
+          row.account + '" data-ticket="' + row.ticket +
+          '">Close it</button></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '<table><thead><tr><th>When</th><th>Symbol</th><th>Ticket</th>' +
       '<th>Volume</th><th>Contract</th><th>P&amp;L</th><th>Note</th>' +
       '</tr></thead><tbody>';
     var closes = reconciler.untracked_closes || [];
@@ -1915,6 +1937,17 @@
     var button = e.target.closest('button');
     if (!button) { return; }
     var row = button.closest('tr');
+    if (button.classList.contains('close-unclaimed')) {
+      return ask('Close ' + button.dataset.account + ':' +
+                 button.dataset.ticket + '?',
+                 'This position is at the broker but not in our book. ' +
+                 'Closing it is by ticket, at market, and cannot be ' +
+                 'undone.', 'Close it', function () {
+                   send('close_unclaimed',
+                        {account: button.dataset.account,
+                         ticket: button.dataset.ticket});
+                 });
+    }
     if (button.classList.contains('close-position')) {
       send('close_position', {position_id: row.dataset.position});
     } else if (button.classList.contains('cancel-order')) {
@@ -2121,17 +2154,21 @@
       banner.classList.add('hidden');
       return;
     }
-    banner.innerHTML = closeButton() + logins.map(function (login) {
-      return '<b>' + same[login].join(' and ') + ' are configured as two ' +
-        'accounts but are both attached to MT5 login #' + login + '.</b> ' +
-        'Two terminals were intended: give each account its own ' +
-        'terminal_path on the Exchanges page. If this really is ONE ' +
-        'account trading both legs — spot and the future at one broker is ' +
-        'an ordinary spread — point both legs of the pair at the same ' +
-        'account instead; that is supported, and margin is then one pool. ' +
-        'Until one or the other, entries on the affected pairs are ' +
-        'refused. Closing what is already open still works.';
-    }).join('<br>');
+    banner.innerHTML = closeButton() +
+      '<button class="banner-open">Exchanges</button>' +
+      logins.map(function (login) {
+        return '<b>' + same[login].join(' and ') + ' are both on MT5 ' +
+          'account #' + login + '.</b> One account, not two.';
+      }).join(' ');
+    banner.title = logins.map(function (login) {
+      return same[login].join(' and ') + ' are configured as two accounts ' +
+        'but are both attached to MT5 login #' + login + '. If two ' +
+        'terminals were intended, give each account its own terminal_path ' +
+        'on the Exchanges page. If this really is ONE account trading ' +
+        'both legs — spot and the future at one broker is an ordinary ' +
+        'spread — point both legs of the pair at the same account ' +
+        'instead; margin is then one pool.';
+    }).join('\n');
     banner.dataset.signature = signature;
     banner.classList.remove('hidden');
   }
@@ -2146,6 +2183,14 @@
   }
 
   function renderUnclaimed() {
+    /* One line, and it can be put away.
+     *
+     * A position at the broker that our book cannot explain is exactly
+     * the one an automatic close must never touch, so it has to be
+     * SAID — but a wall of table across the top of the screen is not
+     * how to say it. The line names the number; the table lives in
+     * Positions -> Reconciler, where the buttons that act on it are.
+     */
     var reconciler = state.snapshot.reconciler || {};
     var unclaimed = reconciler.unclaimed || [];
     var banner = el('unclaimed-banner');
@@ -2153,24 +2198,22 @@
       banner.classList.add('hidden');
       return;
     }
-    // A position we cannot explain is exactly the one an automatic close
-    // must not touch. It sits here until a person decides.
-    var html = '<b>' + unclaimed.length + ' position(s) at the broker ' +
-      'carry our magic but are not in our book.</b> Nothing will be ' +
-      'closed automatically. Adopt them into a pair, or close them by ' +
-      'hand.<table class="unclaimed"><thead><tr><th>Account</th>' +
-      '<th>Ticket</th><th>Symbol</th><th>Side</th><th>Volume</th>' +
-      '<th>Open</th><th></th></tr></thead><tbody>';
-    unclaimed.forEach(function (row) {
-      html += '<tr><td>' + row.account + '</td><td>' + row.ticket +
-        '</td><td>' + row.symbol + '</td><td>' + row.side + '</td><td>' +
-        fmt(row.volume, 2) + '</td><td>' + fmt(row.price_open, 4) +
-        '</td><td><button class="btn close-unclaimed" data-account="' +
-        row.account + '" data-ticket="' + row.ticket +
-        '">Close it</button></td></tr>';
-    });
-    html += '</tbody></table>';
-    banner.innerHTML = html;
+    var signature = unclaimed.map(function (row) {
+      return row.account + ':' + row.ticket;
+    }).sort().join(',');
+    if (state.dismissed.unclaimed === signature) {
+      banner.classList.add('hidden');
+      return;
+    }
+    banner.dataset.signature = signature;
+    banner.innerHTML = closeButton() +
+      '<button class="banner-open">Review</button>' +
+      '<b>' + unclaimed.length + ' position(s) at the broker are not in ' +
+      'our book.</b> Nothing is closed automatically.';
+    banner.title = unclaimed.map(function (row) {
+      return row.account + ' #' + row.ticket + ' ' + row.side + ' ' +
+        row.volume + ' ' + row.symbol;
+    }).join('\n');
     banner.classList.remove('hidden');
   }
 
@@ -2417,12 +2460,25 @@
           });
     });
     el('same-login-banner').addEventListener('click', function (e) {
+      if (e.target.closest('.banner-open')) {
+        return openPanel(panelId('settings'));
+      }
       if (!e.target.closest('.banner-close')) { return; }
       state.dismissed['same-login'] =
         el('same-login-banner').dataset.signature;
       el('same-login-banner').classList.add('hidden');
     });
     el('unclaimed-banner').addEventListener('click', function (e) {
+      if (e.target.closest('.banner-open')) {
+        // Where the table and the buttons that act on it live.
+        state.monitorTab = 'reconcile';
+        return openPanel(panelId('monitor'));
+      }
+      if (e.target.closest('.banner-close')) {
+        state.dismissed.unclaimed = el('unclaimed-banner').dataset.signature;
+        el('unclaimed-banner').classList.add('hidden');
+        return;
+      }
       var button = e.target.closest('.close-unclaimed');
       if (!button) { return; }
       ask('Close ' + button.dataset.account + ':' + button.dataset.ticket +
