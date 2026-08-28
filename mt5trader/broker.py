@@ -181,6 +181,21 @@ class BrokerSession:
             mt5.symbol_select(symbol, True)
         return info
 
+    def resubscribe(self, symbol):
+        """Drop a symbol from Market Watch and take it back.
+
+        The one thing that reliably restarts a feed the terminal has
+        gone quiet on: MT5 re-subscribes on select, and a symbol that
+        was answering with a price from twenty minutes ago starts
+        ticking again. Returns the tick that came back, so the caller
+        can say whether it worked rather than claim it did.
+        """
+        if mt5 is None:
+            return None
+        mt5.symbol_select(symbol, False)
+        mt5.symbol_select(symbol, True)
+        return mt5.symbol_info_tick(symbol)
+
     def symbol_tick(self, symbol):
         """The last tick — from a symbol that is IN Market Watch.
 

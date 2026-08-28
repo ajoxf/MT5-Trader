@@ -1824,3 +1824,18 @@ def test_the_size_is_on_the_two_buttons_as_well_as_in_the_box(page):
         ".textContent.trim() === 'BUY 1'", timeout=5000)
     # CLR is the ladder's own default, not a blank button.
     assert 'SELL 1' in page.text_content('.ladder .sell-touch')
+
+
+def test_the_feed_can_be_refreshed_from_the_ladder(page):
+    """"How do I refresh it?" needs a button, not an explanation. It
+    sits beside the badge that reports the trouble."""
+    open_ladder(page)
+    before = command_count(page)
+
+    page.click('.ladder .refresh-feed')
+    page.wait_for_timeout(300)
+
+    assert command_count(page) == before + 1
+    command = last_command(page)
+    assert command['kind'] == 'refresh_feed'
+    assert command['payload']['pair'] == 'XAUUSD_|GC1226'

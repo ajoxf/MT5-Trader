@@ -371,6 +371,50 @@ class Coordinator:
                 ticks[(account, symbol)] = tick
         return ticks
 
+    def refresh_feed(self, pair_key):
+        """Take both legs out of Market Watch and put them back.
+
+        The answer to "the price is moving in MT5 and this says stale":
+        a re-subscribe is what restarts a feed the terminal has gone
+        quiet on, and it is a thing the trader can DO rather than a
+        thing to wait out. The staleness clock is reset with it — not
+        to hide the age, but because the old age was measured against a
+        subscription that no longer exists.
+
+        It reports the prices that came back, so the screen can say
+        whether it worked instead of claiming it did.
+        """
+        pair = self.config.pairs.get(pair_key)
+        if pair is None:
+            return {'ok': False, 'reason': f'no pair {pair_key}'}
+        got = {}
+        for leg_name, account, symbol in (('A', pair.account_a, pair.symbol_a),
+                                          ('B', pair.account_b,
+                                           pair.symbol_b)):
+            leg = self.legs.get(account)
+            if leg is None or not symbol:
+                got[leg_name] = None
+                continue
+            try:
+                got[leg_name] = leg.resubscribe(symbol)
+            except Exception as e:
+                got[leg_name] = None
+                logging.error('refresh %s: %s', symbol, e)
+        with self.lock:
+            self.quote_ages.forget(pair_key)
+            if hasattr(self.jumps, 'forget'):
+                self.jumps.forget(pair_key)
+        alive = [name for name, tick in got.items() if tick]
+        return {'ok': bool(alive),
+                'reason': ('re-subscribed ' +
+                           ', '.join(f"leg {name} "
+                                     f"{(got[name] or {}).get('bid')}"
+                                     f"/{(got[name] or {}).get('ask')}"
+                                     for name in ('A', 'B') if got.get(name))
+                           if alive else
+                           'neither leg answered — check the terminals'),
+                'ticks': got}
+
     def margin_per_spread(self, pair):
         """What ONE spread ties up, in money, across BOTH accounts.
 

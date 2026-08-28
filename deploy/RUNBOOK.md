@@ -143,6 +143,12 @@ The three ordinary causes, in order of likelihood:
    moving. The badge carries the number it tripped at, so you can set
    the limit from what you actually see rather than from a guess.
 
+**↻ Feed**, on the ladder's footer, is the thing to press: it takes
+both symbols out of Market Watch in their terminals and puts them back,
+which is what restarts a feed the terminal has gone quiet on, and it
+resets the age clock with them. It reports the prices that came back,
+so you can see whether it worked rather than be told it did.
+
 While it is stale, ORDERS are withheld and say so. Closing is never
 withheld: a guard may hold back an order, and must never prevent a
 close.

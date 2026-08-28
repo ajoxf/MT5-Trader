@@ -602,6 +602,14 @@
     node.querySelector('.flatten').addEventListener('click', function () {
       flatten(key);
     });
+    node.querySelector('.refresh-feed').addEventListener('click', function () {
+      // Re-subscribe both legs. The answer to "it is moving in MT5 and
+      // stale here" that the trader can act on themselves.
+      send('refresh_feed', {pair: key}, function (result) {
+        var data = (result || {}).data || {};
+        if (data.reason) { toast(data.reason, data.ok ? 'ok' : ''); }
+      });
+    });
     node.querySelector('.cxl-b').addEventListener('click', function () {
       send('cancel_where', {pair: key, side: 'BUY'});
     });

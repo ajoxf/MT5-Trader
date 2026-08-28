@@ -126,6 +126,19 @@ class FakeBroker:
     def ensure_symbol(self, symbol):
         return self.symbols.get(symbol)
 
+    def resubscribe(self, symbol):
+        """Dropped from Market Watch and taken back. The fake counts
+        it, because the point of the button is that it HAPPENS."""
+        self.resubscribed = getattr(self, 'resubscribed', [])
+        self.resubscribed.append(symbol)
+        info = self.symbols.get(symbol)
+        if info is None:
+            return None
+        info.time += 1                    # a fresh tick, as a real one is
+        from types import SimpleNamespace
+        return SimpleNamespace(bid=info.bid, ask=info.ask, last=info.bid,
+                               time=info.time)
+
     def margin_for(self, symbol, side, volume, price=None):
         """What this terminal says the margin is. None when it cannot
         price it — the case the take-profit target has to survive."""

@@ -214,6 +214,9 @@
     </div>
     <div class="footer">
       <span class="feed" title="The staleness and jump guards (a guard may withhold an order; it never prevents a close)">—</span>
+      <!-- The thing to DO about a stale feed: take both symbols out of
+           Market Watch and put them back. -->
+      <button class="btn refresh-feed" title="Re-subscribe both legs in their terminals. Use this when the price is moving in MT5 but the age here keeps climbing.">↻ Feed</button>
       <!-- The two legs' own quotes, in ONE place. A spread that is not
            moving is one leg that is not moving, and this says which. -->
       <span class="legs" title="Each leg's own bid/ask and how long since it last changed">—</span>

@@ -162,6 +162,9 @@ class CommandRunner:
                                       float(payload['level']),
                                       payload.get('quantity'))
 
+    def _do_refresh_feed(self, payload):
+        return self.coordinator.refresh_feed(payload['pair'])
+
     def _do_cancel_order(self, payload):
         return self.coordinator.cancel_order(payload['order_id'])
 

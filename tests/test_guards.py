@@ -200,3 +200,46 @@ def test_a_tick_is_only_read_from_a_symbol_in_market_watch():
     assert tick is not None
     assert 'SIU6' in fake.selected, 'the tick was read from a hidden symbol'
     assert fake.reads == ['SIU6']
+
+
+def test_the_feed_can_be_re_subscribed_and_the_age_starts_again(engine, legs,
+                                                                 pair):
+    """"The price is moving in MT5 and this says stale" needs an answer
+    the trader can act on. Taking both symbols out of Market Watch and
+    putting them back is what restarts a feed the terminal has gone
+    quiet on — and the staleness clock goes with it, because the age it
+    was carrying was measured against a subscription that no longer
+    exists."""
+    coordinator, clock = engine
+    coordinator.poll_once()
+    for _ in range(10):
+        clock.advance(3.0)                      # both legs frozen
+        coordinator.poll_once()
+    assert coordinator.market[pair.key]['stale_reason']
+
+    answer = coordinator.refresh_feed(pair.key)
+
+    assert answer['ok'], answer
+    assert pair.symbol_a in legs['acct_a'].broker.resubscribed
+    assert pair.symbol_b in legs['acct_b'].broker.resubscribed
+    assert '/' in answer['reason']              # the prices that came back
+
+    coordinator.poll_once()
+    md = coordinator.market[pair.key]
+    # The clock starts again: the first pass after a re-subscribe is a
+    # first sighting, not a twenty-minute-old quote.
+    assert md['stale_reason'] is None
+    assert md['leg_a_quote_age_sec'] in (None, 0.0)
+
+
+def test_a_refresh_that_answers_with_nothing_says_so(engine, pair):
+    """The control: it reports what came back, so the screen can say
+    whether it worked rather than claim it did."""
+    coordinator, _ = engine
+    for leg in coordinator.legs.values():
+        leg.resubscribe = lambda symbol: None
+
+    answer = coordinator.refresh_feed(pair.key)
+
+    assert answer['ok'] is False
+    assert 'check the terminals' in answer['reason']

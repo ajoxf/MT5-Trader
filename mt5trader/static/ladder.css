@@ -680,6 +680,7 @@ tr:hover td.price { outline: 1px solid #333; }
   border-top: 1px solid var(--frame-line);
   font-size: 10px;
 }
+.footer .refresh-feed { padding: 1px 6px; font-size: 11px; }
 .footer .feed.ok { color: var(--traded); }
 .footer .feed.warn { color: #8a6b1f; font-weight: 600; }
 .footer .feed.bad { color: var(--ask); font-weight: 700; }

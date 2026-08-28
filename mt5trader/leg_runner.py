@@ -63,6 +63,9 @@ class LegServer:
                 if tick is None:
                     return {'ok': False, 'error': f"No tick for {msg['symbol']}"}
                 return {'ok': True, 'tick': tick}
+            if cmd == 'resubscribe':
+                return {'ok': True,
+                        'tick': self.leg.resubscribe(msg['symbol'])}
             if cmd == 'margin':
                 return {'ok': True,
                         'margin': self.leg.margin_for(

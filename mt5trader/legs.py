@@ -100,6 +100,13 @@ class LocalLeg:
     def margin_for(self, symbol, side, volume, price=None):
         return self.broker.margin_for(symbol, side, volume, price)
 
+    def resubscribe(self, symbol):
+        tick = self.broker.resubscribe(symbol)
+        if not tick:
+            return None
+        return {'bid': tick.bid, 'ask': tick.ask, 'last': tick.last,
+                'time': getattr(tick, 'time', time.time())}
+
     def order(self, symbol, side, volume, slippage_points=1.0, comment=""):
         result = self.broker.send_market_order(
             symbol, OrderSide(side), volume,
@@ -283,6 +290,12 @@ class RemoteLeg:
         reply = self._request({'cmd': 'depth', 'symbol': symbol})
         if reply and reply.get('ok'):
             return reply.get('depth')
+        return None
+
+    def resubscribe(self, symbol):
+        reply = self._request({'cmd': 'resubscribe', 'symbol': symbol})
+        if reply and reply.get('ok'):
+            return reply.get('tick')
         return None
 
     def margin_for(self, symbol, side, volume, price=None):
