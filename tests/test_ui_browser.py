@@ -1821,6 +1821,6 @@ def test_the_size_is_on_the_two_buttons_as_well_as_in_the_box(page):
     page.click('.ladder .keypad button.clr')
     page.wait_for_function(
         "() => document.querySelector('.ladder .buy-touch')"
-        ".textContent.indexOf('BUY 1 ') === 0", timeout=5000)
+        ".textContent.trim() === 'BUY 1'", timeout=5000)
     # CLR is the ladder's own default, not a blank button.
     assert 'SELL 1' in page.text_content('.ladder .sell-touch')

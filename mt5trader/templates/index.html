@@ -140,13 +140,13 @@
         </select>
         <!-- The three fastest actions on the ladder, without hunting
              for a row: lift the offer, hit the bid, close what is on. -->
-        <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY <small>lift</small></button>
-        <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL <small>hit</small></button>
+        <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY</button>
+        <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL</button>
         <button class="quick flatten" title="Close every open position on this pair, at market, by ticket. It does not touch working orders — use Cancel all for those. Asks once (F)">CLOSE ALL</button>
-        <label class="rail-label">Qty</label>
-        <!-- One box per side, each beside the button that sends it.
-             The keypad sets both; type in one to differ. -->
-        <input class="armed" type="number" min="0.01" step="0.01"
+        <!-- One box per side, each labelled and tinted with the side
+             it sends. The keypad sets both; type in one to differ. -->
+        <label class="rail-label qty-buy">Qty BUY</label>
+        <input class="armed qty-box buy" type="number" min="0.01" step="0.01"
                title="The size a BUY sends. The keypad sets both sides; type here to buy a different size from the one you sell.">
         <div class="keypad">
           <button class="qty" data-qty="1">1</button>
@@ -156,7 +156,8 @@
           <button class="qty" data-qty="100">100</button>
           <button class="qty clr" data-qty="">CLR</button>
         </div>
-        <input class="sell-qty" type="number" min="0.01" step="0.01"
+        <label class="rail-label qty-sell">Qty SELL</label>
+        <input class="sell-qty qty-box sell" type="number" min="0.01" step="0.01"
                title="The size a SELL sends. The keypad sets both sides; type here to sell a different size from the one you buy.">
         <button class="cxl cxl-s" title="Cancel this ladder's working SELL orders">CXL S<sup class="count-s"></sup></button>
         <button class="cxl cxl-all" title="Cancel every working order on this ladder (X)">CXL All<sup class="count-all"></sup></button>

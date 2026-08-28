@@ -813,8 +813,7 @@
       var sized = (size === null || size === undefined) ? '' : ' ' + size;
       var button = node.querySelector(
         side === 'buy' ? '.buy-touch' : '.sell-touch');
-      button.innerHTML = (side === 'buy' ? 'BUY' : 'SELL') + sized +
-        ' <small>' + (side === 'buy' ? 'lift' : 'hit') + '</small>';
+      button.textContent = (side === 'buy' ? 'BUY' : 'SELL') + sized;
     });
     Array.prototype.forEach.call(node.querySelectorAll('.keypad .qty'),
       function (button) {

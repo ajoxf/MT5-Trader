@@ -407,6 +407,13 @@ table.exits td:nth-child(3) { color: #a33; }
   text-overflow: ellipsis;
 }
 .rail-label { font-size: 10px; color: var(--frame-muted); margin-top: 4px; }
+/* Which box is which, said twice: in the label and in the edge, in the
+ * side's own colour. Two identical boxes one above the other is a size
+ * typed into the wrong one. */
+.rail-label.qty-buy { color: var(--ask-strong); font-weight: 700; }
+.rail-label.qty-sell { color: var(--bid-strong); font-weight: 700; }
+.rail .qty-box.buy { border-left: 3px solid var(--ask-strong); }
+.rail .qty-box.sell { border-left: 3px solid var(--bid-strong); }
 .rail .armed,
 .rail .sell-qty {
   width: 100%;
