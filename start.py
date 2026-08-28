@@ -169,6 +169,26 @@ class Child:
             self.process.kill()
 
 
+def port_in_use(host, port):
+    """Is something already listening there?
+
+    Almost always the answer is "the last MT5-Trader, still running".
+    Windows keeps that process alive when its console is closed the
+    wrong way, and the browser then goes on being served by the OLD
+    one — old page, old engine, and a pull that appears to do nothing
+    however many times it is run. That is a miserable thing to
+    diagnose from a screenshot, so it is refused here with the fix.
+    """
+    import socket
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.5)
+    try:
+        return probe.connect_ex((host if host != '0.0.0.0' else '127.0.0.1',
+                                 int(port))) == 0
+    finally:
+        probe.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description='MT5-Trader launcher')
     parser.add_argument('--config', default='config.json')
@@ -189,6 +209,17 @@ def main():
     made = first_run(args.config)
     for path in made:
         print(f'[launcher] created {path}')
+
+    if not args.no_web and port_in_use(args.host, args.web_port):
+        print(f'\n[launcher] PORT {args.web_port} IS ALREADY IN USE.\n'
+              f'  Another MT5-Trader is almost certainly still running — '
+              f'and your browser is being served by THAT one, which is why '
+              f'a pull can look like it did nothing.\n'
+              f'  Close the other black window (or end its python.exe in '
+              f'Task Manager), then start this again.\n'
+              f'  To run a second copy deliberately: '
+              f'python start.py --web-port {args.web_port + 1}\n')
+        return 1
 
     url = f'http://127.0.0.1:{args.web_port}/'
     web = None
@@ -311,4 +342,4 @@ class Engine:
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main() or 0)

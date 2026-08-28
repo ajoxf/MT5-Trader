@@ -36,6 +36,12 @@ git pull
 `git pull` never touches `config.json`, `.env` or `mt5trader.db` —
 those are yours and are not in the repository.
 
+**Only one instance.** If a previous one is still running, the browser
+is being served by THAT one — old page, old engine — and a pull looks
+like it did nothing however many times you run it. Starting a second
+copy now refuses the port and says so. Close the other black window
+first (or end its `python.exe` in Task Manager).
+
 **Restart after a pull.** The engine reads its code when it starts, so
 a pull into a running instance leaves the old one working. Close the
 black window and double-click START TRADING again (or Ctrl-C and

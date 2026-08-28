@@ -196,3 +196,34 @@ def _args(workdir):
     return argparse.Namespace(
         config='config.json', status='status.json',
         commands='commands.jsonl', results='results.json', db='trader.db')
+
+
+def test_a_second_launcher_refuses_the_port_instead_of_being_invisible(
+        workdir, monkeypatch, capsys):
+    """The failure this exists for: the last instance is still running,
+    the browser goes on being served by THAT one, and a pull looks like
+    it did nothing however many times it is run — old page, old engine,
+    and nothing on screen to say so."""
+    import socket
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    try:
+        assert start.port_in_use('127.0.0.1', port) is True
+
+        monkeypatch.setattr(sys, 'argv',
+                            ['start.py', '--web-port', str(port)])
+        code = start.main()
+
+        assert code == 1
+        printed = capsys.readouterr().out
+        assert 'ALREADY IN USE' in printed
+        assert 'Close the other black window' in printed
+        # ...and the way to run a second one on purpose.
+        assert f'--web-port {port + 1}' in printed
+    finally:
+        listener.close()
+
+    # The control: a free port is not refused.
+    assert start.port_in_use('127.0.0.1', port) is False
