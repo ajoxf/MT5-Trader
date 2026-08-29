@@ -25,7 +25,8 @@ from mt5trader.models import MAGIC_NUMBER, OrderSide            # noqa: E402
 class FakeSymbol:
     def __init__(self, name, bid, ask, contract_size=100.0, volume_min=0.01,
                  volume_step=0.01, volume_max=100.0, tick_size=0.01,
-                 trade_allowed=True):
+                 trade_allowed=True, swap_long=None, swap_short=None,
+                 swap_mode=None, expiry=0):
         self.name = name
         self.bid = bid
         self.ask = ask
@@ -35,6 +36,15 @@ class FakeSymbol:
         self.volume_max = volume_max
         self.tick_size = tick_size
         self.trade_allowed = trade_allowed
+        #: What the broker charges to hold this symbol overnight, and
+        #: WHAT UNITS that figure is in. None on both by default: most
+        #: symbols on a fixture have no swap, and a fixture that always
+        #: reported one would make the "unconvertible is not zero" test
+        #: pass on anything.
+        self.swap_long = swap_long
+        self.swap_short = swap_short
+        self.swap_mode = swap_mode
+        self.expiry = expiry
         self.time = 1_700_000_000
         #: {'open','high','low','volume'} when this broker publishes a
         #: session for the symbol, None when it does not.
@@ -205,7 +215,10 @@ class FakeBroker:
             'volume_min': info.volume_min, 'volume_max': info.volume_max,
             'volume_step': info.volume_step, 'currency': 'USD',
             'filling_mode': 1, 'trade_mode': 4,
-            'trade_allowed': info.trade_allowed, 'expiry': 0,
+            'trade_allowed': info.trade_allowed,
+            'expiry': getattr(info, 'expiry', 0),
+            'swap_long': info.swap_long, 'swap_short': info.swap_short,
+            'swap_mode': info.swap_mode, 'swap_rollover3days': 3,
         }
 
     def server_time_offset_sec(self):

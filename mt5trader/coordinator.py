@@ -20,8 +20,8 @@ import threading
 import time
 from datetime import datetime
 
-from . import atomicfile, depth as depth_book, fairvalue, hedgeratio, \
-    sizing, takeprofit
+from . import atomicfile, carry, config as config_module, \
+    depth as depth_book, fairvalue, hedgeratio, sizing, takeprofit
 from .book import Book
 from .database import Store
 from .executor import PairExecutor, mark_position
@@ -32,6 +32,15 @@ from .reconcile import Reconciler
 from .session import SessionClock, day_orders, overnight_action
 from .spread import (LevelSigma, QuoteAgeTracker, SpreadJumpTracker,
                      compute_spread, stale_quote)
+
+
+#: Settings whose only consumer is a panel or a display rule, so a save
+#: takes effect on the next poll rather than at the next restart.
+HOT_SETTINGS = (
+    'TP_TARGET_PCT_OF_MARGIN', 'SLIPPAGE_ALLOWANCE', 'BREAK_EVEN_NIGHTS',
+    'CARRY_RATE_PCT', 'COMMISSION_PER_LOT_A', 'COMMISSION_PER_LOT_B',
+    'SPREAD_COST_FACTOR', 'BID_ASK_ROUND_TRIP_OVERRIDE',
+)
 
 
 class Coordinator:
@@ -81,6 +90,9 @@ class Coordinator:
         self._depth_cache = {}
         #: pair key -> (at, margin for ONE spread across both accounts)
         self._margin_cache = {}
+        #: (mtime, size) of the config last read, so the hot-apply
+        #: watcher opens the file only when it has actually changed.
+        self._config_marker = None
         #: pair key -> when a stale leg was last written to the log
         self._stale_logged = {}
         #: pair key -> when a stale pair last re-subscribed itself
@@ -314,8 +326,54 @@ class Coordinator:
         with self.lock:
             return self._poll_once()
 
+    def reload_reference_fields(self):
+        """Re-read the config and take the REFERENCE-ONLY pair fields.
+
+        Symbols, contract sizes and beta are structural and need a
+        restart; four fields whose only consumer is a panel are not. In
+        the system this is ported from they were blocked behind the
+        structural keys, and the log said "an assets change requires a
+        restart" ten lines above a live trade while the values sat
+        saved and correct.
+
+        Reads only when the file has actually CHANGED, and logs only
+        what actually moved — a watcher that prints every poll is a
+        watcher nobody reads.
+        """
+        path = getattr(self.config, 'path', None)
+        if not path:
+            return []
+        try:
+            stamp = os.stat(path)
+            marker = (stamp.st_mtime, stamp.st_size)
+        except OSError:
+            return []
+        if marker == self._config_marker:
+            return []
+        self._config_marker = marker
+        try:
+            raw = config_module.load_raw(path)
+        except Exception as e:                # a half-written config
+            logging.debug('config re-read: %s', e)
+            return []
+        moved = []
+        for key, pair in self.config.pairs.items():
+            changed = pair.apply_hot((raw.get('pairs') or {}).get(key) or {})
+            if changed:
+                moved.append(f"{key}: {', '.join(changed)}")
+        settings = raw.get('settings') or {}
+        for key in HOT_SETTINGS:
+            if key in settings and self.config.settings.get(key) != \
+                    settings[key]:
+                self.config.settings[key] = settings[key]
+                moved.append(key)
+        if moved:
+            logging.info('applied without a restart — %s', '; '.join(moved))
+        return moved
+
     def _poll_once(self):
         started = self.clock()
+        self.reload_reference_fields()
         if self._last_poll is not None:
             self._loop_interval = started - self._last_poll
         self._last_poll = started
@@ -457,6 +515,47 @@ class Coordinator:
             total += float(margin)
         self._margin_cache[pair.key] = (now, total)
         return total
+
+    def fair_spread(self, pair, md):
+        """What the CARRY says this basis should be, both directions.
+
+        Priced from the broker's OWN swap and the nights to expiry —
+        `-carry / k`, which is size-free — and compared against the
+        price each direction would actually trade at, never a midpoint.
+
+        A trader who has typed a swap in SPREAD POINTS per day short-
+        circuits all of it: that is their own number for their own
+        account, and it needs no conversion. Blank, and the four
+        per-lot rates from MT5 do the work.
+        """
+        now = self.session_clock.broker_now() or datetime.now()
+        expiry = pair.effective_expiry('b')
+        if pair.swap_per_day is not None:
+            body = fairvalue.describe((md or {}).get('spread'),
+                                      pair.swap_per_day, expiry, now)
+            body['source'] = 'typed'
+            body['expects_expiry'] = pair.expects_expiry()
+            # Reported in the SAME shape as the swap-priced reading, so
+            # the panel has one thing to draw — and so the gap is
+            # measured against the two prices each direction would
+            # actually trade at rather than against a midpoint.
+            fair = body.get('fair_spread')
+            body['fair_buy'] = body['fair_sell'] = fair
+            for key, side in (('gap_buy', 'long_spread'),
+                              ('gap_sell', 'short_spread')):
+                level = (md or {}).get(side)
+                body[key] = (None if fair is None or level is None
+                             else level - fair)
+            return body
+        days = fairvalue.days_to_expiry(expiry, now)
+        return carry.describe(
+            pair.meta_a, pair.meta_b, pair.hedge_ratio,
+            pair.clip_lots_a, pair.clip_lots_b,
+            sizing.spread_units(pair.clip_lots_b,
+                                (pair.meta_b or {}).get('contract_size')),
+            days, market=md, overrides=pair.swap_overrides(),
+            expects_expiry=pair.expects_expiry(),
+            rate_pct=self.config.get('CARRY_RATE_PCT'))
 
     def leg_depth(self, account, symbol):
         """One leg's market depth, cached for a fraction of a second.
@@ -1084,10 +1183,7 @@ class Coordinator:
                     spread_units=sizing.spread_units(
                         pair.clip_lots_b,
                         (pair.meta_b or {}).get('contract_size'))),
-                'fair': fairvalue.describe((md or {}).get('spread'),
-                                           pair.swap_per_day, pair.expiry,
-                                           self.session_clock.broker_now()
-                                           or datetime.now()),
+                'fair': self.fair_spread(pair, md),
                 'errors': self.errors.get(key) or [],
                 # The rows the ladder draws come from HERE, so the Work
                 # column, the click that places an order and the price
@@ -1378,6 +1474,17 @@ def _meta_from_report(report):
         # Measured, and shown on the ladder: which leg quotes should be
         # decided from the widths, not assumed (spec §4).
         'width': ((ask - bid) if (bid and ask) else None),
+        # What the contract itself says it expires on, so a blank
+        # expiry field can fall back to MT5 rather than to a prompt.
+        'expiry': report.get('expiry'),
+        # The carry inputs. `swap_mode` travels with them ALWAYS: the
+        # same -4.5 is points on one symbol, account currency on
+        # another and percent a year on a third, and a swap without its
+        # mode is not a smaller number, it is an unusable one.
+        'swap_long': report.get('swap_long'),
+        'swap_short': report.get('swap_short'),
+        'swap_mode': report.get('swap_mode'),
+        'swap_rollover3days': report.get('swap_rollover3days'),
     }
 
 

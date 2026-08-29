@@ -22,11 +22,12 @@ import json
 import logging
 import os
 import time
+from datetime import date
 
 from flask import Flask, jsonify, render_template, request
 
-from . import config as cfg, diagnostics, hedgeratio, sizing, \
-    slippage
+from . import config as cfg, diagnostics, fairvalue, hedgeratio, \
+    sizing, slippage
 from .commands import CommandLog
 from .legs import RemoteLeg
 
@@ -864,9 +865,27 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                       'increment', 'default_quantity', 'order_type',
                       'time_in_force', 'overnight', 'quoting_leg', 'enabled',
                       'rows', 'clip_lots_a', 'clip_lots_b',
-                      'expiry', 'swap_per_day'):
+                      'expiry', 'expiry_a', 'swap_per_day', 'auto_route',
+                      'swap_a_long_per_lot', 'swap_a_short_per_lot',
+                      'swap_b_long_per_lot', 'swap_b_short_per_lot'):
             if field in payload:
                 pair[field] = payload[field]
+        # A date that will not parse is REPORTED and the old value kept:
+        # silently dropping it leaves the operator looking at a blank
+        # field with no way to tell whether it was rejected or ignored.
+        # A date already past is accepted, and flagged.
+        notes = []
+        for field, leg in (('expiry', 'Leg B'), ('expiry_a', 'Leg A')):
+            if field not in payload or payload[field] in (None, ''):
+                continue
+            parsed = fairvalue.parse_expiry(payload[field])
+            if parsed is None:
+                pair[field] = (raw.get('pairs', {}).get(key) or {}).get(field)
+                notes.append(f"{leg}: {payload[field]!r} is not a date this "
+                             f"reads — try 2026-09-26 or 26/09/2026. The "
+                             f"previous value was kept.")
+            elif parsed < date.today():
+                notes.append(f'{leg} expiry {parsed} has already passed.')
         if 'hedge_ratio' in payload:
             # Beta belongs to the PAIR: stamp it, so a stale one from the
             # previous instrument cannot silently define the spread.
@@ -875,7 +894,10 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                 (pair.get('leg_a') or {}).get('symbol'),
                 (pair.get('leg_b') or {}).get('symbol'))
         cfg.save_raw(config_path, raw)
-        return jsonify({'ok': True, 'pair': key,
+        return jsonify({'ok': True, 'pair': key, 'notes': notes,
+                        # The carry inputs feed a PANEL, not the engine:
+                        # they are read again on the next poll, so they
+                        # are deliberately NOT in this set.
                         'restart_required': bool(
                             {'leg_a', 'leg_b', 'hedge_ratio', 'enabled'}
                             & set(payload))})

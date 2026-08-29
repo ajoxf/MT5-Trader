@@ -179,11 +179,21 @@
         <!-- What the CARRY says this spread should be: the swap per day
              to expiry. Not a signal — a number beside the market, which
              is the question the instrument is about. -->
-        <div class="fair" title="Fair = swap per day x days to expiry. Set both on the Exchanges page.">
+        <div class="fair" title="What the carry says this basis should be: the broker's own swap over the nights to expiry, divided by k. A reference reading — it feeds nothing.">
           <label class="rail-label">Fair spread</label>
-          <b class="fair-value">—</b>
-          <div class="fair-gap"></div>
+          <table class="exits fairs">
+            <tr class="heads"><th></th><th class="col-b" title="Buying the spread">B</th><th class="col-s" title="Selling the spread">S</th></tr>
+            <tr><th>Fair</th><td class="fair-buy">—</td><td class="fair-sell">—</td></tr>
+            <tr><th>Gap</th><td class="gap-buy">—</td><td class="gap-sell">—</td></tr>
+          </table>
           <div class="fair-note hint"></div>
+          <!-- A conclusion drawn from an input that can be proven wrong
+               does not render at all: the warning REPLACES the reading,
+               and names the field and the value that would fix it. -->
+          <div class="fair-warn" hidden>
+            <span class="fair-warn-text"></span>
+            <button type="button" class="fair-fix" hidden></button>
+          </div>
         </div>
         <!-- Where to get out: break-even, and break-even plus a target
              on the margin one spread ties up. A price on the screen —

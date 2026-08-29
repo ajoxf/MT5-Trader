@@ -921,39 +921,85 @@
   }
 
   function renderFair(node, row) {
-    /* Fair value beside the market. Never an instruction: the ladder
-     * shows what the carry says the spread should be, and by how much
-     * the market differs. Nothing here places or withholds an order. */
+    /* What the CARRY says this basis should be — both directions.
+     *
+     * Two columns, because buying the spread pays the offer and
+     * selling it receives the bid, and those are charged different
+     * swaps on different legs. One number here would be right half the
+     * time, and the gap would be measured against a price nobody
+     * fills at.
+     *
+     * Never an instruction. Nothing here places or withholds an order.
+     */
     var fair = row.fair || {};
-    var value = node.querySelector('.fair-value');
-    if (!value) { return; }        // a page from an older template
-    value.textContent = fmt(fair.fair_spread, digitsFor(row.increment));
-    var gap = node.querySelector('.fair-gap');
-    if (fair.gap === null || fair.gap === undefined) {
-      gap.textContent = '';
-      gap.className = 'fair-gap';
-    } else {
-      // Rich = trading above its own carry, which is the side a trader
-      // sells. Said in the word as well as the sign: the direction of a
-      // basis is the thing everyone gets backwards once.
-      gap.textContent = (fair.gap > 0 ? '+' : '') +
-        fmt(fair.gap, digitsFor(row.increment)) +
-        (fair.rich ? ' rich' : ' cheap');
-      gap.className = 'fair-gap ' + (fair.rich ? 'down' : 'up');
-    }
-    // The rail is 100px wide: a sentence does not fit in it, and a
-    // sentence that wraps four lines pushes the Exit box off the
-    // bottom. The short form is what is shown; the engine's full
-    // wording is the tooltip.
+    var buy = node.querySelector('.fair-buy');
+    if (!buy) { return; }          // a page from an older template
+    var digits = digitsFor(row.increment);
+    node.querySelector('.fair-buy').textContent = fmt(fair.fair_buy, digits);
+    node.querySelector('.fair-sell').textContent = fmt(fair.fair_sell, digits);
+    // Rich = the market is above what the carry justifies, which is the
+    // side a trader sells. Said in colour as well as sign: the
+    // direction of a basis is the thing everyone gets backwards once.
+    ['buy', 'sell'].forEach(function (side) {
+      var cell = node.querySelector('.gap-' + side);
+      var gap = fair['gap_' + side];
+      if (gap === null || gap === undefined) {
+        cell.textContent = '—';
+        cell.className = 'gap-' + side;
+        cell.title = '';
+        return;
+      }
+      cell.textContent = (gap > 0 ? '+' : '') + fmt(gap, digits);
+      cell.className = 'gap-' + side + ' ' + (gap > 0 ? 'down' : 'up');
+      cell.title = gap > 0
+        ? 'the market is RICH to its own carry here'
+        : 'the market is CHEAP to its own carry here';
+    });
+    // The rail is 100px wide: a sentence does not fit in it. The short
+    // form is shown; the engine's full wording is the tooltip.
     var note = node.querySelector('.fair-note');
-    note.textContent = fair.fair_spread === null ||
-      fair.fair_spread === undefined
-      ? 'set expiry + swap'
-      : (fair.swap_per_day !== null && fair.swap_per_day !== undefined
-          ? fmt(fair.swap_per_day, 2) + '/d x ' + fair.days_to_expiry + 'd'
-          : '');
+    var expiring = fair.days_to_expiry;
+    note.textContent = fair.fair_buy === null || fair.fair_buy === undefined
+      ? (fair.expects_expiry === false ? '' : 'set expiry + swap')
+      : (expiring === null || expiring === undefined
+          ? '' : expiring + 'd to expiry');
     note.title = fair.note || '';
+
+    // A swap that disagrees with an annual rate — or a long leg showing
+    // a credit — REPLACES the reading rather than printing beneath it.
+    var warn = node.querySelector('.fair-warn');
+    var fix = node.querySelector('.fair-fix');
+    if (!warn) { return; }
+    warn.hidden = !fair.warning;
+    node.querySelector('.fair-warn-text').textContent = fair.warning || '';
+    fix.hidden = !fair.fix;
+    if (fair.fix) {
+      // Named field, named value, ONE click — and still an explicit
+      // action. A sign the engine flipped by itself is a sign nobody
+      // would ever notice was wrong.
+      fix.textContent = 'set ' + fair.fix.field.replace(/_/g, ' ') +
+        ' = ' + fmt(fair.fix.value, 2);
+      fix.onclick = function () { applyCarryFix(row.key, fair.fix); };
+    }
     renderExit(node, row);
+  }
+
+  function applyCarryFix(key, fix) {
+    /* Correct one swap field, on the operator's click. */
+    var body = {};
+    body[fix.field] = fix.value;
+    fetch('/api/pairs/' + encodeURIComponent(key), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); }).then(function (answer) {
+      if (answer && answer.ok) {
+        toast(fix.field.replace(/_/g, ' ') + ' set to ' + fmt(fix.value, 2),
+          'ok');
+      } else {
+        toast('could not save: ' + ((answer && answer.error) || 'unknown'));
+      }
+    }).catch(function (e) { toast('could not save: ' + e); });
   }
 
   function renderExit(node, row) {

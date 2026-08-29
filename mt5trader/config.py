@@ -25,6 +25,27 @@ import re
 from . import atomicfile
 from .models import OrderType, OvernightMode, TimeInForce
 
+#: Pair types where the two legs are the SAME underlying, so carry ties
+#: them together and the contract has a date it converges on. Two
+#: different instruments (RELATED) have no fair value and must not be
+#: prompted for an expiry they do not have.
+BASIS_PAIR_TYPES = ('SPOT_FUTURE', 'FUTURE_FUTURE')
+
+
+def _blank_to_none(value):
+    """A number from the UI, where blank means "unset" and 0 does not.
+
+    `?? ''` and not `|| ''`: a swap of 0, a commission of 0 and an
+    allowance of 0 are all real statements, and a loop that skips falsy
+    values can only ever SET an override, never clear one.
+    """
+    if value in (None, ''):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
 try:
     from dotenv import load_dotenv
 except ImportError:            # dotenv optional; the shell can set them
@@ -144,6 +165,23 @@ DEFAULT_SETTINGS = {
     'SPREAD_COST_FACTOR': 1.0,
     'COMMISSION_PER_LOT_A': 0.0,
     'COMMISSION_PER_LOT_B': 0.0,
+    #: A BUDGET, not a measurement: how much slippage break-even should
+    #: allow for, in money per spread per round turn. The MEASURED
+    #: realised slippage is shown beside it (the slippage report), so
+    #: this gets corrected from data rather than left at whatever was
+    #: first guessed. Default 0 — a fabricated cost is charged against
+    #: every trade and the operator cannot tell it was never theirs.
+    'SLIPPAGE_ALLOWANCE': 0.0,
+    #: Break-even is only defined GIVEN a holding period, because the
+    #: swap is charged per night. 0 is intraday, where the term
+    #: vanishes; type the nights you expect to hold to see it.
+    'BREAK_EVEN_NIGHTS': 0.0,
+    #: An annual carry rate (percent), used ONLY to price the basis a
+    #: second time as a cross-check on the broker's swap. Unset means
+    #: no cross-check — which is honest — but it is the cheapest check
+    #: on the screen and one wrong sign in a swap field is all it takes
+    #: to display a licence to print money.
+    'CARRY_RATE_PCT': None,
 
     # --- housekeeping -------------------------------------------------
     'RECONCILE_INTERVAL_SEC': 20.0,
@@ -211,7 +249,10 @@ class PairConfig:
                  time_in_force=TimeInForce.DAY.value,
                  overnight=OvernightMode.ALLOW.value,
                  quoting_leg=None, enabled=True, rows=30,
-                 expiry=None, swap_per_day=None):
+                 expiry=None, swap_per_day=None, expiry_a=None,
+                 swap_a_long_per_lot=None, swap_a_short_per_lot=None,
+                 swap_b_long_per_lot=None, swap_b_short_per_lot=None,
+                 auto_route=False):
         self.key = key
         self.name = name or key
         self.leg_a = dict(leg_a or {})      # {'account': ..., 'symbol': ...}
@@ -242,8 +283,25 @@ class PairConfig:
         #: are what turn a basis into a fair value rather than a number
         #: that happens to oscillate. Unset = no fair value shown.
         self.expiry = expiry
+        #: Leg A's expiry too: a calendar spread needs both, and a leg
+        #: whose contract month is wrong is exactly what a fair value
+        #: beside the market is there to catch. Blank = read MT5's.
+        self.expiry_a = expiry_a
         self.swap_per_day = (None if swap_per_day in (None, '')
                              else float(swap_per_day))
+        #: The broker's own swap, per lot per night, per leg per SIDE —
+        #: four numbers, because a pair is long one leg and short the
+        #: other and the two are charged differently. Blank means "use
+        #: what MT5 reports"; a typed value wins, and 0 is a real
+        #: statement, which is why these are None and not 0.0.
+        self.swap_a_long_per_lot = _blank_to_none(swap_a_long_per_lot)
+        self.swap_a_short_per_lot = _blank_to_none(swap_a_short_per_lot)
+        self.swap_b_long_per_lot = _blank_to_none(swap_b_long_per_lot)
+        self.swap_b_short_per_lot = _blank_to_none(swap_b_short_per_lot)
+        #: AutoRouting: on a fill, rest a working order to CLOSE at the
+        #: take-profit level, priced from the actual executed spread.
+        #: Default OFF (spec section 5.4).
+        self.auto_route = bool(auto_route)
         #: Cached MT5 metadata per leg, refreshed by the coordinator.
         self.meta_a = {}
         self.meta_b = {}
@@ -281,6 +339,72 @@ class PairConfig:
         """What the ladder actually steps by: the override, or derived."""
         return self.increment or self.derived_increment()
 
+    def expects_expiry(self):
+        """Should this pair HAVE an expiry?
+
+        A basis pair (spot vs the future) has one, and a blank field is
+        an unset field — show the prompt. Two different instruments
+        (WTI vs Brent) legitimately have none, and prompting there is
+        an error message for a correct configuration. Without this
+        flag an operator who has just typed an expiry cannot tell
+        whether it was rejected, ignored, or waiting on a restart.
+        """
+        return (self.pair_type or 'SPOT_FUTURE').upper() in BASIS_PAIR_TYPES
+
+    def effective_expiry(self, leg='b'):
+        """The expiry actually in force for one leg: the typed one, or
+        the contract's own from MT5 when nothing was typed."""
+        typed = self.expiry_a if leg == 'a' else self.expiry
+        if typed:
+            return typed
+        meta = (self.meta_a if leg == 'a' else self.meta_b) or {}
+        stamp = meta.get('expiry')
+        if not stamp:
+            return None
+        from datetime import datetime, timezone
+        try:
+            return datetime.fromtimestamp(int(stamp),
+                                          timezone.utc).date().isoformat()
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+
+    def swap_overrides(self):
+        """The four typed rates, in the shape `carry` reads them."""
+        return {'swap_a_long_per_lot': self.swap_a_long_per_lot,
+                'swap_a_short_per_lot': self.swap_a_short_per_lot,
+                'swap_b_long_per_lot': self.swap_b_long_per_lot,
+                'swap_b_short_per_lot': self.swap_b_short_per_lot}
+
+    #: The reference-only fields: they feed a PANEL, not the engine, so
+    #: they hot-apply. Blocking them behind a restart is what put "an
+    #: assets change requires a restart" ten lines above a live trade
+    #: while the values sat saved and correct.
+    HOT_FIELDS = ('expiry', 'expiry_a', 'swap_per_day', 'auto_route',
+                  'swap_a_long_per_lot', 'swap_a_short_per_lot',
+                  'swap_b_long_per_lot', 'swap_b_short_per_lot')
+
+    def apply_hot(self, raw):
+        """Take the reference-only fields from a freshly read config.
+
+        Returns the names that actually CHANGED, so a hot-apply can be
+        logged on the change rather than on a clock.
+        """
+        changed = []
+        for field in self.HOT_FIELDS:
+            if field not in (raw or {}):
+                continue
+            value = raw[field]
+            if field.startswith('swap_') and field.endswith('_per_lot'):
+                value = _blank_to_none(value)
+            elif field == 'auto_route':
+                value = bool(value)
+            elif field == 'swap_per_day':
+                value = _blank_to_none(value)
+            if getattr(self, field) != value:
+                setattr(self, field, value)
+                changed.append(field)
+        return changed
+
     def to_dict(self):
         return {
             'name': self.name, 'leg_a': dict(self.leg_a),
@@ -295,6 +419,12 @@ class PairConfig:
             'quoting_leg': self.quoting_leg,
             'enabled': self.enabled, 'rows': self.rows,
             'expiry': self.expiry, 'swap_per_day': self.swap_per_day,
+            'expiry_a': self.expiry_a,
+            'swap_a_long_per_lot': self.swap_a_long_per_lot,
+            'swap_a_short_per_lot': self.swap_a_short_per_lot,
+            'swap_b_long_per_lot': self.swap_b_long_per_lot,
+            'swap_b_short_per_lot': self.swap_b_short_per_lot,
+            'auto_route': self.auto_route,
         }
 
     @classmethod

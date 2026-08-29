@@ -48,6 +48,10 @@ class Publisher:
         self.positions = None
         #: Positions at the broker that our book cannot explain.
         self.unclaimed = None
+        #: What the carry says the basis should be, as the engine
+        #: publishes it — including the case where the reading is
+        #: REPLACED by a warning about the input it came from.
+        self.fair = None
         self.live = threading.Event()
         self.live.set()
         self.stop = threading.Event()
@@ -62,7 +66,7 @@ class Publisher:
     def publish(self, at=None):
         payload = snapshot(self.order_type, self.confirm, self.same_login,
                            self.stale_leg, self.dead_orders, self.exits,
-                           self.positions, self.unclaimed)
+                           self.positions, self.unclaimed, self.fair)
         if at is not None:
             payload['at'] = at
         tmp = self.path + '.tmp'
@@ -99,7 +103,7 @@ def server(tmp_path_factory):
 
 def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              stale_leg=False, dead_orders=None, exits=None,
-             positions=None, unclaimed=None):
+             positions=None, unclaimed=None, fair=None):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -162,6 +166,7 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'positions': positions or [],
                 'dead_orders': dead_orders or [],
                 'exit': exits or {},
+                'fair': fair or {},
                 'working_buys': 0, 'working_sells': 0, 'net_position': 0.0,
                 'avg_entry': None, 'open_pnl': None, 'last_print': None,
                 'errors': [],
@@ -1648,6 +1653,71 @@ def test_the_exit_price_is_on_the_rail_for_both_directions(page):
     page.paths['publisher'].exits = None
     page.paths['publisher'].positions = None
     page.paths['publisher'].publish()
+
+def test_the_fair_spread_is_quoted_for_both_directions(page):
+    """Buying the spread pays the offer and selling it receives the bid,
+    and the two are charged different swaps on different legs. One fair
+    value here would be right half the time — and a gap measured off a
+    midpoint compares the market against a price nobody fills at."""
+    open_ladder(page)
+    page.paths['publisher'].fair = {
+        'source': 'swap', 'days_to_expiry': 30, 'expects_expiry': True,
+        'fair_buy': 0.60, 'fair_sell': 0.40,
+        'gap_buy': 0.15, 'gap_sell': -0.20,
+        'warning': None, 'fix': None,
+        'note': "30 nights of the broker's own swap, over k"}
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .fair-buy')"
+        " && document.querySelector('.ladder .fair-buy').textContent"
+        " === '0.60'", timeout=5000)
+
+    assert page.text_content('.ladder .fair-sell') == '0.40'
+    # Rich on the buy side, cheap on the sell side — and the sign is
+    # said in colour as well, because the direction of a basis is the
+    # thing everyone gets backwards once.
+    assert page.text_content('.ladder .gap-buy') == '+0.15'
+    assert 'down' in (page.get_attribute('.ladder .gap-buy', 'class') or '')
+    assert 'up' in (page.get_attribute('.ladder .gap-sell', 'class') or '')
+    assert '30d' in page.text_content('.ladder .fair-note')
+    assert page.is_hidden('.ladder .fair-warn')
+
+    page.paths['publisher'].fair = None
+    page.paths['publisher'].publish()
+
+
+def test_a_disputed_swap_replaces_the_reading_and_offers_the_correction(page):
+    """A conclusion drawn from an input that can be proven wrong should
+    not render at all. The warning stands where the number was, names
+    the field, and offers the corrected value as ONE CLICK — never
+    applied behind the operator, because a sign the engine flipped by
+    itself is a sign nobody would ever notice was wrong."""
+    open_ladder(page)
+    page.paths['publisher'].fair = {
+        'source': 'swap', 'days_to_expiry': 30, 'expects_expiry': True,
+        'fair_buy': None, 'fair_sell': None,
+        'gap_buy': None, 'gap_sell': None,
+        'warning': 'XAGUSD is the leg you would be LONG and its swap is a '
+                   'CREDIT (+58.00 a night). A long leg is normally charged '
+                   '— check the sign.',
+        'fix': {'field': 'swap_a_long_per_lot', 'value': -58.0,
+                'symbol': 'XAGUSD'},
+        'disputed': {'fair_buy': -51.82, 'fair_sell': -51.82}}
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .fair-warn')"
+        " && !document.querySelector('.ladder .fair-warn').hidden",
+        timeout=5000)
+
+    # The number is GONE, not printed beneath the warning.
+    assert page.text_content('.ladder .fair-buy') == '—'
+    assert 'CREDIT' in page.text_content('.ladder .fair-warn-text')
+    assert 'swap a long per lot' in page.text_content('.ladder .fair-fix')
+    assert '-58.00' in page.text_content('.ladder .fair-fix')
+
+    page.paths['publisher'].fair = None
+    page.paths['publisher'].publish()
+
 
 def test_nothing_about_the_take_profit_is_sent_to_the_broker():
     """It is a price on the SCREEN. No bracket order, no broker-side
