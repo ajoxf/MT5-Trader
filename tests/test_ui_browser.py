@@ -1802,6 +1802,21 @@ def test_a_disputed_swap_replaces_the_reading_and_offers_the_correction(page):
     page.paths['publisher'].publish()
 
 
+def test_GTC_carries_its_caveat_on_the_screen(page):
+    """A synthetic order lives in THIS process. Nothing at the broker
+    knows what a spread is, so GTC cannot mean what it means on an
+    exchange — and an operator who reads it as exchange-resident
+    believes an order is watching a market that nothing is watching.
+    The caveat belongs on the screen, not only in the code."""
+    open_ladder(page)
+
+    caveat = page.get_attribute('.ladder .tif', 'title')
+    assert 'UNTIL THIS SYSTEM STOPS' in caveat
+    assert 'does not resume' in caveat or 'none resumes' in caveat
+    assert 'until this system stops' in page.get_attribute(
+        '.ladder .tif option[value="GTC"]', 'title')
+
+
 def test_autorouting_says_what_is_armed_and_that_there_is_no_stop(page):
     """The switch is not the state. A trader who believes a target is
     armed when it is not is the worse failure, so the rail shows what

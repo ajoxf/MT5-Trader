@@ -140,9 +140,15 @@
           <option value="LIMIT">Limit</option>
           <option value="MARKET">Market</option>
         </select>
-        <select class="tif">
-          <option value="DAY">Day</option>
-          <option value="GTC">GTC</option>
+        <!-- The honest caveat has to be ON THE SCREEN. A synthetic
+             order lives in THIS process; nothing at the broker knows
+             what a spread is, so neither DAY nor GTC survives this
+             system stopping — both are swept at shutdown and do not
+             resume. Read as exchange-resident, GTC would be a promise
+             nothing could keep. -->
+        <select class="tif" title="DAY: cancelled at the session cutoff, on the broker's clock. GTC: until you cancel it — OR UNTIL THIS SYSTEM STOPS. Nothing at the broker knows what a spread is, so no working order survives a shutdown, and none resumes on a restart.">
+          <option value="DAY" title="cancelled at the session cutoff">Day</option>
+          <option value="GTC" title="until cancelled, or until this system stops">GTC</option>
         </select>
         <!-- The three fastest actions on the ladder, without hunting
              for a row: lift the offer, hit the bid, close what is on. -->
