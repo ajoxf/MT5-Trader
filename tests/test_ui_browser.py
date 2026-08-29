@@ -1155,7 +1155,7 @@ def test_every_ladder_is_reachable_from_one_menu(page):
 
     text = page.text_content('#add-menu')
     assert 'Gold basis' in text and 'XAUUSD_' in text
-    assert 'Market Grid' in text and 'Positions' in text
+    assert 'Market Grid' in text and 'Trading Monitor' in text
 
     page.click('#add-menu button[data-panel="monitor:"]')
     page.wait_for_selector('.window.monitor', timeout=5000)

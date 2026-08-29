@@ -307,9 +307,16 @@ body {
 .rail {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  width: 116px;
-  padding: 4px;
+  /* Tightened so the whole rail fits a short window without
+   * scrolling: the operator was scrolling past BUY/SELL to reach
+   * Exit on every ladder. */
+  gap: 2px;
+  width: var(--rail-w, 116px);
+  /* Dragged by the operator to fit several ladders side by side. */
+  resize: horizontal;
+  min-width: 96px;
+  max-width: 260px;
+  padding: 3px;
   /* The rail is taller than a short window. It scrolls; it is never
    * cut off, because the overnight selector and the Fair box live at
    * the bottom of it. */
@@ -1192,3 +1199,25 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
 @media (prefers-reduced-motion: reduce) {
   td.bid.ticked, td.ask.ticked { animation: none; }
 }
+
+
+/* --- rail density ----------------------------------------------------
+ * Every ladder carries a rail, so a pixel here is a pixel on each of
+ * them. Small enough to fit; never so small the numbers stop being
+ * readable at a glance mid-trade. */
+.rail .rail-label { font-size: 9px; line-height: 1.25; margin: 1px 0 0; }
+.rail .keypad { gap: 2px; }
+.rail .keypad .qty { padding: 1px 0; font-size: 10px; }
+.rail .quick { padding: 4px 0; font-size: 12px; }
+.rail .cxl { padding: 2px 0; font-size: 10px; }
+.rail select, .rail input[type="number"] { padding: 2px 3px; font-size: 10px; }
+.rail .exits { font-size: 9px; }
+.rail .exits td { padding: 0 2px; }
+/* The labels are the widest thing in the box — `P% on M` needs
+ * every pixel at this size, and a clipped label is a figure
+ * nobody can identify. */
+.rail .exits th { padding: 0; white-space: nowrap; }
+.rail .fair-value { font-size: 11px; }
+.rail .route-box { font-size: 9px; line-height: 1.2; }
+/* Equity under each leg: quieter than the symbol, still legible. */
+.rail .route-eq { font-variant-numeric: tabular-nums; opacity: .95; }

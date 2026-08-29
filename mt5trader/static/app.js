@@ -830,6 +830,16 @@
         'Flatten now', function () { send('flatten_pair', {pair: key}); });
   }
 
+  function money_(value, currency) {
+    /* Compact money for the rail: 15,764 rather than 15,764.37. The
+     * rail is 120px wide and the cents are never the question there. */
+    if (value === undefined || value === null || !isFinite(value)) {
+      return DASH;
+    }
+    return Math.round(value).toLocaleString('en-US') +
+      (currency ? ' ' + currency : '');
+  }
+
   function renderLadder(key, row) {
     var node = ladderNode(key);
     var market = row.market || {};
@@ -899,8 +909,17 @@
     function routeText(account, symbol) {
       var info = accounts[account] || {};
       var login = info.login ? ' #' + info.login : '';
+      // EQUITY, not balance: balance ignores what is open, and the
+      // number a trader sizes the next spread against is the one that
+      // already carries the running P&L. Unmeasured stays a dash —
+      // a leg that could not be read must never read as zero money.
+      var money = info.equity === undefined || info.equity === null
+        ? DASH
+        : money_(info.equity, info.currency);
       return (symbol || '?') + '<div class="hint">' + (account || '?') +
-        login + '</div>';
+        login + '</div><div class="hint route-eq" title="Equity: balance ' +
+        'plus the P&L of everything open on this account">' + money +
+        '</div>';
     }
     node.querySelector('.route-a b').innerHTML =
       routeText(row.account_a, row.symbol_a);
@@ -1563,7 +1582,7 @@
       node.className = 'window monitor';
       node.innerHTML =
         '<div class="titlebar"><span class="swatch"></span>' +
-        '<span class="title">Positions</span>' +
+        '<span class="title">Trading Monitor</span>' +
         '<span class="winbtns"><button class="winbtn close">&times;</button></span></div>' +
         '<div class="tabs">' +
         '<button data-tab="positions">Positions</button>' +
@@ -2672,7 +2691,7 @@
       html += '<div class="menu-title">Windows</div>' +
         '<button data-panel="' + panelId('grid') + '">Market Grid' +
         '<small>every ladder on one row each</small></button>' +
-        '<button data-panel="' + panelId('monitor') + '">Positions' +
+        '<button data-panel="' + panelId('monitor') + '">Trading Monitor' +
         '<small>positions, orders, fills, slippage, accounts</small>' +
         '</button>';
       menu.innerHTML = html;
