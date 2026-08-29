@@ -1165,3 +1165,30 @@ tr.good td { background: #ebfbee; color: #1b6b32; font: 11px var(--font); }
   font: 11px var(--font);
 }
 .pair-form .actions { margin-top: 8px; display: flex; gap: 6px; }
+
+/* --- the centring controls -------------------------------------------
+ * Lock and Centre are one decision — "does this ladder follow the
+ * market?" — so they sit on one line rather than being read as two
+ * unrelated widgets a row apart. */
+.rail .centre-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.rail .centre-row .lock { flex: 1 1 auto; }
+.rail .btn.recentre {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* A size that CHANGED, for one frame. The eye catches motion far
+ * faster than it reads a number, and on a ladder that no longer moves
+ * this is the only thing left that says the book is live. Background
+ * only: nothing reflows, so the click target never shifts. */
+@keyframes size-tick { from { background-color: #fff6d5; } to { background-color: transparent; } }
+td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  td.bid.ticked, td.ask.ticked { animation: none; }
+}
