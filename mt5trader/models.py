@@ -102,8 +102,14 @@ class SyntheticOrder:
     """
 
     def __init__(self, pair_key, side, level, quantity, order_type,
-                 time_in_force, clock=time.time):
+                 time_in_force, clock=time.time, position_id=None):
         self.order_id = new_id('SO')
+        #: The position this order CLOSES, when it is a closing order.
+        #: None on an ordinary click. It is what makes an AutoRouting
+        #: take-profit a different order from an entry at the same
+        #: level on the same side — they must never be merged into one
+        #: pending, or one of them silently changes meaning.
+        self.position_id = position_id
         self.pair_key = pair_key
         self.side = SpreadSide(side)
         self.level = float(level)           # the SPREAD level clicked
@@ -141,6 +147,8 @@ class SyntheticOrder:
             'state': self.state.value,
             'created_at': self.created_at,
             'pending_ticket': self.pending_ticket,
+            'position_id': self.position_id,
+            'intent': 'CLOSE' if self.position_id else 'OPEN',
             'reason': self.reason,
         }
 

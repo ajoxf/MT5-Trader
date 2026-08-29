@@ -52,6 +52,9 @@ class Publisher:
         #: publishes it — including the case where the reading is
         #: REPLACED by a warning about the input it came from.
         self.fair = None
+        #: AutoRouting: the switch, and what is ACTUALLY resting.
+        self.auto_route = False
+        self.auto_route_armed = None
         self.live = threading.Event()
         self.live.set()
         self.stop = threading.Event()
@@ -66,7 +69,8 @@ class Publisher:
     def publish(self, at=None):
         payload = snapshot(self.order_type, self.confirm, self.same_login,
                            self.stale_leg, self.dead_orders, self.exits,
-                           self.positions, self.unclaimed, self.fair)
+                           self.positions, self.unclaimed, self.fair,
+                           self.auto_route, self.auto_route_armed)
         if at is not None:
             payload['at'] = at
         tmp = self.path + '.tmp'
@@ -103,7 +107,8 @@ def server(tmp_path_factory):
 
 def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              stale_leg=False, dead_orders=None, exits=None,
-             positions=None, unclaimed=None, fair=None):
+             positions=None, unclaimed=None, fair=None,
+             auto_route=False, auto_route_armed=None):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -148,6 +153,8 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'increment': 0.01, 'increment_derived': 0.01,
                 'order_type': order_type, 'time_in_force': 'DAY',
                 'overnight': 'ALLOW', 'default_quantity': 1.0,
+                'auto_route': auto_route,
+                'auto_route_armed': auto_route_armed or [],
                 'clip_lots_a': 0.1, 'clip_lots_b': 0.1, 'spread_units': 10.0,
                 'short_spread': 59.09, 'long_spread': 59.11,
                 'market': {'spread': 59.10, 'short_spread': 59.09,
@@ -1759,6 +1766,42 @@ def test_a_disputed_swap_replaces_the_reading_and_offers_the_correction(page):
     assert '-58.00' in page.text_content('.ladder .fair-fix')
 
     page.paths['publisher'].fair = None
+    page.paths['publisher'].publish()
+
+
+def test_autorouting_says_what_is_armed_and_that_there_is_no_stop(page):
+    """The switch is not the state. A trader who believes a target is
+    armed when it is not is the worse failure, so the rail shows what
+    is ACTUALLY resting — and says in words that it is a target with no
+    stop, because a stop nobody has is not a stop to assume."""
+    open_ladder(page)
+    assert page.locator('.ladder .auto-route').is_checked() is False
+    assert 'NO STOP' in page.get_attribute('.ladder .auto-route-box', 'title')
+
+    page.paths['publisher'].auto_route = True
+    page.paths['publisher'].auto_route_armed = [
+        {'position_id': 'POS1', 'level': 60.21, 'order_id': 'SO1',
+         'quantity': 1.0}]
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .auto-route-state')"
+        ".textContent.indexOf('60.21') >= 0", timeout=5000)
+
+    assert page.locator('.ladder .auto-route').is_checked() is True
+    assert 'no stop' in page.get_attribute('.ladder .auto-route-state',
+                                            'title')
+
+    # On, but nothing resting yet — and it says which of the two it is.
+    page.paths['publisher'].auto_route_armed = []
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .auto-route-state')"
+        ".textContent === ''", timeout=5000)
+    assert 'next fill' in page.get_attribute('.ladder .auto-route-state',
+                                              'title')
+
+    page.paths['publisher'].auto_route = False
+    page.paths['publisher'].auto_route_armed = None
     page.paths['publisher'].publish()
 
 

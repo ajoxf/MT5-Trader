@@ -176,6 +176,15 @@
           <option value="EXIT_IF_PROFIT">Exit if profit</option>
           <option value="EXIT_ALWAYS">Exit always</option>
         </select>
+        <!-- AutoRouting: on a fill, rest a working order to CLOSE at
+             the take-profit, priced from the actual executed spread.
+             Default OFF. It arms a target and NO stop — said in words,
+             because a stop nobody has is not a stop to assume. -->
+        <label class="check auto-route-box"
+               title="On a fill, rest a working order to close this position at the take-profit, priced from the price it actually filled at. It arms a TARGET and NO STOP: the position runs until the target, the overnight rule, or you.">
+          <input type="checkbox" class="auto-route"> AutoRoute
+          <span class="auto-route-state hint"></span>
+        </label>
         <!-- What the CARRY says this spread should be: the swap per day
              to expiry. Not a signal — a number beside the market, which
              is the question the instrument is about. -->

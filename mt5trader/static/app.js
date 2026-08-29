@@ -557,6 +557,10 @@
     node.querySelector('.increment').addEventListener('change', function (e) {
       setPair(key, {increment: parseFloat(e.target.value)});
     });
+    node.querySelector('.auto-route').addEventListener('change',
+      function (e) {
+        setPair(key, {auto_route: e.target.checked});
+      });
 
     node.querySelector('.lock-scroll').addEventListener('change', function (e) {
       state.locked[key] = e.target.checked;
@@ -800,6 +804,26 @@
     setValue(node.querySelector('.order-type'), row.order_type);
     setValue(node.querySelector('.tif'), row.time_in_force);
     setValue(node.querySelector('.overnight'), row.overnight);
+    var auto = node.querySelector('.auto-route');
+    if (auto && document.activeElement !== auto) {
+      auto.checked = !!row.auto_route;
+    }
+    var armed = node.querySelector('.auto-route-state');
+    if (armed) {
+      // What is ACTUALLY resting, not what the switch says. A target
+      // believed to be armed when it is not is the worse failure — and
+      // it is the reason a re-arm after a restart is announced rather
+      // than done quietly.
+      var orders = row.auto_route_armed || [];
+      armed.textContent = orders.length
+        ? 'out ' + fmt(orders[0].level, digitsFor(row.increment)) : '';
+      armed.title = orders.length
+        ? 'a working order is resting to close this position — a target, '
+          + 'and no stop'
+        : (row.auto_route
+            ? 'on: the next fill arms a target at the take-profit'
+            : 'off');
+    }
     setValue(node.querySelector('.increment'), row.increment);
 
     // One box per SIDE, each beside the button that sends it. Never

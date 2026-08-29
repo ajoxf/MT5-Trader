@@ -52,8 +52,14 @@ class QuoteGroup:
     aggregation, not a replacement for them.
     """
 
-    def __init__(self, pair_key, side, level, leg):
+    def __init__(self, pair_key, side, level, leg, position_id=None):
         self.pair_key = pair_key
+        #: Set when this group CLOSES a position (AutoRouting, spec
+        #: 5.4). Its real pending carries `position=<ticket>`, so
+        #: executing it closes rather than opening — on a hedging
+        #: account a plain opposite pending would open a second
+        #: position.
+        self.position_id = position_id
         self.side = SpreadSide(side)
         self.level = float(level)
         self.leg = leg                 # 'a' or 'b' — which leg quotes
@@ -69,9 +75,15 @@ class QuoteGroup:
         """Spreads still working across this group's synthetics."""
         return sum(o.remaining for o in self.orders if o.is_working)
 
+    @property
+    def closing(self):
+        return self.position_id is not None
+
     def to_dict(self):
         return {'pair_key': self.pair_key, 'side': self.side.value,
                 'level': self.level, 'leg': self.leg.upper(),
+                'position_id': self.position_id,
+                'intent': 'CLOSE' if self.closing else 'OPEN',
                 'ticket': self.ticket, 'price': self.price,
                 'volume': self.volume, 'repegs': self.repegs,
                 'quantity': self.quantity, 'reason': self.reason,
@@ -134,18 +146,26 @@ class Quoter:
         #: Fill -> hedge-on times, in ms. The number that says whether
         #: the 2.0s deadline is right (spec §4, §16).
         self.hedge_times = []
+        #: The last market seen per pair, so an auto-close can be marked
+        #: at the touch it was decided on rather than at nothing.
+        self._markets = {}
 
     # -- the ladder's side of it -------------------------------------------
 
     def key_for(self, order):
-        return (order.pair_key, order.side.value, round(order.level, 10))
+        # The position is PART of the key. Aggregating an auto-TP close
+        # into an entry order at the same level and side would silently
+        # change what one of them means (spec 5.4).
+        return (order.pair_key, order.side.value, round(order.level, 10),
+                order.position_id)
 
     def group_for(self, pair, order):
         key = self.key_for(order)
         group = self.groups.get(key)
         if group is None:
             group = QuoteGroup(order.pair_key, order.side, order.level,
-                               quoting_leg(pair))
+                               quoting_leg(pair),
+                               position_id=order.position_id)
             self.groups[key] = group
         if order not in group.orders:
             group.orders.append(order)
@@ -167,6 +187,7 @@ class Quoter:
         placement and re-pegging.
         """
         events = []
+        self._markets[pair.key] = md
         for key, group in list(self.groups.items()):
             if group.pair_key != pair.key:
                 continue
@@ -195,6 +216,16 @@ class Quoter:
 
     def _wanted_volume(self, pair, group):
         """Lots on the quoting leg for the spreads still working here."""
+        if group.closing:
+            # A closing order is sized to WHAT ACTUALLY FILLED, not to
+            # the pair's clip: a partially filled entry gets a partially
+            # sized take-profit, and anything else would either leave a
+            # remainder on or close more than is there.
+            position = self.book.position(group.position_id)
+            if position is None:
+                return 0.0
+            fill = position.leg_a if group.leg == 'a' else position.leg_b
+            return fill.volume if fill else 0.0
         meta_a, meta_b = pair.meta_a or {}, pair.meta_b or {}
         plan = sizing.clip_plan(pair, meta_a, meta_b, meta_a.get('mid'),
                                 meta_b.get('mid'), group.quantity)
@@ -225,8 +256,14 @@ class Quoter:
             return None
 
         if group.ticket is None:
-            result = leg.place_limit(symbol, order_side.value, volume, price,
-                                     comment=new_id('LADDER'))
+            result = leg.place_limit(
+                symbol, order_side.value, volume, price,
+                comment=new_id('TP' if group.closing else 'LADDER'),
+                # THE line that makes an auto-TP a close: with a
+                # position on the request, executing it closes that
+                # position. Without it, on a hedging account, it would
+                # open a second one facing the other way.
+                position_ticket=self._closing_ticket(group))
             if not result.get('ok'):
                 group.reason = result.get('error')
                 for order in group.orders:
@@ -244,7 +281,8 @@ class Quoter:
             group.reason = result.get('price_note')
             for order in group.orders:
                 order.pending_ticket = group.ticket
-            return {'group': (group.pair_key, group.side.value, group.level),
+            return {'group': (group.pair_key, group.side.value, group.level,
+                              group.position_id),
                     'action': 'placed', 'ticket': group.ticket,
                     'price': group.price}
 
@@ -262,12 +300,25 @@ class Quoter:
         result = leg.modify_order(group.ticket, price)
         if not result.get('ok'):
             group.reason = result.get('error')
-            return {'group': (group.pair_key, group.side.value, group.level),
+            return {'group': (group.pair_key, group.side.value, group.level,
+                              group.position_id),
                     'action': 'repeg_failed', 'reason': result.get('error')}
         group.price = price
         group.repegs += 1
-        return {'group': (group.pair_key, group.side.value, group.level),
+        return {'group': (group.pair_key, group.side.value, group.level,
+                          group.position_id),
                 'action': 'repegged', 'price': price, 'drift': drift}
+
+    def _closing_ticket(self, group):
+        """The broker ticket this group's pending must CLOSE, or None."""
+        if not group.closing:
+            return None
+        position = self.book.position(group.position_id)
+        if position is None:
+            return None
+        fill = position.leg_a if group.leg == 'a' else position.leg_b
+        tickets = (fill.position_tickets if fill else None) or []
+        return tickets[0] if tickets else None
 
     def _drift(self, pair, md, group):
         """How far the resting pending's implied spread has wandered."""
@@ -287,19 +338,23 @@ class Quoter:
             # It filled while we were re-sizing it. That is a fill, not a
             # cancel, and it must be hedged rather than tidied away.
             return self._on_fill(pair, group, cancel)
-        result = leg.place_limit(symbol, order_side.value, volume, price,
-                                 comment=new_id('LADDER'))
+        result = leg.place_limit(
+            symbol, order_side.value, volume, price,
+            comment=new_id('TP' if group.closing else 'LADDER'),
+            position_ticket=self._closing_ticket(group))
         if not result.get('ok'):
             group.ticket = None
             group.reason = result.get('error')
-            return {'group': (group.pair_key, group.side.value, group.level),
+            return {'group': (group.pair_key, group.side.value, group.level,
+                              group.position_id),
                     'action': 'resize_failed', 'reason': result.get('error')}
         group.ticket = result['ticket']
         group.price = result.get('price', price)
         group.volume = volume
         for order in group.orders:
             order.pending_ticket = group.ticket
-        return {'group': (group.pair_key, group.side.value, group.level),
+        return {'group': (group.pair_key, group.side.value, group.level,
+                          group.position_id),
                 'action': 'resized', 'volume': volume,
                 'ticket': group.ticket}
 
@@ -341,6 +396,8 @@ class Quoter:
         filled = float(state.get('filled_volume') or 0.0)
         started = self.executor.clock()
         ticket, group.ticket = group.ticket, None
+        if group.closing:
+            return self._on_closing_fill(pair, group, state, filled, ticket)
         if state.get('still_open') and ticket is not None:
             # A PARTIAL fill leaves the rest of the pending resting.
             # Pull it before hedging: the residual is re-rested at the
@@ -406,7 +463,8 @@ class Quoter:
                 if order.is_working:
                     order.state = OrderState.REJECTED
                     order.reason = reason
-            return {'group': (group.pair_key, group.side.value, group.level),
+            return {'group': (group.pair_key, group.side.value, group.level,
+                              group.position_id),
                     'action': 'hedge_rejected', 'reason': reason}
 
         fills = ({'a': cross, 'b': quote_fill} if group.leg == 'b'
@@ -414,9 +472,102 @@ class Quoter:
         position = self._book_fill(pair, group, fills, contract_a, contract_b,
                                    elapsed_ms)
         self._settle_orders(group, position.quantity)
-        return {'group': (group.pair_key, group.side.value, group.level),
+        return {'group': (group.pair_key, group.side.value, group.level,
+                          group.position_id),
                 'action': 'filled', 'position': position.position_id,
                 'hedge_ms': elapsed_ms}
+
+    def _on_closing_fill(self, pair, group, state, filled, ticket):
+        """An AutoRouting take-profit filled on the quoting leg.
+
+        That leg is already flat — the pending carried
+        `position=<ticket>`, so executing it CLOSED it. The other leg is
+        still on, and until it is closed this is an outright position:
+        it goes now, by ticket, at market.
+        """
+        position = self.book.position(group.position_id)
+        self.groups.pop(self.key_for_group(group), None)
+        if position is None:
+            # The position went while the order was resting. That is the
+            # orphan-pending case with a guaranteed fill, and it has now
+            # happened: say so loudly rather than booking a close of
+            # something that is not there.
+            logging.critical(
+                '%s: a take-profit filled for position %s, which is no '
+                'longer in the book. Check the account by hand.',
+                pair.key, group.position_id)
+            return {'group': self.key_for_group(group),
+                    'action': 'tp_orphaned', 'position': group.position_id}
+        # Shaped exactly like `close_tickets`' answer, so the exit
+        # price is volume-weighted off the SAME structure however the
+        # close was sent.
+        quote_result = {'ok': True, 'closed': [
+            {'ticket': ticket, 'volume': filled, 'price': state.get('price')}]}
+        answer = self.executor.close_other_leg(
+            pair, position, group.leg, quote_result,
+            md=self.market_for(pair), reason='auto take-profit')
+        for order in group.orders:
+            if order.is_working:
+                order.filled_quantity = order.quantity
+                order.state = OrderState.FILLED
+        return {'group': self.key_for_group(group), 'action': 'tp_filled',
+                'position': position.position_id, 'ok': answer.get('ok')}
+
+    def key_for_group(self, group):
+        return (group.pair_key, group.side.value, round(group.level, 10),
+                group.position_id)
+
+    def market_for(self, pair):
+        """The pair's last market, for marking a close. Set by `work`."""
+        return self._markets.get(pair.key)
+
+    def arm(self, pair, position, level, quantity=None):
+        """Rest a working order to CLOSE `position` at `level`.
+
+        This is what AutoRouting does on a fill, and it is not a
+        strategy: it places the exit order the trader would otherwise
+        place by hand, at a level derived from settings they typed. No
+        signal, no re-entry, no loop.
+
+        It arms a TARGET and NO STOP — the position runs until the
+        target, the overnight rule, or the trader.
+        """
+        if level is None:
+            return None
+        existing = self.book.orders_for_position(position.position_id)
+        if existing:
+            return existing[0]
+        order = self.book.add_order(
+            pair, position.side.opposite, level,
+            quantity if quantity is not None else position.quantity,
+            order_type=OrderType.LIMIT,
+            position_id=position.position_id)
+        self.group_for(pair, order)
+        logging.info('%s: AutoRouting armed a %s to close %s at %s',
+                     pair.key, position.side.opposite.value,
+                     position.position_id, level)
+        return order
+
+    def disarm(self, position_id, reason='its position is gone'):
+        """Pull every closing order armed against one position.
+
+        Called BEFORE the close, never after: an auto-TP left resting
+        after its position is gone is the orphan-pending incident with a
+        GUARANTEED fill — it will execute, and with nothing to close it
+        opens a naked position instead.
+        """
+        pulled = []
+        for order in self.book.orders_for_position(position_id):
+            self.book.cancel(order.order_id, reason)
+            pulled.append(order)
+        for key, group in list(self.groups.items()):
+            if group.position_id != position_id:
+                continue
+            pair = self.config.pairs.get(group.pair_key)
+            if pair is not None:
+                self._pull(pair, group, reason)
+            self.groups.pop(key, None)
+        return pulled
 
     def _pull_pair(self, pair, reason):
         for key, group in list(self.groups.items()):

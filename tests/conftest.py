@@ -275,6 +275,18 @@ class FakeBroker:
                     'price': position['price_open'],
                     'position_tickets': [position['ticket']],
                     'still_open': pending is not None, 'error': None}
+        # A CLOSING pending leaves no position behind — only a deal, as
+        # the real one does. Read it the same way the broker does.
+        deals = [d for d in self.deals
+                 if str(d.get('order_id')) == str(int(ticket))]
+        volume = sum(d['fill_qty'] for d in deals)
+        if volume > 0:
+            price = (sum(d['fill_price'] * d['fill_qty'] for d in deals)
+                     / volume)
+            return {'ok': True, 'filled_volume': volume, 'price': price,
+                    'position_tickets': [d['position_id'] for d in deals
+                                         if d.get('position_id')],
+                    'still_open': pending is not None, 'error': None}
         return {'ok': True, 'filled_volume': 0.0, 'price': None,
                 'position_tickets': [], 'still_open': pending is not None,
                 'error': None}
@@ -322,9 +334,18 @@ class FakeBroker:
         ticket = self._ticket()
         self.pendings[ticket] = {'ticket': ticket, 'symbol': symbol,
                                  'side': side.value, 'volume': volume,
-                                 'price': price, 'comment': comment}
+                                 'price': price, 'comment': comment,
+                                 # With a position on the request, this
+                                 # limit CLOSES that position when it
+                                 # executes. Without one, on a hedging
+                                 # account, it OPENS a second position —
+                                 # and the fake has to model the
+                                 # difference or the test proves
+                                 # nothing.
+                                 'position_ticket': position_ticket}
         self._record({'action': 'pending', 'symbol': symbol,
-                      'side': side.value, 'volume': volume, 'price': price})
+                      'side': side.value, 'volume': volume, 'price': price,
+                      'position_ticket': position_ticket})
         return {'ok': True, 'ticket': ticket, 'error': None, 'price': price}
 
     def part_fill_pending(self, ticket, volume):
@@ -347,9 +368,26 @@ class FakeBroker:
         ticket, and `positions_get` shows it BEFORE deal history does —
         so the fake does the same, because reading deals alone once
         called a real fill "no fill".
+
+        A pending carrying a POSITION is the other case: it closes that
+        position instead, and opens nothing.
         """
         pending = self.pendings.pop(int(ticket))
         filled = pending['volume'] if volume is None else volume
+        closes = pending.get('position_ticket')
+        if closes:
+            target = self.positions.get(int(closes))
+            if target is not None:
+                entry = OrderSide(target['side'])
+                self._record_deal(pending['symbol'], entry.opposite.value,
+                                  filled, pending['price'], 'close',
+                                  pending['comment'], int(closes),
+                                  MAGIC_NUMBER, order_ticket=int(ticket))
+                if filled >= target['volume'] - 1e-9:
+                    del self.positions[int(closes)]
+                else:
+                    target['volume'] -= filled
+            return int(ticket)
         self.positions[int(ticket)] = {
             'ticket': int(ticket), 'symbol': pending['symbol'],
             'side': pending['side'], 'volume': filled,
@@ -378,10 +416,16 @@ class FakeBroker:
         return state
 
     def _record_deal(self, symbol, side, volume, price, entry, comment,
-                     position_ticket, magic, profit=0.0):
+                     position_ticket, magic, profit=0.0, order_ticket=None):
         self.next_deal += 1
         self.deals.append({
-            'order_id': str(position_ticket), 'deal_id': str(self.next_deal),
+            # Usually the same number — MT5 gives a filled market order's
+            # position the order's ticket. A CLOSING pending is the case
+            # where they differ: the deal belongs to the closing ORDER
+            # and points at the position it closed.
+            'order_id': str(order_ticket if order_ticket is not None
+                            else position_ticket),
+            'deal_id': str(self.next_deal),
             'symbol': symbol, 'inst_type': 'DEAL', 'side': side.lower(),
             'pos_side': entry, 'order_type': 'market',
             'quantity': volume, 'fill_qty': volume, 'fill_price': price,

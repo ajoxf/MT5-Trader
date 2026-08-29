@@ -268,7 +268,11 @@ def for_position(position, md, pair, settings, margin_per_spread=None,
     if position.side is SpreadSide.BUY:
         break_even = position.entry_spread + fee_points
         return {'break_even': break_even, 'tp': break_even + target_points,
-                'side': 'BUY'}
+                # Whether there is a TARGET at all, as opposed to
+                # break-even wearing its name. AutoRouting rests an
+                # order on the first and never on the second: getting
+                # out at break-even is a different instruction.
+                'target_points': target_points, 'side': 'BUY'}
     break_even = position.entry_spread - fee_points
     return {'break_even': break_even, 'tp': break_even - target_points,
-            'side': 'SELL'}
+            'target_points': target_points, 'side': 'SELL'}

@@ -24,12 +24,24 @@ class Book:
     # -- working orders ---------------------------------------------------
 
     def add_order(self, pair, side, level, quantity, order_type=None,
-                  time_in_force=None):
+                  time_in_force=None, position_id=None):
         order = SyntheticOrder(
             pair.key, side, level, quantity,
-            order_type or pair.order_type, time_in_force or pair.time_in_force)
+            order_type or pair.order_type, time_in_force or pair.time_in_force,
+            position_id=position_id)
         self._orders[order.order_id] = order
         return order
+
+    def orders_for_position(self, position_id, working_only=True):
+        """The closing orders armed against one position.
+
+        An auto-TP left resting after its position is gone is the
+        orphan-pending incident with a GUARANTEED fill: it executes,
+        and with nothing to close it opens a naked position instead.
+        """
+        return [o for o in self._orders.values()
+                if o.position_id == position_id
+                and (o.is_working or not working_only)]
 
     def orders(self, pair_key=None, working_only=True):
         return [o for o in self._orders.values()

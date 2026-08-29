@@ -73,6 +73,13 @@ class PairExecutor:
         #: Every fill's click->pair-on time, so the operator can see
         #: whether 2.0s is the right deadline (spec §4, §16).
         self.timings = []
+        #: Called with (position_id, reason) BEFORE a position is
+        #: closed, whoever closes it. The coordinator points it at the
+        #: quoter's disarm, so an AutoRouting take-profit is pulled
+        #: FIRST and then the position goes — never the other way
+        #: round, which leaves a resting order with a guaranteed fill
+        #: and nothing to close.
+        self.before_close = None
 
     # -- entry ----------------------------------------------------------
 
@@ -376,6 +383,15 @@ class PairExecutor:
         closable, so nothing in here consults the staleness or jump
         state.
         """
+        if self.before_close is not None:
+            # Pull any resting take-profit BEFORE closing. Afterwards is
+            # too late: the position it was armed against no longer
+            # exists, and the order would open a naked one.
+            try:
+                self.before_close(position.position_id, f'position closed '
+                                                        f'({reason})')
+            except Exception as e:                # never block a close
+                logging.error('disarm before close failed: %s', e)
         leg_a_side, leg_b_side = position.side.leg_sides()
         results = {}
         for leg, entry_side, fill in (('a', leg_a_side, position.leg_a),
@@ -390,6 +406,43 @@ class PairExecutor:
                 runner, symbol, (fill.position_tickets if fill else []),
                 entry_side, comment='CLOSE')
 
+        return self._settle_close(pair, position, results, md, reason)
+
+    def close_other_leg(self, pair, position, quote_leg, quote_result,
+                        md=None, reason='auto take-profit'):
+        """An AutoRouting take-profit filled: close the OTHER leg now.
+
+        The quoting leg is already flat — its pending carried
+        `position=<ticket>`, so executing it closed that leg rather
+        than opening a second one. What is left is the leg nobody has
+        touched, and it is closed BY TICKET, at market, immediately:
+        between the two, this is a naked outright position in gold or
+        oil, not a basis trade.
+        """
+        other = 'a' if quote_leg == 'b' else 'b'
+        leg_a_side, leg_b_side = position.side.leg_sides()
+        entry_side = leg_a_side if other == 'a' else leg_b_side
+        fill = position.leg_a if other == 'a' else position.leg_b
+        runner = self._leg(pair, other)
+        symbol = self._symbol(pair, other)
+        if runner is None:
+            results = {other: {'ok': False,
+                               'error': f'no leg runner for {symbol}'}}
+        else:
+            results = {other: self.close_tickets(
+                runner, symbol, (fill.position_tickets if fill else []),
+                entry_side, comment='TP')}
+        results[quote_leg] = quote_result
+        return self._settle_close(pair, position, results, md, reason)
+
+    def _settle_close(self, pair, position, results, md=None,
+                      reason='manual'):
+        """Book a close that has already been sent, however it was sent.
+
+        One place, so a manual close, a flatten, the overnight rule and
+        an AutoRouting take-profit all mark the position the same way —
+        and all leave it ACTIVE when the close did not go through.
+        """
         ok = all(r.get('ok') for r in results.values())
         if ok:
             position.closed_at = self.clock()

@@ -155,6 +155,9 @@ class CommandRunner:
         'default_quantity': float,
         'quoting_leg': lambda v: v if v in ('a', 'b') else None,
         'rows': int,
+        #: AutoRouting: on a fill, rest a working order to close at the
+        #: take-profit. Default OFF, and it arms a target and NO STOP.
+        'auto_route': bool,
     }
 
     def _do_click(self, payload):
