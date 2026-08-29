@@ -96,6 +96,10 @@ class Coordinator:
         #: (mtime, size) of the config last read, so the hot-apply
         #: watcher opens the file only when it has actually changed.
         self._config_marker = None
+        #: pair key -> the price its ladder window is anchored on. Held
+        #: still between polls so a row keeps its price; see
+        #: `ladder_anchor`.
+        self._ladder_anchor = {}
         #: pair key -> when a stale leg was last written to the log
         self._stale_logged = {}
         #: pair key -> when a stale pair last re-subscribed itself
@@ -1200,6 +1204,25 @@ class Coordinator:
             return first
         return None
 
+    def _anchor_for(self, key, pair, md):
+        """This pair's ladder anchor, moved only when it must be."""
+        increment = pair.effective_increment()
+        spread = (md or {}).get('spread')
+        if not increment or spread is None:
+            return self._ladder_anchor.get(key)
+        anchor = ladder_anchor(self._ladder_anchor.get(key), spread,
+                               increment, int(pair.rows))
+        self._ladder_anchor[key] = anchor
+        return anchor
+
+    def recentre_ladder(self, key):
+        """Drop the anchor so the next poll rebuilds around the market.
+
+        The manual Recentre button, and what a pair falls back to when
+        its market has walked out of the window entirely.
+        """
+        self._ladder_anchor.pop(key, None)
+
     def broker_offset(self):
         """Seconds the BROKER's clock runs ahead of this machine's.
 
@@ -1299,7 +1322,14 @@ class Coordinator:
                                 carry_for=self.holding_carry(
                                     pair, position.side.value, nights))})
                 positions.append(row)
-                if net_pnl is not None:
+                # UNMEASURED IS NOT ZERO. A position that could not be
+                # marked used to be skipped, so the total read as though
+                # it contributed nothing — an authoritative-looking
+                # number that was silently short one position. One
+                # unmarkable position makes the TOTAL unknown.
+                if net_pnl is None:
+                    open_pnl = None
+                elif open_pnl is not None:
                     open_pnl += net_pnl
             pairs[key] = {
                 'key': key, 'name': pair.name, 'enabled': pair.enabled,
@@ -1352,7 +1382,11 @@ class Coordinator:
                 # The rows the ladder draws come from HERE, so the Work
                 # column, the click that places an order and the price
                 # that names it cannot disagree about where a level is.
-                'rows': ladder_rows(pair, md, self.book, sizes=sizes),
+                'rows': ladder_rows(pair, md, self.book, sizes=sizes,
+                                    anchor=self._anchor_for(key, pair, md)),
+                # What the window is built around, so the screen can say
+                # how far the market has drifted from it.
+                'ladder_anchor': self._ladder_anchor.get(key),
                 'depth_published': sizes['published'],
                 'orders': [o.to_dict() for o in self.book.orders(key)],
                 # Orders that STOPPED working recently, with the reason.
@@ -1689,8 +1723,30 @@ def _same_login(rows):
     return {login: names for login, names in seen.items() if len(names) > 1}
 
 
-def ladder_rows(pair, md, book, rows=None, sizes=None):
-    """The rows the ladder draws: the spread +/- N increments.
+def ladder_anchor(previous, spread, increment, rows, drift=0.34):
+    """The price the ladder's window is built around, held STILL.
+
+    The window used to be rebuilt around the live mid on every poll —
+    three times a second. One increment of movement re-centred it, so
+    the row under the trader's cursor became a DIFFERENT PRICE without
+    the cursor moving: the ladder crawled, and a click landed on
+    whatever had slid under it.
+
+    The anchor therefore only moves when the mid has drifted past a
+    band inside the window (a third of a half-window by default), or
+    when there is no anchor yet. Between those the price at every row
+    is exactly where it was, which is what makes the ladder clickable.
+    """
+    centre = round(spread / increment) * increment
+    if previous is None:
+        return centre
+    if abs(spread - previous) > max(1.0, rows * drift) * increment:
+        return centre
+    return previous
+
+
+def ladder_rows(pair, md, book, rows=None, sizes=None, anchor=None):
+    """The rows the ladder draws: the anchor +/- N increments.
 
     Generated here rather than in the browser so the ladder cannot
     disagree with the engine about where a level is — the Work column,
@@ -1701,12 +1757,18 @@ def ladder_rows(pair, md, book, rows=None, sizes=None):
     working order on the pair. A level the ladder cannot show is one the
     trader can neither see nor pull, and on a wide book the touches can
     sit well outside a window centred on the mid.
+
+    `anchor` is the price the window is built around (see
+    `ladder_anchor`). It is passed in rather than recomputed from the
+    mid, because a window that follows every tick moves the prices out
+    from under the cursor.
     """
     increment = pair.effective_increment()
     if not md or not increment:
         return []
     rows = int(rows or pair.rows)
-    centre = round(md['spread'] / increment) * increment
+    centre = (round(md['spread'] / increment) * increment if anchor is None
+              else anchor)
     low = centre - rows * increment
     high = centre + rows * increment
 

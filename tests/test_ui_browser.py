@@ -12,6 +12,7 @@ so Chrome refused to submit and fired no event at all.
 """
 
 import json
+import re
 import os
 import threading
 import time
@@ -251,6 +252,35 @@ def test_one_rule_marks_the_market_and_it_is_at_the_mid(page):
     assert page.locator('.ladder tr.in-ask td.ask').count() > 0
 
 
+def rgb_parts(value):
+    return [int(n) for n in re.findall(r'\d+', value)[:3]]
+
+
+def is_blue(value):
+    r, g, b = rgb_parts(value)
+    return b > r and b > g
+
+
+def is_red(value):
+    r, g, b = rgb_parts(value)
+    return r > g and r > b
+
+
+def css_var_rgb(locator, name):
+    """What a CSS variable resolves to, as the browser reports
+    backgroundColor — so a test can name the variable, not a hex."""
+    return locator.evaluate(
+        """(n, v) => {
+            const probe = document.createElement('span');
+            probe.style.backgroundColor = getComputedStyle(n)
+                .getPropertyValue(v).trim();
+            document.body.appendChild(probe);
+            const out = getComputedStyle(probe).backgroundColor;
+            probe.remove();
+            return out;
+        }""", name)
+
+
 def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
     # The ladder repaints three times a second; wait for a painted row
     # rather than racing one.
@@ -258,12 +288,17 @@ def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
     page.wait_for_selector('.ladder tr.in-ask td.ask')
     bid = page.locator('.ladder tr.in-bid td.bid').first
     ask = page.locator('.ladder tr.in-ask td.ask').first
-    # Softened for a light frame, but the CONVENTION is what is being
-    # pinned: bid is blue, ask is red, in every table on the screen.
+    # Softened for a light frame, and the shade is free to be tuned —
+    # the CONVENTION is what is pinned: bid is blue, ask is red, in
+    # every table on the screen. Asserting the hex meant that nudging
+    # the palette broke a test about which colour means which side.
+    assert is_blue(bid.evaluate('n => getComputedStyle(n).backgroundColor'))
+    assert is_red(ask.evaluate('n => getComputedStyle(n).backgroundColor'))
+    # And each really is drawn from the variable it is supposed to be.
     assert bid.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(111, 168, 214)'
+        css_var_rgb(bid, '--bid')
     assert ask.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(208, 138, 134)'
+        css_var_rgb(ask, '--ask')
 
 
 def test_a_limit_click_places_one_order_and_asks_nothing(page):
@@ -297,10 +332,8 @@ def test_the_asks_column_buys_the_spread_and_the_bids_column_sells_it(page):
     sell = page.locator('.ladder .sell-touch')
     # One step deeper than the bands: a button carries white text and
     # needs the contrast, while a band is data and gets out of the way.
-    assert buy.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(181, 107, 102)'
-    assert sell.evaluate('n => getComputedStyle(n).backgroundColor') == \
-        'rgb(74, 134, 184)'
+    assert is_red(buy.evaluate('n => getComputedStyle(n).backgroundColor'))
+    assert is_blue(sell.evaluate('n => getComputedStyle(n).backgroundColor'))
 
 
 def test_three_clicks_at_one_price_send_three_orders(page):
@@ -1177,7 +1210,7 @@ def test_every_ladder_is_reachable_from_one_menu(page):
 
     text = page.text_content('#add-menu')
     assert 'Gold basis' in text and 'XAUUSD_' in text
-    assert 'Market Grid' in text and 'Positions' in text
+    assert 'Market Grid' in text and 'Trading Monitor' in text
 
     page.click('#add-menu button[data-panel="monitor:"]')
     page.wait_for_selector('.window.monitor', timeout=5000)
@@ -2015,3 +2048,232 @@ def test_the_two_columns_say_what_they_are(page):
     text = page.text_content('#help-overlay')
     assert 'RESTING orders' in text and 'last FILL' in text
     page.click('#help-close')
+
+
+def test_an_unapplied_setting_survives_the_connection_repaint(page):
+    """The 5s connection poll repaints the Trading form from the SAVED
+    settings, and isTyping() stops protecting a field the moment focus
+    leaves it. So a number typed and then clicked away from reverted —
+    and Apply, which reads the form, saved the OLD value back over it.
+    Live: the stale-quote limit was set to 15 three times and stayed 5.
+    """
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .trading .s-stale')
+
+    # A value that differs from the saved one, or the assertion below
+    # would pass on a form that reverted perfectly.
+    was = page.input_value('.window.settings .s-stale')
+    assert was != '22', 'pick a value the config does not already hold'
+    page.fill('.window.settings .s-stale', '22')
+    # Focus LEAVES the field — the operator clicks Apply, or tabs away,
+    # or the window loses focus. isTyping() protects nothing from here.
+    page.evaluate('() => document.activeElement.blur()')
+
+    # The repaint the poll would do.
+    page.evaluate('() => window.MT5Settings.render()')
+
+    assert page.input_value('.window.settings .s-stale') == '22'
+
+    # And the CONTROL: a field nobody touched still follows the server,
+    # or this would be a form frozen against its own data.
+    rendered = page.evaluate(
+        '() => document.querySelector(".window.settings .s-repeg")'
+        '.dataset.rendered')
+    assert page.input_value('.window.settings .s-repeg') == rendered
+
+
+def test_the_close_button_sits_at_the_right_of_the_title_bar(page):
+    """It merely followed the title, which looks right only while the
+    window is narrow enough for the title to fill the bar. The wide
+    Exchanges window put it against the title, on the left."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .titlebar .winbtns')
+
+    bar = page.evaluate(
+        '() => document.querySelector(".window.settings .titlebar")'
+        '.getBoundingClientRect().right')
+    button = page.evaluate(
+        '() => document.querySelector(".window.settings .titlebar .winbtns")'
+        '.getBoundingClientRect().right')
+    title = page.evaluate(
+        '() => document.querySelector(".window.settings .titlebar .title")'
+        '.getBoundingClientRect().right')
+
+    # Hard against the right edge, and nowhere near the title it used to
+    # sit beside.
+    assert bar - button < 12, f'close button is {bar - button:.0f}px from the right'
+    assert button - title > 100
+
+
+def test_the_dialog_outranks_a_window_however_often_it_was_clicked(page):
+    """Windows were stacked by a counter that climbed with every raise
+    and never came back down. Past enough of them a window passed the
+    modal, and the Delete confirmation opened BEHIND the window that
+    asked for it — a question nobody can answer and nothing to dismiss.
+    """
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+
+    # Float the window, then raise it a day's worth of times through the
+    # real drag path — raise() does nothing for a window still in the row.
+    top = page.evaluate("""() => {
+        const win = document.querySelector('.window.settings');
+        const bar = win.querySelector('.titlebar');
+        for (let i = 0; i < 300; i++) {
+            bar.dispatchEvent(new PointerEvent('pointerdown',
+                {bubbles: true, clientX: 200, clientY: 100}));
+            document.dispatchEvent(new PointerEvent('pointermove',
+                {bubbles: true, clientX: 260 + (i % 5), clientY: 160}));
+            document.dispatchEvent(new PointerEvent('pointerup',
+                {bubbles: true}));
+        }
+        return Math.max(...Array.from(document.querySelectorAll('.window'))
+            .map(n => parseInt(n.style.zIndex, 10) || 0));
+    }""")
+    modal = page.evaluate("""() => parseInt(getComputedStyle(
+        document.getElementById('modal')).zIndex, 10)""")
+
+    assert top > 10, 'the window never actually rose; the test proves nothing'
+    assert top < modal, f'a window reached z={top}, the dialog is at {modal}'
+
+
+def test_the_screen_does_not_repaint_under_a_drag(page):
+    """The whole screen is rebuilt three times a second. Doing that
+    under the pointer is what made a window judder and lag behind the
+    cursor."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .accounts')
+
+    # Wiped by hand, so "was it rebuilt?" has an answer even when the
+    # data behind it has not changed — comparing the HTML with itself
+    # would pass whether the repaint ran or not.
+    held = page.evaluate("""() => {
+        const win = document.querySelector('.window.settings');
+        const section = win.querySelector('.accounts');
+        win.classList.add('dragging');
+        section.innerHTML = '<!--wiped-->';
+        window.MT5Settings.render();
+        window.MT5Trader.render();
+        const still = section.innerHTML.indexOf('wiped') >= 0;
+        win.classList.remove('dragging');
+        return still;
+    }""")
+    assert held, 'the table was rebuilt mid-drag'
+
+    # CONTROL: with the drag over, the very same wipe is repainted away.
+    repainted = page.evaluate("""() => {
+        const section = document.querySelector('.window.settings .accounts');
+        section.innerHTML = '<!--wiped-->';
+        window.MT5Settings.render();
+        return section.innerHTML.indexOf('wiped') < 0;
+    }""")
+    assert repainted, 'the table stopped repainting even when not dragging'
+
+
+def test_an_order_held_back_from_the_broker_does_not_look_like_one_resting(page):
+    """A synthetic order joins the book the instant it is clicked, but
+    the real pending on the quoting leg is only placed once the guards
+    are clear (quoter._rest_or_repeg holds off on stale or desynced). So
+    while the feed is bad the order exists HERE and nowhere else — and
+    it used to be drawn exactly like one resting at the broker. The only
+    hint was W:n (broker 0) in small text in the footer, and a trader
+    watched a level they believed was working while nothing of theirs
+    was in the market.
+    """
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr td.work', timeout=5000)
+
+    def put_order(ticket):
+        """One working order at a level, with its quote group either
+        holding a broker ticket or not."""
+        page.evaluate("""(ticket) => {
+            const state = window.MT5Trader.state;
+            const row = state.snapshot.pairs['XAUUSD_|GC1226'];
+            const level = row.rows[5].level;
+            row.orders = [{order_id: 'O1', level: level, side: 'BUY',
+                           quantity: 1, filled_quantity: 0,
+                           state: 'WORKING'}];
+            row.quotes = [{pair_key: 'XAUUSD_|GC1226', side: 'BUY',
+                           level: level, leg: 'B', ticket: ticket,
+                           reason: ticket ? null : 'the spread is stale'
+                               + ' — holding off',
+                           orders: ['O1']}];
+            window.MT5Trader.render();
+        }""", ticket)
+
+    # Held back: no ticket at the broker.
+    put_order(None)
+    held = page.locator('.ladder .grid td.work.held')
+    assert held.count() == 1, 'a held-off order is not marked'
+    assert 'NOT at the broker' in (held.first.get_attribute('title') or '')
+    assert 'holding off' in (held.first.get_attribute('title') or '')
+
+    # CONTROL: the same order, now actually resting, is NOT marked — or
+    # the mark would mean nothing.
+    put_order(987654)
+    assert page.locator('.ladder .grid td.work.held').count() == 0, \
+        'an order resting at the broker was marked as held off'
+    assert page.locator('.ladder .grid td.work[data-order-id]').count() == 1
+
+
+def test_a_price_row_is_the_same_element_across_a_repaint(page):
+    """The tbody was rebuilt with innerHTML three times a second. That
+    threw away the row the pointer was over — losing :hover and the
+    pressed state — and a click landing mid-replacement hit a detached
+    element or whatever had just slid into that position."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr[data-level]', timeout=5000)
+
+    same = page.evaluate("""() => {
+        const body = document.querySelector('.ladder .grid tbody');
+        const row = body.querySelector('tr[data-level]');
+        const level = row.dataset.level;
+        row.dataset.witness = 'marked';       // survives only if reused
+        // Sizes change; the rows do not.
+        const state = window.MT5Trader.state;
+        const pair = state.snapshot.pairs['XAUUSD_|GC1226'];
+        pair.rows.forEach((r, i) => { r.bid_size = 100 + i; });
+        window.MT5Trader.render();
+        const after = body.querySelector('tr[data-level="' + level + '"]');
+        return after && after.dataset.witness === 'marked';
+    }""")
+    assert same, 'the row was destroyed and rebuilt instead of updated'
+
+
+def test_the_ladder_holds_still_while_the_pointer_is_on_it(page):
+    """Re-centring between a mousedown and the mouseup is how the wrong
+    price gets sent."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr', timeout=5000)
+
+    held = page.evaluate("""() => {
+        const grid = document.querySelector('.ladder .grid');
+        grid.dispatchEvent(new PointerEvent('pointerenter', {bubbles: true}));
+        const before = grid.scrollTop;
+        grid.scrollTop = before + 60;          // the trader looked away
+        const moved = grid.scrollTop;
+        const state = window.MT5Trader.state;
+        state.centredAt['XAUUSD_|GC1226'] = 0;   // long overdue a centre
+        window.MT5Trader.render();
+        return grid.scrollTop === moved;
+    }""")
+    assert held, 'the ladder re-centred while the pointer was over it'
+
+
+def test_a_click_sends_the_price_that_was_on_the_row(page):
+    """Never the index: an index moves when the window does."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody td.ask', timeout=5000)
+
+    cell = page.locator('.ladder .grid tbody tr[data-level] td.ask').nth(4)
+    level = float(cell.evaluate('n => n.closest("tr").dataset.level'))
+    before = command_count(page)
+    cell.click()
+    page.wait_for_timeout(300)
+
+    assert command_count(page) == before + 1
+    sent = last_command(page)
+    assert sent['kind'] == 'click'
+    assert sent['payload']['level'] == level, (
+        f"clicked {level}, sent {sent['payload']['level']}")
+    assert sent['payload']['side'] == 'BUY'      # the ask side buys

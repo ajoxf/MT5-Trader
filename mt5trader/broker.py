@@ -102,6 +102,11 @@ class BrokerSession:
         if self.account.terminal_path:
             attempts.append(("running terminal (already logged in)", {}))
 
+        # A terminal we reached that was signed into somebody else.
+        # Kept so the final refusal can name it rather than reporting
+        # the last attempt's own, unrelated fault.
+        wrong_login = None
+
         for label, kwargs in attempts:
             # Announce BEFORE the call, at INFO. mt5.initialize(path=)
             # launches a terminal and waits for it to log in, so it can
@@ -132,15 +137,21 @@ class BrokerSession:
                     pass
             if ok:
                 info = mt5.account_info()
-                if (not kwargs.get('login') and self.account.login and info
-                        and info.login != self.account.login):
-                    # Attached to a terminal on the WRONG account. Let
-                    # go and try the credentialed form rather than
-                    # trading someone else's account.
+                if self.account.login and info \
+                        and info.login != self.account.login:
+                    # Attached to a terminal signed into someone else.
+                    # LET GO. This used to hold only for the uncredentialed
+                    # attach and merely WARN for the rest, so a leg runner
+                    # whose terminal was not up yet fell through to
+                    # "whatever is already running", found the OTHER leg's
+                    # terminal, and traded that account all session. Both
+                    # legs then hedged against themselves on one login
+                    # while every screen reported two.
                     logging.info(
-                        "[%s] the running terminal is logged into %s, not "
-                        "%s — logging in", self.account.name, info.login,
-                        self.account.login)
+                        "[%s] the terminal reached via %s is logged into "
+                        "%s, not %s — letting go", self.account.name, label,
+                        info.login, self.account.login)
+                    wrong_login = info.login
                     try:
                         mt5.shutdown()
                     except Exception:
@@ -151,18 +162,34 @@ class BrokerSession:
                     logging.info("Connected [%s] via %s: %s / %s (login %s)",
                                  self.account.name, label, info.server,
                                  info.name, info.login)
-                    if self.account.login and info.login != self.account.login:
-                        logging.warning(
-                            "[%s] terminal is logged into %s but config "
-                            "expects %s — check the account mapping",
-                            self.account.name, info.login,
-                            self.account.login)
                 else:
                     logging.info("Connected [%s] via %s",
                                  self.account.name, label)
                 return True
             logging.debug("MT5 initialize failed (%s) for '%s': %s",
                           label, self.account.name, mt5.last_error())
+
+        if wrong_login is not None:
+            # Every terminal we could reach was signed into someone
+            # else. Say THAT, with both numbers: the last attempt's own
+            # error describes a door that was never the problem, and it
+            # is what sent the operator round the settings for an hour
+            # last time. Refusing is the point — a leg runner on the
+            # wrong account trades that account, and nothing downstream
+            # can tell.
+            logging.error(
+                "[%s] refusing to run: every terminal reachable for this "
+                "account is logged into %s, but the config says %s. Open "
+                "the terminal for %s, log it in, and start again — or fix "
+                "the login on the Exchanges page.",
+                self.account.name, wrong_login, self.account.login,
+                self.account.login)
+            logging.error("    fix: log terminal %s into account %s",
+                          self.account.terminal_path or '(whichever opens)',
+                          self.account.login)
+            logging.error("    fix: start BOTH terminals before the "
+                          "launcher, so neither leg has to guess")
+            return False
 
         # Decode it rather than printing the raw tuple. -6 in
         # particular is not always a typo: live 2026-08-11 the terminal

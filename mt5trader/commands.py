@@ -168,6 +168,16 @@ class CommandRunner:
     def _do_refresh_feed(self, payload):
         return self.coordinator.refresh_feed(payload['pair'])
 
+    def _do_recentre_ladder(self, payload):
+        """Put the window back around the market, on demand.
+
+        The anchor holds the ladder still (coordinator.ladder_anchor);
+        dropping it is how the trader says "I have finished reading up
+        there, show me the market again".
+        """
+        self.coordinator.recentre_ladder(payload['pair'])
+        return {'ok': True, 'pair': payload['pair']}
+
     def _do_cancel_order(self, payload):
         return self.coordinator.cancel_order(payload['order_id'])
 

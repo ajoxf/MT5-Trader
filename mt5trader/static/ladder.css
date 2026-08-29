@@ -42,15 +42,15 @@
    * is red — that convention is global — but neither shouts, and the
    * size printed in the band stays readable, which is the number being
    * traded off. */
-  --bid: #6fa8d6;             /* the solid blue bid band */
-  --bid-cell: #a7ccea;        /* a quantity inside it */
-  --ask: #d08a86;             /* the solid red ask band */
-  --ask-cell: #e8b6b3;
+  --bid: #4f95cd;             /* the solid blue bid band */
+  --bid-cell: #86b9e2;        /* a quantity inside it */
+  --ask: #c56e69;             /* the solid red ask band */
+  --ask-cell: #df9894;
   /* One step deeper, for BUTTONS only. A band is data and gets out of
    * the way; a button is an action and has white text on it, which
    * needs the contrast. */
-  --bid-strong: #4a86b8;
-  --ask-strong: #b56b66;
+  --bid-strong: #3d719c;
+  --ask-strong: #a3544f;
   --traded: #4a9c5d;          /* LTQ print, positive change */
   --down: #c0504d;
   --last-trade: #e6e0f5;      /* the tinted last-traded price cell */
@@ -242,6 +242,12 @@ body {
 .window.mode-market .titlebar .mode-badge { background: var(--ask); }
 .titlebar button,
 .titlebar select { cursor: default; }
+/* The close button belongs at the FAR right of the title bar. Without
+   this it merely follows the title, which looks correct only while the
+   window is narrow enough for the title to fill the bar — the ladders.
+   The wide Exchanges window put its close button against the title, on
+   the left, where every other window on the screen has none. */
+.titlebar .winbtns { margin-left: auto; }
 .winbtn {
   background: var(--chrome);
   border: 1px solid #666;
@@ -301,9 +307,16 @@ body {
 .rail {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  width: 116px;
-  padding: 4px;
+  /* Tightened so the whole rail fits a short window without
+   * scrolling: the operator was scrolling past BUY/SELL to reach
+   * Exit on every ladder. */
+  gap: 2px;
+  width: var(--rail-w, 116px);
+  /* Dragged by the operator to fit several ladders side by side. */
+  resize: horizontal;
+  min-width: 96px;
+  max-width: 260px;
+  padding: 3px;
   /* The rail is taller than a short window. It scrolls; it is never
    * cut off, because the overnight selector and the Fair box live at
    * the bottom of it. */
@@ -624,6 +637,17 @@ td.work.sell { background: var(--ask-cell); color: #fff; cursor: pointer; }
 /* A click that has been SENT but is not in a snapshot yet. Hatched, and
  * never added into the working total — a ghost is not an order yet, and
  * a trader who cannot see their click clicks again. */
+/* Clicked, in the book, and NOT at the broker — the guards hold a
+   synthetic order back while the feed reads stale or desynced. It used
+   to be drawn exactly like an order resting at the broker, so a trader
+   watched a level they believed was working while nothing of theirs
+   was in the market. Hollow and amber: present, but not placed. */
+td.work.held {
+  background: #fff;
+  color: #8a6100;
+  font-style: italic;
+  box-shadow: inset 0 0 0 2px #d9a520;
+}
 td.work.pending .ghost {
   display: inline-block;
   margin-left: 3px;
@@ -883,7 +907,7 @@ table.unclaimed th, table.unclaimed td {
   position: fixed;
   bottom: 32px;
   left: 6px;
-  z-index: 60;
+  z-index: 2060;
   min-width: 260px;
   max-height: 60vh;
   overflow: auto;
@@ -971,7 +995,7 @@ table.unclaimed th, table.unclaimed td {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: 2050;
 }
 .modal-box {
   background: #fff;
@@ -1011,7 +1035,7 @@ table.keys td { padding: 2px 0; font-size: 12px; }
   display: flex;
   flex-direction: column;
   gap: 4px;
-  z-index: 40;
+  z-index: 2040;
   max-width: 460px;
 }
 .toast {
@@ -1159,3 +1183,52 @@ tr.good td { background: #ebfbee; color: #1b6b32; font: 11px var(--font); }
   font: 11px var(--font);
 }
 .pair-form .actions { margin-top: 8px; display: flex; gap: 6px; }
+
+/* --- the centring controls -------------------------------------------
+ * Lock and Centre are one decision — "does this ladder follow the
+ * market?" — so they sit on one line rather than being read as two
+ * unrelated widgets a row apart. */
+.rail .centre-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.rail .centre-row .lock { flex: 1 1 auto; }
+.rail .btn.recentre {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* A size that CHANGED, for one frame. The eye catches motion far
+ * faster than it reads a number, and on a ladder that no longer moves
+ * this is the only thing left that says the book is live. Background
+ * only: nothing reflows, so the click target never shifts. */
+@keyframes size-tick { from { background-color: #fff6d5; } to { background-color: transparent; } }
+td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  td.bid.ticked, td.ask.ticked { animation: none; }
+}
+
+
+/* --- rail density ----------------------------------------------------
+ * Every ladder carries a rail, so a pixel here is a pixel on each of
+ * them. Small enough to fit; never so small the numbers stop being
+ * readable at a glance mid-trade. */
+.rail .rail-label { font-size: 9px; line-height: 1.25; margin: 1px 0 0; }
+.rail .keypad { gap: 2px; }
+.rail .keypad .qty { padding: 1px 0; font-size: 10px; }
+.rail .quick { padding: 4px 0; font-size: 12px; }
+.rail .cxl { padding: 2px 0; font-size: 10px; }
+.rail select, .rail input[type="number"] { padding: 2px 3px; font-size: 10px; }
+.rail .exits { font-size: 9px; }
+.rail .exits td { padding: 0 2px; }
+/* The labels are the widest thing in the box — `P% on M` needs
+ * every pixel at this size, and a clipped label is a figure
+ * nobody can identify. */
+.rail .exits th { padding: 0; white-space: nowrap; }
+.rail .fair-value { font-size: 11px; }
+.rail .route-box { font-size: 9px; line-height: 1.2; }
+/* Equity under each leg: quieter than the symbol, still legible. */
+.rail .route-eq { font-variant-numeric: tabular-nums; opacity: .95; }

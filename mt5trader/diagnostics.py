@@ -54,7 +54,8 @@ class Checklist:
                 'ok': counts[FAIL] == 0}
 
 
-def check_account(checklist, name, terminal, account=None, offset=None):
+def check_account(checklist, name, terminal, account=None, offset=None,
+                  expect_login=None):
     """One account: is it there, logged in, and allowed to trade?
 
     This is what both Connect and Test run; Diagnose runs it too and
@@ -110,8 +111,23 @@ def check_account(checklist, name, terminal, account=None, offset=None):
                       ['Log the terminal into this account',
                        'Check the login and server on this row'])
         return checklist
+    live = terminal.get('login')
+    if expect_login and live and str(live) != str(expect_login):
+        # This reported whatever login it FOUND as a pass, so a leg
+        # attached to the other leg's terminal read "PASS — CONNECTED"
+        # while trading the wrong account. The question is not "is a
+        # login present" but "is it the one this account is for".
+        checklist.add(
+            scope, 'Account login', FAIL,
+            f'this terminal is logged into {live}, but this account is '
+            f'configured as {expect_login}',
+            [f'Log this terminal into {expect_login}',
+             'Or correct the login on the Exchanges page',
+             'Two accounts need two MT5 installations, each with its own '
+             'terminal_path — one terminal holds one login'])
+        return checklist
     checklist.add(scope, 'Account login', PASS,
-                  f"{terminal.get('login')} on {terminal.get('server')}")
+                  f"{live} on {terminal.get('server')}")
 
     # Algo Trading is a BUTTON in that terminal, and MT5 answers every
     # order with 10027 until it is on. Nothing else on the screen says

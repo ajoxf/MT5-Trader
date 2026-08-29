@@ -162,3 +162,31 @@ def test_structural_changes_say_restart_and_comfort_ones_do_not():
         'pairs': {'P': {'leg_a': {'account': 'a', 'symbol': 'Y'},
                         'hedge_ratio': 1.0}}})
     assert first.restart_required(symbol_changed) == ['pair P']
+
+
+def test_the_example_config_does_not_drift_from_the_defaults():
+    """A number in the example OVERRIDES the default, silently.
+
+    README says `cp config.example.json config.json`, and settings load
+    as `dict(DEFAULT_SETTINGS)` updated with the file — so a value the
+    example repeats is pinned there for the life of that deployment.
+    MAX_QUOTE_AGE_SEC was raised to 15s because 5s was tuned on a feed
+    that ticks constantly and fires all day on a CFD account; the
+    example kept saying 5.0, so every config made from it went on
+    calling a quiet-but-healthy leg stale.
+
+    Repeating a default is only safe while it still IS the default.
+    """
+    path = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), 'config.example.json')
+    with open(path, encoding='utf-8') as handle:
+        example = json.load(handle)
+
+    drifted = {key: (value, cfg.DEFAULT_SETTINGS.get(key))
+               for key, value in (example.get('settings') or {}).items()
+               if key in cfg.DEFAULT_SETTINGS
+               and value != cfg.DEFAULT_SETTINGS[key]}
+    assert not drifted, (
+        f'config.example.json disagrees with DEFAULT_SETTINGS: {drifted}. '
+        f'Either update the example or drop the key from it — a copied '
+        f'example pins the stale value into every new deployment.')

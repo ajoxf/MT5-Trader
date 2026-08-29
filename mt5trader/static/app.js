@@ -32,6 +32,8 @@
     armed: {},
     locked: {},          // pair key -> scroll is locked
     scrolledAt: {},      // pair key -> when the TRADER last scrolled it
+    busyAt: {},          // pair key -> when the trader last TOUCHED it
+    hovering: {},        // pair key -> the pointer is over its ladder
     centredAt: {},       // pair key -> when we last centred it on the mid
     centring: {},        // pair key -> that scroll event was ours
     filtered: {},        // pair key -> hide rows with nothing on them
@@ -286,6 +288,40 @@
   var KEEP_VISIBLE_PX = 90;
   var layout = readLayout();
   var topZ = 10;
+  //: Windows stack inside this band; the modal, the menu and the toasts
+  //: live above it in ladder.css. topZ climbed with every click and
+  //: never came back down, so after enough clicks a window passed the
+  //: dialog and a Delete confirmation opened BEHIND the window that
+  //: asked for it — a question nobody can answer and nothing to
+  //: dismiss.
+  var MAX_WINDOW_Z = 900;
+
+  function nextZ() {
+    if (topZ < MAX_WINDOW_Z) {
+      topZ += 1;
+      return topZ;
+    }
+    // At the ceiling: renumber from the bottom instead of climbing into
+    // the dialog's band. The ORDER windows are stacked in is what the
+    // operator arranged; only the numbers shrink.
+    var nodes = Array.prototype.slice.call(
+      document.querySelectorAll('.window')).filter(function (node) {
+        return node.style.zIndex;
+      });
+    nodes.sort(function (a, b) {
+      return (parseInt(a.style.zIndex, 10) || 0) -
+             (parseInt(b.style.zIndex, 10) || 0);
+    });
+    topZ = 10;
+    nodes.forEach(function (node) {
+      topZ += 1;
+      node.style.zIndex = topZ;
+      var id = panelIdOf(node);
+      if (layout[id]) { layout[id].z = topZ; }
+    });
+    topZ += 1;
+    return topZ;
+  }
 
   function readLayout() {
     try {
@@ -383,8 +419,7 @@
     var top = Math.min(30 + index * 24,
                        Math.max(desktop.height - wanted.h - 8, 0));
     var at = place(node, left, top);
-    topZ += 1;
-    node.style.zIndex = topZ;
+    node.style.zIndex = nextZ();
     layout[id] = {left: at.left, top: at.top, z: topZ,
                   w: wanted.w, h: wanted.h};
     writeLayout();
@@ -404,7 +439,10 @@
     if (saved.left === undefined) { return; }   // resized, never moved
     var at = place(node, saved.left, saved.top);
     node.style.zIndex = saved.z || 10;
-    topZ = Math.max(topZ, saved.z || 10);
+    // Clamped: a layout saved before the ceiling existed can carry a z
+    // from the dialog's band, and reading it back would put us straight
+    // over the modal again.
+    topZ = Math.min(MAX_WINDOW_Z, Math.max(topZ, saved.z || 10));
     // Clamped on the way in as well as on the way out: a layout saved
     // on a big monitor must not hide a window on a laptop.
     if (at.left !== saved.left || at.top !== saved.top) {
@@ -418,8 +456,7 @@
     if (!layout[id] || layout[id].left === undefined) {
       return;                           // still in the row; nothing to raise
     }
-    topZ += 1;
-    node.style.zIndex = topZ;
+    node.style.zIndex = nextZ();
     layout[id].z = topZ;
     writeLayout();
   }
@@ -469,7 +506,7 @@
         layout[panelIdOf(node)] = Object.assign(
           {}, layout[panelIdOf(node)],
           {left: box.left - desktop.left, top: box.top - desktop.top,
-           z: topZ + 1});
+           z: Math.min(MAX_WINDOW_Z, topZ + 1)});
         place(node, box.left - desktop.left, box.top - desktop.top);
         raise(node);
       }
@@ -565,6 +602,19 @@
     node.querySelector('.lock-scroll').addEventListener('change', function (e) {
       state.locked[key] = e.target.checked;
     });
+    node.querySelector('.recentre').addEventListener('click', function () {
+      // Both halves: the ENGINE re-anchors the price window (the rows
+      // themselves), and the browser scrolls to the mid. Doing only the
+      // second would scroll to a market that had walked out of the
+      // window the engine is still building.
+      send('recentre_ladder', {pair: key});
+      state.scrolledAt[key] = 0;
+      state.busyAt[key] = 0;
+      state.hovering[key] = false;
+      state.centredAt[key] = 0;
+      var market = (state.snapshot.pairs[key] || {}).market || {};
+      if (market.spread !== undefined) { centreOnMid(node, key, market); }
+    });
     node.querySelector('.filter').addEventListener('change', function (e) {
       state.filtered[key] = e.target.checked;
       render();
@@ -628,6 +678,21 @@
       // leave the window where they put it (SCROLL_GRACE_MS).
       if (state.centring[key]) { return; }
       state.scrolledAt[key] = Date.now();
+    });
+    // Any of these means hands on: hold the ladder still (ladderIsBusy).
+    var grid = node.querySelector('.grid');
+    grid.addEventListener('pointerenter', function () {
+      state.hovering[key] = true;
+    });
+    grid.addEventListener('pointerleave', function () {
+      state.hovering[key] = false;
+      state.busyAt[key] = Date.now();          // start the grace period
+    });
+    grid.addEventListener('pointerdown', function () {
+      state.busyAt[key] = Date.now();
+    });
+    grid.addEventListener('pointermove', function () {
+      state.busyAt[key] = Date.now();
     });
     node.querySelector('.grid tbody').addEventListener('click', function (e) {
       var cell = e.target.closest('td');
@@ -769,6 +834,16 @@
         'Flatten now', function () { send('flatten_pair', {pair: key}); });
   }
 
+  function money_(value, currency) {
+    /* Compact money for the rail: 15,764 rather than 15,764.37. The
+     * rail is 120px wide and the cents are never the question there. */
+    if (value === undefined || value === null || !isFinite(value)) {
+      return DASH;
+    }
+    return Math.round(value).toLocaleString('en-US') +
+      (currency ? ' ' + currency : '');
+  }
+
   function renderLadder(key, row) {
     var node = ladderNode(key);
     var market = row.market || {};
@@ -858,8 +933,17 @@
     function routeText(account, symbol) {
       var info = accounts[account] || {};
       var login = info.login ? ' #' + info.login : '';
+      // EQUITY, not balance: balance ignores what is open, and the
+      // number a trader sizes the next spread against is the one that
+      // already carries the running P&L. Unmeasured stays a dash —
+      // a leg that could not be read must never read as zero money.
+      var money = info.equity === undefined || info.equity === null
+        ? DASH
+        : money_(info.equity, info.currency);
       return (symbol || '?') + '<div class="hint">' + (account || '?') +
-        login + '</div>';
+        login + '</div><div class="hint route-eq" title="Equity: balance ' +
+        'plus the P&L of everything open on this account">' + money +
+        '</div>';
     }
     node.querySelector('.route-a b').innerHTML =
       routeText(row.account_a, row.symbol_a);
@@ -1239,6 +1323,75 @@
     }).length;
   }
 
+  function flashChanged(tr, side) {
+    var cell = tr.querySelector('td.' + side);
+    if (!cell) { return; }
+    var now = cell.textContent;
+    var was = tr['_' + side];
+    tr['_' + side] = now;
+    // Nothing to announce on the first draw, or when only some other
+    // cell in the row changed.
+    if (was === undefined || was === now) { return; }
+    cell.classList.remove('ticked');
+    void cell.offsetWidth;                    // restart the animation
+    cell.classList.add('ticked');
+  }
+
+  function commitRows(body, rows) {
+    /* Update the ladder IN PLACE, keyed by PRICE.
+     *
+     * The whole tbody used to be rebuilt three times a second with
+     * `innerHTML =`. That threw away the very row the pointer was over
+     * — losing :hover and the pressed state — and a click landing while
+     * the rows were being replaced hit a detached element, or whatever
+     * had just slid into that position. The element for a price is now
+     * the SAME element from tick to tick, and only the cells whose
+     * markup actually changed are written.
+     *
+     * The identity is the price, never the index: an index moves when
+     * the window does, and an order must never be sent at whatever
+     * happened to slide under the cursor.
+     */
+    var existing = {};
+    Array.prototype.forEach.call(body.children, function (tr) {
+      existing[tr.dataset.level] = tr;
+    });
+    var previous = null;
+    rows.forEach(function (row) {
+      var keyed = String(row.level);
+      var tr = existing[keyed];
+      if (tr) {
+        delete existing[keyed];
+        if (tr.className !== row.cls) { tr.className = row.cls; }
+        // Held on the element, not in an attribute: this is a
+        // comparison key, not something the page should carry.
+        if (tr._cells !== row.cells) {
+          tr.innerHTML = row.cells;
+          tr._cells = row.cells;
+          // Flash only the size that actually moved. On a ladder that
+          // no longer crawls, this is the only thing left saying the
+          // book is live — and it is a background colour, so nothing
+          // reflows and the click target never shifts.
+          flashChanged(tr, 'bid');
+          flashChanged(tr, 'ask');
+        }
+      } else {
+        tr = document.createElement('tr');
+        tr.className = row.cls;
+        tr.dataset.level = keyed;
+        tr.innerHTML = row.cells;
+        tr._cells = row.cells;
+      }
+      // Into place without disturbing rows already sitting correctly.
+      var want = previous ? previous.nextSibling : body.firstChild;
+      if (tr !== want) { body.insertBefore(tr, want); }
+      previous = tr;
+    });
+    Object.keys(existing).forEach(function (level) {
+      body.removeChild(existing[level]);
+    });
+  }
+
   function renderRows(node, key, row) {
     // '.grid tbody', not 'tbody': the rail has small tables of its own
     // now, and the first tbody in the window is not necessarily the
@@ -1253,6 +1406,22 @@
     var rows = row.rows || [];
     var market = row.market || {};
     var lastPrint = row.last_print || {};
+    // Which of our working orders are NOT actually resting at the
+    // broker. A synthetic order joins the book the instant it is
+    // clicked, but the real pending on the quoting leg is only placed
+    // once the guards are clear (quoter._rest_or_repeg) — so while the
+    // feed reads stale or desynced, the order exists here and NOWHERE
+    // else. It looked exactly like one resting at the broker, and the
+    // only hint was W:8 (broker 0) in small text in the footer.
+    var heldOff = {};
+    (row.quotes || []).forEach(function (quote) {
+      if (quote.ticket) { return; }             // really is at the broker
+      (quote.orders || []).forEach(function (id) {
+        heldOff[id] = quote.reason ||
+          'not resting at the broker yet';
+      });
+    });
+
     var ordersByLevel = {};
     (row.orders || []).forEach(function (order) {
       var bucket = ordersByLevel[order.level.toFixed(6)] ||
@@ -1260,7 +1429,7 @@
       bucket.push(order);
     });
 
-    var html = '';
+    var out = [];
     rows.forEach(function (line) {
       var level = line.level;
       var inBid = market.short_spread !== undefined &&
@@ -1291,13 +1460,25 @@
       var isLast = lastPrint.level !== undefined &&
         Math.abs(lastPrint.level - level) < (row.increment || 1) / 2;
 
-      html += '<tr class="' + classes.join(' ') + '" data-level="' + level + '">';
+      var cells = '';
       var ghostSide = ghosts.length ? ghosts[0].side.toLowerCase() : '';
-      html += '<td class="work' +
+      // ANY order here not at the broker marks the cell: a level that
+      // is half resting is still a level the trader must not read as
+      // fully working.
+      var heldReason = null;
+      orders.forEach(function (order) {
+        heldReason = heldReason || heldOff[order.order_id] || null;
+      });
+      cells += '<td class="work' +
         (work ? ' ' + work.side.toLowerCase() : '') +
+        (heldReason ? ' held' : '') +
         (ghosts.length ? ' pending ' + ghostSide : '') + '"' +
         (work ? ' data-order-id="' + work.order_id + '" title="' +
-          orders.length + ' order(s) here — click to pull one"' : '') + '>' +
+          (heldReason
+            ? 'NOT at the broker: ' + heldReason.replace(/"/g, '') +
+              '. Click to pull it.'
+            : orders.length + ' order(s) here — click to pull one') +
+          '"' : '') + '>' +
         (workQty ? workQty : '') +
         (ghostQty ? '<span class="ghost" title="sent — waiting for the ' +
           'engine">' + ghostQty + '</span>' : '') + '</td>';
@@ -1306,21 +1487,21 @@
       // worse of the two legs can fill at the prices this level
       // implies. Nothing where the brokers publish no depth — an
       // invented size is one a trader would click on.
-      html += '<td class="bid' + (line.is_best_bid ? ' has-qty' : '') +
+      cells += '<td class="bid' + (line.is_best_bid ? ' has-qty' : '') +
         '" title="Click: SELL the spread at ' + fmt(level, 4) +
         ' (sell leg B, buy leg A)">' +
         depthText(line.bid_size, line.is_best_bid, '▲') + '</td>';
-      html += '<td class="price' + (isLast ? ' last-trade' : '') + '">' +
+      cells += '<td class="price' + (isLast ? ' last-trade' : '') + '">' +
         fmt(level, digitsFor(row.increment)) + '</td>';
-      html += '<td class="ask' + (line.is_best_ask ? ' has-qty' : '') +
+      cells += '<td class="ask' + (line.is_best_ask ? ' has-qty' : '') +
         '" title="Click: BUY the spread at ' + fmt(level, 4) +
         ' (buy leg B, sell leg A)">' +
         depthText(line.ask_size, line.is_best_ask, '▼') + '</td>';
-      html += '<td class="ltq' + (isLast ? ' print' : '') + '">' +
+      cells += '<td class="ltq' + (isLast ? ' print' : '') + '">' +
         (isLast ? fmt(lastPrint.quantity, 2) : '') + '</td>';
-      html += '</tr>';
+      out.push({level: level, cls: classes.join(' '), cells: cells});
     });
-    body.innerHTML = html;
+    commitRows(body, out);
 
     if (shouldRecentre(key, node, market)) { centreOnMid(node, key, market); }
   }
@@ -1330,8 +1511,23 @@
   //: a level twenty rows away is a ladder they cannot use.
   var SCROLL_GRACE_MS = 4000;
 
+  //: How long after the trader's last touch the ladder stays put. A
+  //: window that re-centres between a mousedown and the mouseup is a
+  //: window that moved the order.
+  var BUSY_GRACE_MS = 1200;
+
+  function ladderIsBusy(key) {
+    /* The trader is working this ladder RIGHT NOW: the pointer is over
+     * it, a button is down on it, or they touched it a moment ago. Any
+     * of those and it does not move under them — recentring while a
+     * click is being aimed is how the wrong price gets sent. */
+    if (state.hovering[key]) { return true; }
+    return Date.now() - (state.busyAt[key] || 0) < BUSY_GRACE_MS;
+  }
+
   function shouldRecentre(key, node, market) {
     if (state.locked[key]) { return false; }        // Lock means LOCKED
+    if (ladderIsBusy(key)) { return false; }
     if (market.spread === undefined || market.spread === null) {
       return false;
     }
@@ -1518,7 +1714,7 @@
       node.className = 'window monitor';
       node.innerHTML =
         '<div class="titlebar"><span class="swatch"></span>' +
-        '<span class="title">Positions</span>' +
+        '<span class="title">Trading Monitor</span>' +
         '<span class="winbtns"><button class="winbtn close">&times;</button></span></div>' +
         '<div class="tabs">' +
         '<button data-tab="positions">Positions</button>' +
@@ -2268,6 +2464,11 @@
   }
 
   function render() {
+    // Not while a window is being dragged. The whole screen is rebuilt
+    // three times a second, and doing that under the pointer is what
+    // made a window judder and lag behind the cursor. The drag is short
+    // and drop() calls render() itself, so nothing stays stale.
+    if (document.querySelector('.window.dragging')) { return; }
     var snapshot = state.snapshot;
     prunePending();
     renderStatusLine();
@@ -2622,7 +2823,7 @@
       html += '<div class="menu-title">Windows</div>' +
         '<button data-panel="' + panelId('grid') + '">Market Grid' +
         '<small>every ladder on one row each</small></button>' +
-        '<button data-panel="' + panelId('monitor') + '">Positions' +
+        '<button data-panel="' + panelId('monitor') + '">Trading Monitor' +
         '<small>positions, orders, fills, slippage, accounts</small>' +
         '</button>';
       menu.innerHTML = html;
