@@ -171,6 +171,12 @@ DEFAULT_SETTINGS = {
     #: this gets corrected from data rather than left at whatever was
     #: first guessed. Default 0 — a fabricated cost is charged against
     #: every trade and the operator cannot tell it was never theirs.
+    #: The bid-ask round trip is MEASURED live from both books. This is
+    #: an override in money, and it is CLEARABLE — blank (None) means
+    #: "use the measured value". A field loop that skips blanks can
+    #: only ever set an override, and one that cannot be deleted
+    #: outlives the pair it was typed for.
+    'BID_ASK_ROUND_TRIP_OVERRIDE': None,
     'SLIPPAGE_ALLOWANCE': 0.0,
     #: Break-even is only defined GIVEN a holding period, because the
     #: swap is charged per night. 0 is intraday, where the term

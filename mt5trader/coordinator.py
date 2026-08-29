@@ -557,6 +557,20 @@ class Coordinator:
             expects_expiry=pair.expects_expiry(),
             rate_pct=self.config.get('CARRY_RATE_PCT'))
 
+    def holding_carry(self, pair, direction, nights):
+        """What holding one spread `nights` nights costs, in money.
+
+        The same conversion the fair spread uses — and the same
+        refusal: a swap MT5 reports in units this cannot read comes
+        back as None with the reason, and break-even then says so
+        rather than silently dropping the term.
+        """
+        if not nights:
+            return {'money': 0.0, 'reason': None}
+        return carry.carry_money(pair.meta_a, pair.meta_b, direction,
+                                 pair.clip_lots_a, pair.clip_lots_b, nights,
+                                 pair.swap_overrides())
+
     def leg_depth(self, account, symbol):
         """One leg's market depth, cached for a fraction of a second.
 
@@ -1131,6 +1145,10 @@ class Coordinator:
         for key, pair in self.config.pairs.items():
             md = self.market.get(key)
             sizes = self.implied_depth(pair)
+            # Break-even is only DEFINED given a holding period: the
+            # swap is charged per night. 0 is intraday, where the term
+            # vanishes, and it is the default.
+            nights = float(self.config.get('BREAK_EVEN_NIGHTS', 0.0) or 0.0)
             net, avg_entry = self.book.net_position(key)
             buys, sells = self.book.working_counts(key)
             positions = []
@@ -1146,7 +1164,10 @@ class Coordinator:
                             # the market is not a take-profit.
                             'exit': takeprofit.for_position(
                                 position, md, pair, self.config.settings,
-                                self.margin_per_spread(pair))})
+                                self.margin_per_spread(pair),
+                                nights=nights,
+                                carry_for=self.holding_carry(
+                                    pair, position.side.value, nights))})
                 positions.append(row)
                 if net_pnl is not None:
                     open_pnl += net_pnl
@@ -1182,7 +1203,10 @@ class Coordinator:
                     quantity=pair.default_quantity,
                     spread_units=sizing.spread_units(
                         pair.clip_lots_b,
-                        (pair.meta_b or {}).get('contract_size'))),
+                        (pair.meta_b or {}).get('contract_size')),
+                    nights=nights,
+                    carry_buy=self.holding_carry(pair, 'BUY', nights),
+                    carry_sell=self.holding_carry(pair, 'SELL', nights)),
                 'fair': self.fair_spread(pair, md),
                 'errors': self.errors.get(key) or [],
                 # The rows the ladder draws come from HERE, so the Work

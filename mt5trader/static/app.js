@@ -1026,11 +1026,31 @@
     // turn the market charges, the commission the broker charges, the
     // profit the target asks for — then break-even and the target
     // price themselves.
-    node.querySelector('.x-width').textContent =
-      fmt(exit.spread_width, digits);
+    var width = node.querySelector('.x-width');
+    width.textContent = fmt(exit.spread_width, digits);
+    // One column, one basis: the spread figures are in spread points
+    // and the money is in money, and `k` is what converts them. Both
+    // units are on the row, because a bare dollar total cannot be
+    // checked against a ladder quoted in spread.
+    width.title = exit.spread_width_money === null ||
+      exit.spread_width_money === undefined
+      ? 'one round turn of both legs\u2019 bid-ask, measured live'
+      : 'one round turn of both legs\u2019 bid-ask = ' +
+        money(exit.spread_width_money) + ' at this size. Already inside ' +
+        'the two prices, so it is not added again.';
     node.querySelector('.x-comm').textContent =
       exit.commission === null || exit.commission === undefined
         ? DASH : money(exit.commission);
+    // Two terms that are ZERO by default and shown only when they are
+    // in play: an allowance nobody set and a swap over no nights are
+    // rows that say nothing, and the rail is 100px wide.
+    showTerm(node, '.x-slip', exit.slippage_allowance,
+      'a BUDGET for slippage, not a measurement — the realised figure ' +
+      'is in the slippage report');
+    showTerm(node, '.x-swap', exit.swap_money,
+      exit.nights ? exit.nights + ' night(s) of swap, both legs, signed: ' +
+        'a credit reduces what has to be recovered'
+        : 'set BREAK_EVEN_NIGHTS to price a holding period');
     var target = node.querySelector('.x-target');
     target.textContent = exit.target_money === null ||
       exit.target_money === undefined ? DASH : money(exit.target_money);
@@ -1038,10 +1058,20 @@
       ? exit.target_pct + '% of ' + money(exit.margin_per_spread) +
         ' margin per spread'
       : 'set TP_TARGET_PCT_OF_MARGIN in Settings';
-    node.querySelector('.be-buy').textContent =
-      fmt(exit.break_even_buy, digits);
-    node.querySelector('.be-sell').textContent =
-      fmt(exit.break_even_sell, digits);
+    // Break-even is quoted on the CLOSING side, which is the opposite
+    // side to the one you entered on: a long's is a BID level, a
+    // short's is an ASK level. Named, because unlabelled the number
+    // reads as "the price now" rather than "the bid you need" — and
+    // that is a fault that has already shown +$0.02 on a trade that
+    // would have booked -$0.58.
+    var beBuy = node.querySelector('.be-buy');
+    var beSell = node.querySelector('.be-sell');
+    beBuy.textContent = fmt(exit.break_even_buy, digits);
+    beSell.textContent = fmt(exit.break_even_sell, digits);
+    beBuy.title = 'bid \u2014 a long leaves on the bid, so this is the bid ' +
+      'you need back';
+    beSell.title = 'ask \u2014 a short buys back at the offer, so this is ' +
+      'the ask you need';
     node.querySelector('.tp-buy').textContent = fmt(exit.tp_buy, digits);
     node.querySelector('.tp-sell').textContent = fmt(exit.tp_sell, digits);
     var short = '';
@@ -1061,6 +1091,19 @@
       ? open.side + ' on: out at ' + fmt(open.exit.tp, 4) + ', flat at ' +
         fmt(open.exit.break_even, 4) + '. '
       : '') + (exit.note || '');
+  }
+
+  function showTerm(node, selector, value, why) {
+    /* A break-even term that is zero by default: shown only when it is
+     * actually in play, and hidden — not zeroed — when it is not. */
+    var cell = node.querySelector(selector);
+    if (!cell) { return; }
+    var tr = cell.parentNode;
+    var missing = value === null || value === undefined;
+    tr.hidden = missing || value === 0;
+    cell.textContent = missing ? DASH : money(value);
+    cell.title = why;
+    if (missing) { tr.hidden = false; }   // unmeasured is not zero: say so
   }
 
   function legFeed(row, market) {

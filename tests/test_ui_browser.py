@@ -636,6 +636,49 @@ def test_the_exchanges_page_carries_connect_test_and_diagnose(page):
     assert 'Exchanges' in page.text_content('.window.settings .accounts h3')
 
 
+def test_the_exit_costs_are_editable_and_the_override_can_be_CLEARED(page):
+    """Break-even is built from four terms and every one of them is a
+    field: a number nobody can edit is a number nobody can correct.
+
+    The clearable one is the point. Blank means "use the width measured
+    live from both books", and a form that reads blank as 0 — or skips
+    it — can only ever SET an override, never delete one, and an
+    override outlives the pair it was typed for.
+    """
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .exit-fields', timeout=5000)
+
+    for field in ('.s-comm-a', '.s-comm-b', '.s-roundtrip', '.s-slip',
+                  '.s-nights', '.s-tp', '.s-carryrate'):
+        assert page.locator('.window.settings ' + field).count() == 1, field
+
+    sent = page.evaluate("""() => {
+        window.__realFetch = window.__realFetch || window.fetch;
+        window.__sent = null;
+        window.fetch = function (url, options) {
+            if (String(url).indexOf('/api/settings') >= 0 && options &&
+                options.method === 'POST') {
+              window.__sent = JSON.parse(options.body).fields;
+              return Promise.resolve(new Response(
+                JSON.stringify({ok: true, restart_required: []}),
+                {status: 200, headers: {'Content-Type': 'application/json'}}));
+            }
+            return window.__realFetch(url, options);
+        };
+        return true;
+    }""")
+    assert sent
+    page.fill('.window.settings .s-roundtrip', '')
+    page.fill('.window.settings .s-slip', '2.5')
+    page.click('.window.settings .save-settings')
+    page.wait_for_function("() => window.__sent !== null", timeout=5000)
+
+    fields = page.evaluate('() => window.__sent')
+    assert fields['BID_ASK_ROUND_TRIP_OVERRIDE'] is None   # cleared, not 0
+    assert fields['SLIPPAGE_ALLOWANCE'] == 2.5
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+
+
 def test_a_check_shows_its_answer_as_a_checklist_with_fixes(page):
     """A checklist that only says FAIL is one that sends the operator
     to a forum."""
