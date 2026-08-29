@@ -42,15 +42,15 @@
    * is red — that convention is global — but neither shouts, and the
    * size printed in the band stays readable, which is the number being
    * traded off. */
-  --bid: #6fa8d6;             /* the solid blue bid band */
-  --bid-cell: #a7ccea;        /* a quantity inside it */
-  --ask: #d08a86;             /* the solid red ask band */
-  --ask-cell: #e8b6b3;
+  --bid: #4f95cd;             /* the solid blue bid band */
+  --bid-cell: #86b9e2;        /* a quantity inside it */
+  --ask: #c56e69;             /* the solid red ask band */
+  --ask-cell: #df9894;
   /* One step deeper, for BUTTONS only. A band is data and gets out of
    * the way; a button is an action and has white text on it, which
    * needs the contrast. */
-  --bid-strong: #4a86b8;
-  --ask-strong: #b56b66;
+  --bid-strong: #3d719c;
+  --ask-strong: #a3544f;
   --traded: #4a9c5d;          /* LTQ print, positive change */
   --down: #c0504d;
   --last-trade: #e6e0f5;      /* the tinted last-traded price cell */
@@ -878,7 +878,7 @@ table.unclaimed th, table.unclaimed td {
   position: fixed;
   bottom: 32px;
   left: 6px;
-  z-index: 60;
+  z-index: 2060;
   min-width: 260px;
   max-height: 60vh;
   overflow: auto;
@@ -966,7 +966,7 @@ table.unclaimed th, table.unclaimed td {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: 2050;
 }
 .modal-box {
   background: #fff;
@@ -1006,7 +1006,7 @@ table.keys td { padding: 2px 0; font-size: 12px; }
   display: flex;
   flex-direction: column;
   gap: 4px;
-  z-index: 40;
+  z-index: 2040;
   max-width: 460px;
 }
 .toast {

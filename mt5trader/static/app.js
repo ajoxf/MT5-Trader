@@ -286,6 +286,40 @@
   var KEEP_VISIBLE_PX = 90;
   var layout = readLayout();
   var topZ = 10;
+  //: Windows stack inside this band; the modal, the menu and the toasts
+  //: live above it in ladder.css. topZ climbed with every click and
+  //: never came back down, so after enough clicks a window passed the
+  //: dialog and a Delete confirmation opened BEHIND the window that
+  //: asked for it — a question nobody can answer and nothing to
+  //: dismiss.
+  var MAX_WINDOW_Z = 900;
+
+  function nextZ() {
+    if (topZ < MAX_WINDOW_Z) {
+      topZ += 1;
+      return topZ;
+    }
+    // At the ceiling: renumber from the bottom instead of climbing into
+    // the dialog's band. The ORDER windows are stacked in is what the
+    // operator arranged; only the numbers shrink.
+    var nodes = Array.prototype.slice.call(
+      document.querySelectorAll('.window')).filter(function (node) {
+        return node.style.zIndex;
+      });
+    nodes.sort(function (a, b) {
+      return (parseInt(a.style.zIndex, 10) || 0) -
+             (parseInt(b.style.zIndex, 10) || 0);
+    });
+    topZ = 10;
+    nodes.forEach(function (node) {
+      topZ += 1;
+      node.style.zIndex = topZ;
+      var id = panelIdOf(node);
+      if (layout[id]) { layout[id].z = topZ; }
+    });
+    topZ += 1;
+    return topZ;
+  }
 
   function readLayout() {
     try {
@@ -383,8 +417,7 @@
     var top = Math.min(30 + index * 24,
                        Math.max(desktop.height - wanted.h - 8, 0));
     var at = place(node, left, top);
-    topZ += 1;
-    node.style.zIndex = topZ;
+    node.style.zIndex = nextZ();
     layout[id] = {left: at.left, top: at.top, z: topZ,
                   w: wanted.w, h: wanted.h};
     writeLayout();
@@ -404,7 +437,10 @@
     if (saved.left === undefined) { return; }   // resized, never moved
     var at = place(node, saved.left, saved.top);
     node.style.zIndex = saved.z || 10;
-    topZ = Math.max(topZ, saved.z || 10);
+    // Clamped: a layout saved before the ceiling existed can carry a z
+    // from the dialog's band, and reading it back would put us straight
+    // over the modal again.
+    topZ = Math.min(MAX_WINDOW_Z, Math.max(topZ, saved.z || 10));
     // Clamped on the way in as well as on the way out: a layout saved
     // on a big monitor must not hide a window on a laptop.
     if (at.left !== saved.left || at.top !== saved.top) {
@@ -418,8 +454,7 @@
     if (!layout[id] || layout[id].left === undefined) {
       return;                           // still in the row; nothing to raise
     }
-    topZ += 1;
-    node.style.zIndex = topZ;
+    node.style.zIndex = nextZ();
     layout[id].z = topZ;
     writeLayout();
   }
@@ -469,7 +504,7 @@
         layout[panelIdOf(node)] = Object.assign(
           {}, layout[panelIdOf(node)],
           {left: box.left - desktop.left, top: box.top - desktop.top,
-           z: topZ + 1});
+           z: Math.min(MAX_WINDOW_Z, topZ + 1)});
         place(node, box.left - desktop.left, box.top - desktop.top);
         raise(node);
       }
@@ -2136,6 +2171,11 @@
   }
 
   function render() {
+    // Not while a window is being dragged. The whole screen is rebuilt
+    // three times a second, and doing that under the pointer is what
+    // made a window judder and lag behind the cursor. The drag is short
+    // and drop() calls render() itself, so nothing stays stale.
+    if (document.querySelector('.window.dragging')) { return; }
     var snapshot = state.snapshot;
     prunePending();
     renderStatusLine();
