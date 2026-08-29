@@ -1072,7 +1072,14 @@ class Coordinator:
                                 position, md, pair, self.config.settings,
                                 self.margin_per_spread(pair))})
                 positions.append(row)
-                if net_pnl is not None:
+                # UNMEASURED IS NOT ZERO. A position that could not be
+                # marked used to be skipped, so the total read as though
+                # it contributed nothing — an authoritative-looking
+                # number that was silently short one position. One
+                # unmarkable position makes the TOTAL unknown.
+                if net_pnl is None:
+                    open_pnl = None
+                elif open_pnl is not None:
                     open_pnl += net_pnl
             pairs[key] = {
                 'key': key, 'name': pair.name, 'enabled': pair.enabled,
