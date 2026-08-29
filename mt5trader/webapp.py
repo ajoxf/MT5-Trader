@@ -499,6 +499,12 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return jsonify({'ok': True, 'symbols': found or [],
                         'terminal': report})
 
+    def configured_login(name):
+        """What the config says this account IS, for comparison with
+        whatever terminal the runner actually reached."""
+        raw = cfg.load_raw(config_path)
+        return ((raw.get('accounts') or {}).get(name) or {}).get('login')
+
     @app.get('/api/accounts/<path:name>/connect')
     def api_connect_account(name):
         """Is the leg runner there, and is its terminal attached?
@@ -517,7 +523,9 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             offset = leg.server_offset()
         finally:
             leg.close()
-        diagnostics.check_account(checklist, name, terminal, offset=offset)
+        diagnostics.check_account(
+            checklist, name, terminal, offset=offset,
+            expect_login=configured_login(name))
         result = checklist.result()
         return jsonify(dict(result, account=name,
                             connected=bool(terminal.get('logged_in')),
@@ -543,7 +551,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             offset = leg.server_offset()
         finally:
             leg.close()
-        diagnostics.check_account(checklist, name, terminal, account, offset)
+        diagnostics.check_account(checklist, name, terminal, account, offset,
+                                  expect_login=configured_login(name))
         result = checklist.result()
         return jsonify(dict(result, account=name, terminal=terminal,
                             connected=bool(terminal.get('logged_in')),
@@ -575,7 +584,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             account_info = leg.account_info()
             offset = leg.server_offset()
             diagnostics.check_account(checklist, name, terminal, account_info,
-                                      offset)
+                                      offset,
+                                      expect_login=configured_login(name))
             for key, pair in pairs.items():
                 for symbol, role in ((pair.symbol_a, 'leg A'),
                                      (pair.symbol_b, 'leg B')):
