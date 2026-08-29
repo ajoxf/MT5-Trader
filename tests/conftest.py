@@ -65,6 +65,10 @@ class FakeBroker:
         #: runners attached to one terminal), and a fixture that always
         #: modelled it would make the test for it pass on anything.
         self.login = login or (100000 + (abs(hash(name)) % 8999))
+        #: What this account is geared at. None models a broker that
+        #: reports none — where a margin the terminal cannot price has
+        #: no fallback either, and the target must simply not appear.
+        self.leverage = 100
         self.symbols = {s.name: s for s in (symbols or [])}
         #: ticket -> position dict. Hedging mode: one per fill.
         self.positions = {}
@@ -132,7 +136,7 @@ class FakeBroker:
     def account_info(self):
         return SimpleNamespace(
             login=self.login, server='FakeServer', name=self.account.name,
-            currency='USD', leverage=100, balance=100_000.0,
+            currency='USD', leverage=self.leverage, balance=100_000.0,
             equity=100_000.0, margin=0.0, margin_free=100_000.0,
             margin_level=None, margin_so_call=50.0, margin_so_so=30.0,
             profit=sum(p.get('profit', 0.0) for p in self.positions.values()))

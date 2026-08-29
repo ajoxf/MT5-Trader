@@ -1056,8 +1056,27 @@
       exit.target_money === undefined ? DASH : money(exit.target_money);
     target.title = exit.target_pct
       ? exit.target_pct + '% of ' + money(exit.margin_per_spread) +
-        ' margin per spread'
+        ' margin per spread' +
+        (exit.margin_source ? ' (from the ' + exit.margin_source + ')' : '')
       : 'set TP_TARGET_PCT_OF_MARGIN in Settings';
+    // How far the target is, in spread, against what the pair actually
+    // travels in a session. At small size a percentage of margin can be
+    // far outside anything this spread moves — the number is honest,
+    // but whether it is REACHABLE is the trader's call.
+    var reach = node.querySelector('.x-reach');
+    if (reach) {
+      var tr = reach.parentNode;
+      tr.hidden = exit.target_points === null ||
+        exit.target_points === undefined;
+      reach.textContent = fmt(exit.target_points, digits) +
+        (exit.session_range ? ' / ' + fmt(exit.session_range, digits) : '');
+      reach.className = 'x-reach' +
+        (exit.target_reachable === false ? ' out-of-range' : '');
+      reach.title = exit.target_reachable === false
+        ? 'the target is FURTHER than this pair has travelled all ' +
+          'session — honest arithmetic, but reaching it is another matter'
+        : 'target distance in spread, against the session range';
+    }
     // Break-even is quoted on the CLOSING side, which is the opposite
     // side to the one you entered on: a long's is a BID level, a
     // short's is an ASK level. Named, because unlabelled the number

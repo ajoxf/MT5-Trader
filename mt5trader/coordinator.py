@@ -492,15 +492,39 @@ class Coordinator:
         then shows an em dash and says why, rather than being built on
         half a number.
         """
+        return (self.margin_detail(pair) or {}).get('money')
+
+    def margin_detail(self, pair):
+        """What one spread ties up, WITH where the figure came from.
+
+        The terminals price it themselves (`order_calc_margin`), which
+        is the honest number: margin depends on the broker's leverage,
+        the symbol's margin mode and the account group. Where a leg
+        cannot price it, each leg's notional over ITS OWN account's
+        leverage is the fallback — not one leverage for both — and it
+        is LABELLED, because a target computed off the wrong base looks
+        like a considered number.
+
+        No leverage either, and there is NO suggestion: a target on a
+        base nobody set is worse than no target.
+        """
         ttl = float(self.config.get('MARGIN_TTL_SEC', 60.0))
         now = self.clock()
         cached = self._margin_cache.get(pair.key)
         if cached and now - cached[0] < ttl:
             return cached[1]
+        detail = self._price_margin(pair)
+        self._margin_cache[pair.key] = (now, detail)
+        return detail
+
+    def _price_margin(self, pair):
         total = 0.0
-        for leg_name, account, symbol, lots, side in (
-                ('a', pair.account_a, pair.symbol_a, pair.clip_lots_a, 'SELL'),
-                ('b', pair.account_b, pair.symbol_b, pair.clip_lots_b, 'BUY')):
+        source = 'terminal'
+        for meta, account, symbol, lots, side in (
+                (pair.meta_a, pair.account_a, pair.symbol_a,
+                 pair.clip_lots_a, 'SELL'),
+                (pair.meta_b, pair.account_b, pair.symbol_b,
+                 pair.clip_lots_b, 'BUY')):
             leg = self.legs.get(account)
             if leg is None or not symbol or not lots:
                 total = None
@@ -510,11 +534,33 @@ class Coordinator:
             except Exception:                 # a leg mid-restart
                 margin = None
             if margin is None:
+                margin = self._margin_from_leverage(account, meta, lots)
+                if margin is not None:
+                    source = 'leverage'
+            if margin is None:
                 total = None
                 break
             total += float(margin)
-        self._margin_cache[pair.key] = (now, total)
-        return total
+        if total is None:
+            return {'money': None, 'source': None,
+                    'note': 'the terminals have not priced the margin for '
+                            'one spread, and no account leverage is known — '
+                            'set leverage to size a % target'}
+        return {'money': total, 'source': source,
+                'note': ('priced by the terminals themselves'
+                         if source == 'terminal' else
+                         "each leg's notional over its own account's "
+                         "leverage — the terminals could not price it")}
+
+    def _margin_from_leverage(self, account, meta, lots):
+        """Notional over THAT account's leverage. Not one for both."""
+        info = self.account_info(account) or {}
+        leverage = info.get('leverage')
+        price = (meta or {}).get('ask') or (meta or {}).get('bid')
+        contract = (meta or {}).get('contract_size')
+        if not leverage or not price or not contract:
+            return None
+        return float(lots) * float(contract) * float(price) / float(leverage)
 
     def fair_spread(self, pair, md):
         """What the CARRY says this basis should be, both directions.
@@ -1149,6 +1195,13 @@ class Coordinator:
             # swap is charged per night. 0 is intraday, where the term
             # vanishes, and it is the default.
             nights = float(self.config.get('BREAK_EVEN_NIGHTS', 0.0) or 0.0)
+            margin = self.margin_detail(pair) or {}
+            # The pair's own range this session, so a target can be read
+            # against what the spread actually travels.
+            seen = self.session.get(key) or {}
+            session_range = (None if seen.get('high') is None
+                             or seen.get('low') is None
+                             else seen['high'] - seen['low'])
             net, avg_entry = self.book.net_position(key)
             buys, sells = self.book.working_counts(key)
             positions = []
@@ -1164,7 +1217,7 @@ class Coordinator:
                             # the market is not a take-profit.
                             'exit': takeprofit.for_position(
                                 position, md, pair, self.config.settings,
-                                self.margin_per_spread(pair),
+                                margin.get('money'),
                                 nights=nights,
                                 carry_for=self.holding_carry(
                                     pair, position.side.value, nights))})
@@ -1199,7 +1252,9 @@ class Coordinator:
                 # the screen — nothing is sent to the broker.
                 'exit': takeprofit.describe(
                     pair, md, self.config.settings,
-                    margin_per_spread=self.margin_per_spread(pair),
+                    margin_per_spread=margin.get('money'),
+                    margin_source=margin.get('source'),
+                    session_range=session_range,
                     quantity=pair.default_quantity,
                     spread_units=sizing.spread_units(
                         pair.clip_lots_b,

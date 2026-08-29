@@ -336,6 +336,7 @@ body {
   background: #ffffff;
   border: 1px solid var(--frame-line);
 }
+.rail .x-reach.out-of-range { color: #b03030; }
 .rail .gap-buy.up, .rail .gap-sell.up { color: #2f7d3f; }
 .rail .gap-buy.down, .rail .gap-sell.down { color: #b03030; }
 /* The warning REPLACES the reading, so it has to be readable in a

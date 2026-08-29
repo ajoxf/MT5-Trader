@@ -127,7 +127,8 @@ def break_even_terms(pair, md, settings, quantity=1.0, spread_units=None,
 
 
 def describe(pair, md, settings, margin_per_spread=None, quantity=1.0,
-             spread_units=None, nights=None, carry_buy=None, carry_sell=None):
+             spread_units=None, nights=None, carry_buy=None, carry_sell=None,
+             session_range=None, margin_source=None):
     """Break-even and take-profit for both directions, in spread points.
 
     Returned as the LEVELS the market has to reach, on the side that
@@ -155,7 +156,15 @@ def describe(pair, md, settings, margin_per_spread=None, quantity=1.0,
             'added_money': None, 'added_points': None,
             'target_money': None, 'target_pct': None,
             'target_points': None,
+            # How far the target is, in the unit the ladder is quoted
+            # in, with the session's own range beside it. At small size
+            # a percentage of margin can be far outside anything the
+            # pair moves in a day — the number is honest, but whether
+            # it is REACHABLE is the trader's call, and they can only
+            # make it if the range is on the screen.
+            'session_range': session_range, 'target_reachable': None,
             'margin_per_spread': margin_per_spread,
+            'margin_source': margin_source,
             # Which side each break-even is READ on. A long's is a BID
             # level and a short's is an ASK level, and unlabelled the
             # number reads as "the price now" rather than "the bid you
@@ -222,8 +231,15 @@ def describe(pair, md, settings, margin_per_spread=None, quantity=1.0,
         body['tp_buy'] = body['break_even_buy'] + target_points
     if body['break_even_sell'] is not None:
         body['tp_sell'] = body['break_even_sell'] - target_points
+    if session_range:
+        body['target_reachable'] = target_points <= float(session_range)
     body['note'] = (f'{pct:g}% of {margin_per_spread:,.2f} margin per '
-                    f'spread = {target_money:,.2f}, over commission')
+                    f'spread = {target_money:,.2f} = {target_points:,.4f} of '
+                    f'spread' +
+                    (f", against a {float(session_range):,.4f} session range"
+                     if session_range else '') +
+                    (f' (margin from {margin_source})' if margin_source
+                     else ''))
     return body
 
 

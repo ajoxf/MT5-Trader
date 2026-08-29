@@ -135,14 +135,37 @@ def test_the_engine_prices_the_margin_from_both_terminals(config, pair, legs):
     assert per_spread == pytest.approx(500.0)
 
 
-def test_a_broker_that_cannot_price_margin_leaves_the_target_unmeasured(
+def test_a_leg_the_terminal_cannot_price_falls_back_to_ITS_OWN_leverage(
         config, pair, legs):
-    """The control. Half a margin figure is not a margin figure, and a
-    target built on one leg would be wrong by the other leg's whole
-    contribution."""
+    """Not one leverage for both: each leg's notional over the leverage
+    of the account that leg trades on. And the fallback is LABELLED —
+    a target computed off a different base looks like a considered
+    number."""
     from mt5trader.coordinator import Coordinator
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = None
+    coordinator = Coordinator(config, legs)
+    coordinator.start()
+    coordinator.poll_once()
+
+    detail = coordinator.margin_detail(pair)
+
+    assert detail['source'] == 'leverage'
+    # 300 from the terminal, plus 0.1 x 100 x 4351.40 / 100 from leverage.
+    assert detail['money'] == pytest.approx(300.0 + 435.14, abs=0.5)
+    assert 'leverage' in detail['note']
+
+
+def test_no_leverage_either_means_NO_target_rather_than_another_base(
+        config, pair, legs):
+    """The control, and the rule: a target on a base nobody set is
+    worse than no target — it looks considered. Break-even, which needs
+    no margin at all, still stands."""
+    from mt5trader.coordinator import Coordinator
+    legs['acct_a'].broker.margin_per_lot = 3000.0
+    legs['acct_b'].broker.margin_per_lot = None
+    for leg in legs.values():
+        leg.broker.leverage = None
     coordinator = Coordinator(config, legs)
     coordinator.start()
 
@@ -152,6 +175,8 @@ def test_a_broker_that_cannot_price_margin_leaves_the_target_unmeasured(
     row = coordinator.snapshot()['pairs'][pair.key]
     assert row['exit']['tp_buy'] is None
     assert row['exit']['break_even_buy'] is not None
+    assert 'leverage' in row['exit']['note'] or \
+        'margin' in row['exit']['note']
 
 
 # -- the four terms break-even is built from (spec §5.2) -----------------
@@ -300,3 +325,36 @@ def test_the_measured_round_trip_can_be_overridden_and_the_override_cleared(
                                        BID_ASK_ROUND_TRIP_OVERRIDE=''),
                                   spread_units=10.0)
     assert cleared['spread_width'] == pytest.approx(0.02)    # measured again
+
+
+def test_the_target_states_its_distance_and_the_range_it_is_measured_against(
+        pair):
+    """At small size a percentage of margin can be far outside anything
+    the pair moves in a session — 1% of a $1,220 margin once came to
+    6.65 of spread on a pair that never travelled that far. The
+    arithmetic is honest; whether it is REACHABLE is the trader's call,
+    and they can only make it with the range on the screen."""
+    pair.clip_lots_a = pair.clip_lots_b = 0.1
+
+    far = takeprofit.describe(pair, market(), SETTINGS,
+                              margin_per_spread=500.0, spread_units=10.0,
+                              session_range=0.30)
+    near = takeprofit.describe(pair, market(), SETTINGS,
+                               margin_per_spread=500.0, spread_units=10.0,
+                               session_range=4.00)
+
+    assert far['target_points'] == pytest.approx(1.00)
+    assert far['target_reachable'] is False
+    assert near['target_reachable'] is True
+    # The derivation is stated, in both units and against the range.
+    assert '2% of 500.00' in far['note']
+    assert '1.0000 of spread' in far['note']
+    assert '0.3000 session range' in far['note']
+
+
+def test_with_no_range_yet_the_target_says_nothing_about_reachability(pair):
+    """Unmeasured is not "unreachable"."""
+    pair.clip_lots_a = pair.clip_lots_b = 0.1
+    body = takeprofit.describe(pair, market(), SETTINGS,
+                               margin_per_spread=500.0, spread_units=10.0)
+    assert body['target_reachable'] is None
