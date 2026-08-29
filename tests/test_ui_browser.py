@@ -2058,3 +2058,66 @@ def test_an_order_held_back_from_the_broker_does_not_look_like_one_resting(page)
     assert page.locator('.ladder .grid td.work.held').count() == 0, \
         'an order resting at the broker was marked as held off'
     assert page.locator('.ladder .grid td.work[data-order-id]').count() == 1
+
+
+def test_a_price_row_is_the_same_element_across_a_repaint(page):
+    """The tbody was rebuilt with innerHTML three times a second. That
+    threw away the row the pointer was over — losing :hover and the
+    pressed state — and a click landing mid-replacement hit a detached
+    element or whatever had just slid into that position."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr[data-level]', timeout=5000)
+
+    same = page.evaluate("""() => {
+        const body = document.querySelector('.ladder .grid tbody');
+        const row = body.querySelector('tr[data-level]');
+        const level = row.dataset.level;
+        row.dataset.witness = 'marked';       // survives only if reused
+        // Sizes change; the rows do not.
+        const state = window.MT5Trader.state;
+        const pair = state.snapshot.pairs['XAUUSD_|GC1226'];
+        pair.rows.forEach((r, i) => { r.bid_size = 100 + i; });
+        window.MT5Trader.render();
+        const after = body.querySelector('tr[data-level="' + level + '"]');
+        return after && after.dataset.witness === 'marked';
+    }""")
+    assert same, 'the row was destroyed and rebuilt instead of updated'
+
+
+def test_the_ladder_holds_still_while_the_pointer_is_on_it(page):
+    """Re-centring between a mousedown and the mouseup is how the wrong
+    price gets sent."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr', timeout=5000)
+
+    held = page.evaluate("""() => {
+        const grid = document.querySelector('.ladder .grid');
+        grid.dispatchEvent(new PointerEvent('pointerenter', {bubbles: true}));
+        const before = grid.scrollTop;
+        grid.scrollTop = before + 60;          // the trader looked away
+        const moved = grid.scrollTop;
+        const state = window.MT5Trader.state;
+        state.centredAt['XAUUSD_|GC1226'] = 0;   // long overdue a centre
+        window.MT5Trader.render();
+        return grid.scrollTop === moved;
+    }""")
+    assert held, 'the ladder re-centred while the pointer was over it'
+
+
+def test_a_click_sends_the_price_that_was_on_the_row(page):
+    """Never the index: an index moves when the window does."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody td.ask', timeout=5000)
+
+    cell = page.locator('.ladder .grid tbody tr[data-level] td.ask').nth(4)
+    level = float(cell.evaluate('n => n.closest("tr").dataset.level'))
+    before = command_count(page)
+    cell.click()
+    page.wait_for_timeout(300)
+
+    assert command_count(page) == before + 1
+    sent = last_command(page)
+    assert sent['kind'] == 'click'
+    assert sent['payload']['level'] == level, (
+        f"clicked {level}, sent {sent['payload']['level']}")
+    assert sent['payload']['side'] == 'BUY'      # the ask side buys
