@@ -192,15 +192,18 @@
         <!-- Which two accounts this ladder is routed across, with their
              MT5 logins: two accounts is the whole architecture, and
              which one a leg is on is not something to go and look up. -->
-        <div class="route-box" title="Leg A and leg B, with the MT5 login each is on">
+        <div class="route-box row" title="Leg A and leg B, with the MT5 login each is on">
           <div class="route-leg route-a">A <b>—</b></div>
           <div class="route-leg route-b">B <b>—</b></div>
         </div>
-        <label class="check"><input type="checkbox" class="filter"> Filter</label>
-        <select class="order-type">
-          <option value="LIMIT">Limit</option>
-          <option value="MARKET">Market</option>
-        </select>
+        <!-- Mode and time in force on ONE row. Both are read at a
+             glance and set rarely, and the title bar carries the
+             answer too. -->
+        <div class="mode-row">
+          <select class="order-type">
+            <option value="LIMIT">Limit</option>
+            <option value="MARKET">Market</option>
+          </select>
         <!-- The honest caveat has to be ON THE SCREEN. A synthetic
              order lives in THIS process; nothing at the broker knows
              what a spread is, so neither DAY nor GTC survives this
@@ -210,7 +213,8 @@
         <select class="tif" title="DAY: cancelled at the session cutoff, on the broker's clock. GTC: until you cancel it — OR UNTIL THIS SYSTEM STOPS. Nothing at the broker knows what a spread is, so no working order survives a shutdown, and none resumes on a restart.">
           <option value="DAY" title="cancelled at the session cutoff">Day</option>
           <option value="GTC" title="until cancelled, or until this system stops">GTC</option>
-        </select>
+          </select>
+        </div>
         <!-- The three fastest actions on the ladder, without hunting
              for a row: lift the offer, hit the bid, close what is on. -->
         <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY</button>
@@ -244,6 +248,7 @@
           <input class="increment" type="number" min="0" step="0.0001"></label>
         <div class="centre-row">
           <label class="check lock" title="Hold the ladder exactly where it is — no automatic re-centring at all"><input type="checkbox" class="lock-scroll"> Lock</label>
+          <label class="check" title="Show only the rows that have something on them"><input type="checkbox" class="filter"> Filter</label>
           <button class="btn recentre" title="Put the window back around the market now">Centre</button>
         </div>
       </div>
@@ -333,10 +338,15 @@
             <input class="ls-roundtrip" type="number" step="0.01" placeholder="measured"></label>
         </div>
         <div class="ls-group">
-          <h4>Carry</h4>
-          <label class="lsf"><span>Expiry A</span>
+          <h4>Carry <small class="ls-pairtype"></small></h4>
+          <!-- An expiry belongs to a CONTRACT. Spot has none, and a
+               field asking for one is a field the operator will either
+               fill in wrongly or spend a minute deciding to leave
+               blank. Which leg has one follows the pair type, so the
+               row says which of the two it is. -->
+          <label class="lsf row-expiry-a"><span>Expiry A</span>
             <input class="ls-expiry-a" type="text" placeholder="from MT5"></label>
-          <label class="lsf"><span>Expiry B</span>
+          <label class="lsf row-expiry-b"><span>Expiry B</span>
             <input class="ls-expiry" type="text" placeholder="from MT5"></label>
           <label class="lsf"><span>Swap A long</span>
             <input class="ls-swap-a-long" type="number" step="0.01" placeholder="from MT5"></label>

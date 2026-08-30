@@ -1424,3 +1424,39 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
 .rail .cxl-row .cxl { flex: 1 1 auto; min-width: 0; padding: 1px 2px; }
 .rail .cxl-row .cxl-all { flex: 1.6 1 auto; }
 .rail .auto-route-state.armed { color: var(--traded); font-weight: 700; }
+
+
+/* The rail, in as few ROWS as it can honestly manage. Every row is one
+ * the trader reads past while the market moves, and the pane must not
+ * scroll: a button behind a scroll is a button that is not there. */
+.rail .route-box.row { display: flex; gap: 3px; }
+.rail .route-box.row .route-leg { flex: 1 1 0; min-width: 0; }
+.rail .mode-row { display: flex; gap: 2px; }
+.rail .mode-row select { flex: 1 1 0; min-width: 0; }
+.rail .centre-row .check { flex: 0 0 auto; }
+
+
+/* A ladder has a FLOOR. Dragged shorter than this, the rail goes
+ * behind a scrollbar and the two legs' books get pushed out of the
+ * frame — and both are things the trader reads while the market moves.
+ * Below the floor the LADDER scrolls instead, which is what a ladder
+ * is for. */
+.window.ladder { min-height: 480px; }
+
+/* AutoRouting, said in the title bar. It changes what a FILL does, so
+ * it is not something to discover by opening a panel. */
+.titlebar .mode-badge.auto {
+  background: var(--traded);
+  color: #fff;
+  font-weight: 700;
+}
+
+/* A field for something this pair does not have: still visible, so the
+ * operator can see it was considered, and plainly not for filling in. */
+.ladder-settings .lsf.not-applicable > span { opacity: .55; }
+.ladder-settings .lsf.not-applicable input {
+  background: var(--chrome, #ececec);
+  color: var(--muted, #777);
+  font-style: italic;
+}
+.ladder-settings h4 small { font-weight: 400; color: var(--muted, #777); }

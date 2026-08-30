@@ -25,6 +25,13 @@ playwright_api = pytest.importorskip('playwright.sync_api')
 from mt5trader.webapp import create_app                        # noqa: E402
 
 
+#: How long a browser test waits for a publish to reach the screen.
+#: Generous on purpose: the assertion is about WHAT the page shows, not
+#: how fast, and a container under load runs this suite two-thirds
+#: slower — where a 5s wait fails tests that are perfectly correct.
+WAIT = 10000
+
+
 class Publisher:
     """Stands in for the coordinator: it republishes the snapshot on a
     timer, exactly as the real one does. Without that the file ages, the
@@ -59,6 +66,15 @@ class Publisher:
         #: The fair-value window is per pair and off by default; the
         #: fixture turns it on so the panels it holds can be read.
         self.show_fair_window = True
+        #: Working orders and their quote groups, as the engine
+        #: publishes them. Poked into `state.snapshot` instead, the
+        #: next poll — 200ms away — erases them, and the test passes or
+        #: fails on which side of that it lands.
+        self.orders = None
+        self.quotes = None
+        #: The counts the cancel buttons are enabled from.
+        self.working_buys = 0
+        self.working_sells = 0
         self.live = threading.Event()
         self.live.set()
         self.stop = threading.Event()
@@ -75,10 +91,19 @@ class Publisher:
                            self.stale_leg, self.dead_orders, self.exits,
                            self.positions, self.unclaimed, self.fair,
                            self.auto_route, self.auto_route_armed,
-                           self.show_fair_window)
+                           self.show_fair_window, self.orders,
+                           self.quotes, self.working_buys,
+                           self.working_sells)
         if at is not None:
             payload['at'] = at
-        tmp = self.path + '.tmp'
+        # A tmp name of its OWN. The timer thread and the test publish
+        # at the same moment often enough to matter: sharing one tmp
+        # file, the slower writer's file is gone before it renames it,
+        # the timer thread dies of the FileNotFoundError, the snapshot
+        # stops arriving, and the UI — correctly — refuses every click
+        # into a screen with nothing behind it. That looked like a
+        # flaky click test and was a flaky FIXTURE.
+        tmp = '%s.%d.tmp' % (self.path, threading.get_ident())
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(payload, f)
         os.replace(tmp, self.path)
@@ -114,7 +139,8 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              stale_leg=False, dead_orders=None, exits=None,
              positions=None, unclaimed=None, fair=None,
              auto_route=False, auto_route_armed=None,
-             show_fair_window=True):
+             show_fair_window=True, orders=None, quotes=None,
+             working_buys=0, working_sells=0):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -176,12 +202,14 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                            'session': {'open': 59.71, 'high': 59.80,
                                        'low': 58.90, 'volume': 0.0,
                                        'ours': True}},
-                'rows': rows, 'orders': [], 'quotes': [],
+                'rows': rows, 'orders': orders or [],
+                'quotes': quotes or [],
                 'positions': positions or [],
                 'dead_orders': dead_orders or [],
                 'exit': exits or {},
                 'fair': fair or {},
-                'working_buys': 0, 'working_sells': 0, 'net_position': 0.0,
+                'working_buys': working_buys,
+                'working_sells': working_sells, 'net_position': 0.0,
                 'avg_entry': None, 'open_pnl': None, 'last_print': None,
                 'errors': [],
             }
@@ -379,7 +407,7 @@ def test_a_market_click_fires_on_ONE_click(page):
     # ENGINE says came back, never from the click.
     page.select_option('.ladder .order-type', 'MARKET')
     page.paths['publisher'].order_type = 'MARKET'
-    page.wait_for_selector('.window.mode-market', timeout=3000)
+    page.wait_for_selector('.window.mode-market', timeout=WAIT)
     # Read in ONE evaluate: the ladder repaints on every publish, and a
     # node resolved in Python can be replaced before the style is read.
     # AT THE TOUCH a market click crosses now and the cursor carries an
@@ -455,7 +483,7 @@ def test_the_engine_banner_appears_when_the_snapshot_goes_stale(page):
     publisher = page.paths['publisher']
     publisher.live.clear()                 # the engine stops publishing
     publisher.publish(at=0)
-    page.wait_for_selector('#engine-banner:not(.hidden)', timeout=5000)
+    page.wait_for_selector('#engine-banner:not(.hidden)', timeout=WAIT)
     assert 'Nothing on this screen is live' in \
         page.text_content('#engine-banner')
 
@@ -463,7 +491,7 @@ def test_the_engine_banner_appears_when_the_snapshot_goes_stale(page):
     # `state='attached'`: a hidden element is never "visible", which is
     # the point of asserting on it.
     page.wait_for_selector('#engine-banner.hidden', state='attached',
-                           timeout=5000)
+                           timeout=WAIT)
     assert page.locator('#engine-banner.hidden').count() == 1
 
 
@@ -611,7 +639,7 @@ def test_the_monitor_shows_margin_per_account_and_names_the_weakest(page):
         s.monitorTab = 'accounts';
         window.MT5Trader.render();
     }""")
-    page.wait_for_selector('.monitor .pane table', timeout=5000)
+    page.wait_for_selector('.monitor .pane table', timeout=WAIT)
 
     text = page.text_content('.monitor .pane')
     assert 'The weakest account governs' in text
@@ -692,7 +720,7 @@ def test_the_exchanges_page_carries_connect_test_and_diagnose(page):
     """The three questions an operator asks, in the order they ask them."""
     page.click('#open-settings')
     page.wait_for_selector('.window.settings')
-    page.wait_for_selector('tr[data-account] .connect-account', timeout=5000)
+    page.wait_for_selector('tr[data-account] .connect-account', timeout=WAIT)
 
     row = page.locator('tr[data-account]').first
     for name in ('connect-account', 'test-account', 'diagnose-account'):
@@ -713,7 +741,7 @@ def test_the_exit_costs_belong_to_ONE_LADDER_and_the_override_CLEARS(page):
     """
     open_ladder(page)
     page.click('.ladder .ladder-cog')
-    page.wait_for_selector('.ladder .ladder-settings .ls-tp', timeout=5000)
+    page.wait_for_selector('.ladder .ladder-settings .ls-tp', timeout=WAIT)
 
     for field in ('.ls-comm-a', '.ls-comm-b', '.ls-roundtrip', '.ls-slip',
                   '.ls-nights', '.ls-tp', '.ls-carry-rate',
@@ -726,7 +754,7 @@ def test_the_exit_costs_belong_to_ONE_LADDER_and_the_override_CLEARS(page):
     page.fill('.ladder .ladder-settings .ls-slip', '2.5')
     page.fill('.ladder .ladder-settings .ls-comm-a', '0')
     page.click('.ladder .ladder-settings .ls-save')
-    page.wait_for_function("() => window.__sent !== null", timeout=5000)
+    page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
 
     sent = page.evaluate('() => window.__sent')
     assert sent['bid_ask_round_trip_override'] is None    # cleared, not 0
@@ -765,7 +793,7 @@ def test_the_ladder_settings_load_from_the_CONFIG_not_the_snapshot(page):
     page.click('.ladder .ladder-cog')
     page.wait_for_function(
         "() => document.querySelector('.ladder .ls-tp').value === '2.5'",
-        timeout=5000)
+        timeout=WAIT)
 
     # A typed 0 survives the round trip; an unset field stays EMPTY.
     assert page.input_value('.ladder .ls-comm-a') == '0'
@@ -775,6 +803,74 @@ def test_the_ladder_settings_load_from_the_CONFIG_not_the_snapshot(page):
 
     page.click('.ladder .ls-close')
     page.evaluate('() => { window.fetch = window.__realFetch; }')
+
+
+def test_an_expiry_is_only_asked_for_where_a_CONTRACT_expires(page):
+    """Spot does not expire — a contract is what expires. Asking leg A
+    for a date on a spot/future pair is a field the operator either
+    fills in wrongly or spends a minute deciding to leave blank. Two
+    futures, and both legs have one."""
+    open_ladder(page)
+
+    def open_with(pair_type, expected):
+        # Cleared first: the note is left behind by the previous open,
+        # and a wait that is already satisfied waits for nothing.
+        page.evaluate("""(type) => {
+            document.querySelector('.ladder .ls-pairtype').textContent = '';
+            window.__realFetch = window.__realFetch || window.fetch;
+            window.fetch = function (url, options) {
+                if (String(url).indexOf('/api/pairs') >= 0 &&
+                    !(options && options.method === 'POST')) {
+                  return Promise.resolve(new Response(JSON.stringify({
+                    ok: true, pairs: {'XAUUSD_|GC1226': {pair_type: type}}}),
+                    {status: 200,
+                     headers: {'Content-Type': 'application/json'}}));
+                }
+                return window.__realFetch(url, options);
+            };
+        }""", pair_type)
+        page.click('.ladder .ladder-cog')
+        page.wait_for_function(
+            "(want) => document.querySelector('.ladder .ls-pairtype')"
+            ".textContent.indexOf(want) >= 0", arg=expected, timeout=WAIT)
+
+    try:
+        open_with('SPOT_FUTURE', 'only leg B expires')
+        assert page.locator('.ladder .ls-expiry-a').is_disabled()
+        assert 'spot does not expire' in page.get_attribute(
+            '.ladder .ls-expiry-a', 'placeholder')
+        assert page.locator('.ladder .ls-expiry').is_enabled()
+        page.click('.ladder .ls-close')
+
+        open_with('FUTURE_FUTURE', 'both legs expire')
+        assert page.locator('.ladder .ls-expiry-a').is_enabled()
+        assert page.locator('.ladder .ls-expiry').is_enabled()
+        page.click('.ladder .ls-close')
+
+        open_with('RELATED', 'no fair spread')
+        assert page.locator('.ladder .ls-expiry-a').is_disabled()
+        assert page.locator('.ladder .ls-expiry').is_disabled()
+        page.click('.ladder .ls-close')
+    finally:
+        # Always: a stub left in place answers the NEXT test's fetches.
+        page.evaluate('() => { window.fetch = window.__realFetch; }')
+
+
+def test_autorouting_is_stated_where_the_mode_is(page):
+    """It changes what a FILL does. Ticking a box that changes nothing
+    on the screen reads as having done nothing at all."""
+    open_ladder(page)
+    assert 'AUTO' not in page.text_content('.ladder .mode-badge')
+
+    page.paths['publisher'].auto_route = True
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .mode-badge')"
+        ".textContent.indexOf('AUTO') >= 0", timeout=WAIT)
+
+    assert 'no stop' in page.get_attribute('.ladder .mode-badge', 'title')
+    page.paths['publisher'].auto_route = False
+    page.paths['publisher'].publish()
 
 
 def test_the_rail_carries_no_form_the_market_can_outrun(page):
@@ -800,7 +896,7 @@ def test_the_exchanges_page_says_where_the_per_ladder_settings_are(page):
     """A generic Exits page would be four numbers that are right for
     whichever pair the operator had in mind when they typed them."""
     page.click('#open-settings')
-    page.wait_for_selector('.window.settings .trading-fields', timeout=5000)
+    page.wait_for_selector('.window.settings .trading-fields', timeout=WAIT)
 
     assert page.locator('.window.settings .s-comm-a').count() == 0
     assert 'per LADDER' in page.text_content('.window.settings .where-exits')
@@ -837,7 +933,7 @@ def test_a_check_shows_its_answer_as_a_checklist_with_fixes(page):
     }""")
 
     page.locator('tr[data-account] .connect-account').first.click()
-    page.wait_for_selector('tr.checklist', timeout=5000)
+    page.wait_for_selector('tr.checklist', timeout=WAIT)
 
     text = page.text_content('tr.checklist')
     assert '10027' in text                       # the broker's own words
@@ -851,7 +947,7 @@ def test_the_operator_is_told_when_the_system_is_connected(page):
     """Said once, when it becomes true — a banner that never changes is
     a banner nobody reads."""
     page.click('#open-settings')
-    page.wait_for_selector('.conn', timeout=5000)
+    page.wait_for_selector('.conn', timeout=WAIT)
     # Nothing is really connected in this fixture, and it says so
     # plainly rather than showing a green light.
     assert 'NOT READY' in page.text_content('.conn')
@@ -886,7 +982,7 @@ def test_the_operator_is_told_when_the_system_is_connected(page):
     assert "the 16:55 cutoff is on the broker's clock" in \
         page.text_content('.conn.up')
     # It is also said once, out loud.
-    page.wait_for_selector('.toast.ok', timeout=4000)
+    page.wait_for_selector('.toast.ok', timeout=WAIT)
     assert 'You can trade' in page.text_content('.toast.ok')
     page.evaluate('() => { window.fetch = window.__realFetch; }')
 
@@ -981,17 +1077,31 @@ def tidy(page):
 
 def open_ladder(page):
     """The settings tests leave the desk showing their own panel; these
-    are about a window, so put one on it."""
+    are about a window, so put one on it.
+
+    And put it back to a KNOWN state while we are here. These tests run
+    in a random order against one shared page, so whatever the last one
+    left behind is what this one starts from — a settings pane left
+    open sits over the ladder and swallows the click a click test is
+    about, which is a real failure of the test and not of the code.
+    """
     page.wait_for_function(
         "() => Object.keys((window.MT5Trader.state.snapshot || {}).pairs "
-        "|| {}).length > 0", timeout=5000)
+        "|| {}).length > 0", timeout=WAIT)
     page.evaluate("""() => {
         const state = window.MT5Trader.state;
         const key = Object.keys(state.snapshot.pairs || {})[0];
         state.open = [window.MT5Trader.panelId('ladder', key)];
         window.MT5Trader.render();
+        // A pane over the ladder, a stubbed fetch and a stale toast are
+        // all things one test leaves for the next one.
+        document.querySelectorAll('.ladder-settings').forEach(
+          function (pane) { pane.hidden = true; });
+        if (window.__realFetch) { window.fetch = window.__realFetch; }
+        const toasts = document.getElementById('toasts');
+        if (toasts) { toasts.innerHTML = ''; }
     }""")
-    page.wait_for_selector('.window.ladder .titlebar', timeout=5000)
+    page.wait_for_selector('.window.ladder .titlebar', timeout=WAIT)
 
 
 def test_a_window_goes_where_it_is_dragged_and_is_still_there_after_a_reload(
@@ -1062,11 +1172,11 @@ def test_a_button_in_the_title_bar_still_works_while_windows_move(page):
         window.MT5Trader.state.open = ['monitor:'];
         window.MT5Trader.render();
     }""")
-    page.wait_for_selector('.window.monitor', timeout=5000)
+    page.wait_for_selector('.window.monitor', timeout=WAIT)
 
     page.click('.window.monitor .titlebar .close')
 
-    page.wait_for_selector('.window.monitor', state='detached', timeout=5000)
+    page.wait_for_selector('.window.monitor', state='detached', timeout=WAIT)
 
 
 def test_tidy_puts_every_window_back_in_the_row(page):
@@ -1098,7 +1208,7 @@ def seed_config(page, pairs=True):
     with open(page.paths['config'], 'w', encoding='utf-8') as f:
         json.dump(config, f)
     page.click('#open-settings')
-    page.wait_for_selector('.window.settings .pairs', timeout=5000)
+    page.wait_for_selector('.window.settings .pairs', timeout=WAIT)
     page.evaluate('() => window.MT5Settings.refresh()')
     page.wait_for_timeout(300)
 
@@ -1191,7 +1301,7 @@ def test_a_new_pairs_key_is_built_from_its_two_symbols(page):
     should ask for — and a key typed wrong is a pair that never loads."""
     seed_config(page)
     page.click('.new-pair')
-    page.wait_for_selector('.pair-form', timeout=5000)
+    page.wait_for_selector('.pair-form', timeout=WAIT)
 
     page.fill('.p-symbol-a', 'XAUUSD')
     page.fill('.p-symbol-b', 'GCZ6')
@@ -1295,14 +1405,14 @@ def test_every_ladder_is_reachable_from_one_menu(page):
     """A desk trades several spreads at once — Spot vs Future, WTI vs
     Brent — and each one is a window on this desktop."""
     page.click('#add-panel')
-    page.wait_for_selector('#add-menu:not(.hidden)', timeout=5000)
+    page.wait_for_selector('#add-menu:not(.hidden)', timeout=WAIT)
 
     text = page.text_content('#add-menu')
     assert 'Gold basis' in text and 'XAUUSD_' in text
     assert 'Market Grid' in text and 'Trading Monitor' in text
 
     page.click('#add-menu button[data-panel="monitor:"]')
-    page.wait_for_selector('.window.monitor', timeout=5000)
+    page.wait_for_selector('.window.monitor', timeout=WAIT)
     assert page.locator('#add-menu.hidden').count() == 1
     page.click('.window.monitor .titlebar .close')
 
@@ -1395,7 +1505,7 @@ def test_a_window_opened_at_the_end_of_the_row_is_scrolled_into_view(page):
     }""")
 
     page.evaluate("() => window.MT5Trader.openPanel('monitor:')")
-    page.wait_for_selector('.window.monitor', timeout=5000)
+    page.wait_for_selector('.window.monitor', timeout=WAIT)
     page.wait_for_timeout(200)
 
     visible = page.evaluate("""() => {
@@ -1436,7 +1546,7 @@ def test_the_tool_windows_float_over_the_ladders_instead_of_queueing(page):
     tidy(page)
     open_ladder(page)
     page.evaluate("() => window.MT5Trader.openPanel('monitor:')")
-    page.wait_for_selector('.window.monitor', timeout=5000)
+    page.wait_for_selector('.window.monitor', timeout=WAIT)
     page.wait_for_timeout(200)
 
     assert page.locator('.window.monitor.floating').count() == 1
@@ -1489,7 +1599,7 @@ def test_the_journal_colours_what_was_made_and_what_was_lost(page):
     }""")
     page.wait_for_function(
         "() => document.querySelectorAll('.monitor td.up').length > 0",
-        timeout=5000)
+        timeout=WAIT)
 
     assert page.locator('.monitor td.up').count() == 1        # the winner
     assert page.locator('.monitor td.down').count() == 1      # the loser
@@ -1543,25 +1653,29 @@ def test_the_cancel_buttons_are_dead_when_there_is_nothing_to_cancel(page):
     page.wait_for_function(
         "() => document.querySelector('.ladder .cxl-all')"
         " && document.querySelector('.ladder .cxl-all').disabled",
-        timeout=5000)
+        timeout=WAIT)
 
     assert page.locator('.ladder .cxl-all').is_disabled()
     assert 'CXL All' in page.text_content('.ladder .cxl-all')
 
-    page.evaluate("""() => {
-        const state = window.MT5Trader.state;
-        state.snapshot.pairs['XAUUSD_|GC1226'].working_buys = 2;
-        window.MT5Trader.render();
-    }""")
-    assert page.locator('.ladder .cxl-b').is_enabled()
+    # Published, not poked into the page: the next snapshot is 200ms
+    # away and erases anything written into it by hand.
+    page.paths['publisher'].working_buys = 2
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => !document.querySelector('.ladder .cxl-b').disabled",
+        timeout=WAIT)
+
     assert '2' in page.text_content('.ladder .cxl-b')
+    page.paths['publisher'].working_buys = 0
+    page.paths['publisher'].publish()
 
 
 def test_the_mid_carries_a_rule_of_its_own(page):
     """On a wide spread the two touches are many rows apart, and "where
     is the market" is a question the inside rule alone cannot answer."""
     open_ladder(page)
-    page.wait_for_selector('.ladder tr.mid-line', timeout=5000)
+    page.wait_for_selector('.ladder tr.mid-line', timeout=WAIT)
 
     border = page.evaluate(
         "() => getComputedStyle(document.querySelector("
@@ -1636,7 +1750,7 @@ def test_the_shared_account_notice_can_be_put_away_and_comes_back(page):
     page.evaluate('() => { window.MT5Trader.state.dismissed = {}; }')
     page.paths['publisher'].same_login = {'100006': ['leg_a', 'leg_b']}
     page.paths['publisher'].publish()
-    page.wait_for_selector('#same-login-banner:not(.hidden)', timeout=5000)
+    page.wait_for_selector('#same-login-banner:not(.hidden)', timeout=WAIT)
     assert '#100006' in page.text_content('#same-login-banner')
     # One LINE on the screen; the full reading of it is the tooltip, and
     # the button goes where it is fixed.
@@ -1646,17 +1760,17 @@ def test_the_shared_account_notice_can_be_put_away_and_comes_back(page):
 
     page.click('#same-login-banner .banner-close')
     page.wait_for_selector('#same-login-banner.hidden', state='attached',
-                           timeout=5000)
+                           timeout=WAIT)
 
     # A DIFFERENT login is a different situation, and it is said again.
     page.paths['publisher'].same_login = {'200007': ['leg_a', 'leg_b']}
     page.paths['publisher'].publish()
-    page.wait_for_selector('#same-login-banner:not(.hidden)', timeout=5000)
+    page.wait_for_selector('#same-login-banner:not(.hidden)', timeout=WAIT)
 
     page.paths['publisher'].same_login = None
     page.paths['publisher'].publish()
     page.wait_for_selector('#same-login-banner.hidden', state='attached',
-                           timeout=5000)
+                           timeout=WAIT)
 
 
 def test_nothing_in_the_window_is_cropped_when_it_is_made_short(page):
@@ -1691,7 +1805,7 @@ def test_each_legs_book_is_laid_out_with_its_width(page):
     for the spread, whose width IS the round turn. Read by comparing
     them, so it is a table."""
     open_ladder(page)
-    page.wait_for_selector('table.legbook', timeout=5000)
+    page.wait_for_selector('table.legbook', timeout=WAIT)
 
     rows = page.locator('table.legbook tbody tr')
     assert rows.count() == 3                       # A, B, and the spread
@@ -1703,7 +1817,7 @@ def test_each_legs_book_is_laid_out_with_its_width(page):
     assert page.locator('table.legbook td.age').count() == 3
     page.paths['publisher'].stale_leg = True
     page.paths['publisher'].publish()
-    page.wait_for_selector('table.legbook td.age.bad', timeout=5000)
+    page.wait_for_selector('table.legbook td.age.bad', timeout=WAIT)
     assert page.locator('table.legbook td.age.bad').count() == 1
     page.paths['publisher'].stale_leg = False
     page.paths['publisher'].publish()
@@ -1729,7 +1843,7 @@ def test_an_order_the_broker_refused_is_said_out_loud_and_kept_on_screen(page):
     page.paths['publisher'].publish()
 
     # Said once, in the broker's own words, and errors do not auto-hide.
-    page.wait_for_selector('.toast', timeout=5000)
+    page.wait_for_selector('.toast', timeout=WAIT)
     assert '10016' in page.text_content('.toast')
     assert 'REJECTED' in page.text_content('.toast').upper()
 
@@ -1741,7 +1855,7 @@ def test_an_order_the_broker_refused_is_said_out_loud_and_kept_on_screen(page):
         UI.state.monitorTab = 'orders';
         UI.render();
     }""")
-    page.wait_for_selector('.monitor tr.dead', timeout=5000)
+    page.wait_for_selector('.monitor tr.dead', timeout=WAIT)
     text = page.text_content('.monitor tr.dead')
     assert 'REJECTED' in text and '10016' in text
 
@@ -1766,7 +1880,7 @@ def test_the_leg_panel_never_runs_off_the_edge_of_the_ladder(page):
         market.leg_b_quote_age_sec = 0.6;
         window.MT5Trader.render();
     }""")
-    page.wait_for_selector('table.legbook', timeout=5000)
+    page.wait_for_selector('table.legbook', timeout=WAIT)
 
     fits = page.evaluate("""() => {
         const node = document.querySelector('.window.ladder');
@@ -1798,7 +1912,7 @@ def test_the_exit_price_is_on_the_rail_for_both_directions(page):
     page.wait_for_function(
         "() => document.querySelector('.fairwin .tp-buy')"
         " && document.querySelector('.fairwin .tp-buy').textContent"
-        " === '60.21'", timeout=5000)
+        " === '60.21'", timeout=WAIT)
 
     assert page.text_content('.fairwin .be-buy') == '59.21'
     assert page.text_content('.fairwin .tp-sell') == '57.99'
@@ -1818,7 +1932,7 @@ def test_the_exit_price_is_on_the_rail_for_both_directions(page):
     page.paths['publisher'].publish()
     page.wait_for_function(
         "() => document.querySelector('.fairwin .exit-note')"
-        ".textContent.indexOf('out') >= 0", timeout=5000)
+        ".textContent.indexOf('out') >= 0", timeout=WAIT)
     assert 'flat at 59.2100' in page.get_attribute('.fairwin .exit-note',
                                                     'title')
 
@@ -1842,7 +1956,7 @@ def test_the_fair_spread_is_quoted_for_both_directions(page):
     page.wait_for_function(
         "() => document.querySelector('.fairwin .fair-buy')"
         " && document.querySelector('.fairwin .fair-buy').textContent"
-        " === '0.60'", timeout=5000)
+        " === '0.60'", timeout=WAIT)
 
     assert page.text_content('.fairwin .fair-sell') == '0.40'
     # Rich on the buy side, cheap on the sell side — and the sign is
@@ -1879,7 +1993,7 @@ def test_a_disputed_swap_replaces_the_reading_and_offers_the_correction(page):
     page.wait_for_function(
         "() => document.querySelector('.fairwin .fair-warn')"
         " && !document.querySelector('.fairwin .fair-warn').hidden",
-        timeout=5000)
+        timeout=WAIT)
 
     # The number is GONE, not printed beneath the warning.
     assert page.text_content('.fairwin .fair-buy') == '—'
@@ -1902,7 +2016,7 @@ def test_fair_value_and_the_exit_live_in_their_OWN_window(page):
     say which instrument either belongs to.
     """
     open_ladder(page)
-    page.wait_for_selector('.window.fairwin .exit', timeout=5000)
+    page.wait_for_selector('.window.fairwin .exit', timeout=WAIT)
 
     assert page.locator('.window.ladder .fair').count() == 0
     assert page.locator('.window.ladder .exit').count() == 0
@@ -1915,12 +2029,12 @@ def test_turning_the_window_off_closes_it_and_KEEPS_it_closed(page):
     next poll because the setting still says so is a window the trader
     cannot get rid of."""
     open_ladder(page)
-    page.wait_for_selector('.window.fairwin', timeout=5000)
+    page.wait_for_selector('.window.fairwin', timeout=WAIT)
 
     page.paths['publisher'].show_fair_window = False
     page.paths['publisher'].publish()
     page.wait_for_function(
-        "() => !document.querySelector('.window.fairwin')", timeout=5000)
+        "() => !document.querySelector('.window.fairwin')", timeout=WAIT)
 
     # ...and it stays gone across the polls that follow.
     page.wait_for_timeout(600)
@@ -1928,7 +2042,7 @@ def test_turning_the_window_off_closes_it_and_KEEPS_it_closed(page):
 
     page.paths['publisher'].show_fair_window = True
     page.paths['publisher'].publish()
-    page.wait_for_selector('.window.fairwin', timeout=5000)
+    page.wait_for_selector('.window.fairwin', timeout=WAIT)
 
 
 def test_the_settings_behind_the_exit_are_one_click_from_it(page):
@@ -1938,7 +2052,7 @@ def test_the_settings_behind_the_exit_are_one_click_from_it(page):
     open_ladder(page)
 
     page.click('.fairwin .exit .open-exits')
-    page.wait_for_selector('.ladder .ladder-settings .ls-tp', timeout=5000)
+    page.wait_for_selector('.ladder .ladder-settings .ls-tp', timeout=WAIT)
 
     assert page.text_content('.ladder .ls-pair') == 'XAUUSD_|GC1226'
     page.click('.ladder .ls-close')
@@ -1949,7 +2063,7 @@ def test_the_leg_books_width_column_is_called_Spread(page):
     """The operator's word for it. The spread row's own figure is the
     two legs' summed — one round turn of both books."""
     open_ladder(page)
-    page.wait_for_selector('.ladder table.legbook', timeout=5000)
+    page.wait_for_selector('.ladder table.legbook', timeout=WAIT)
 
     assert page.text_content('.ladder table.legbook th.c-width') == 'Spread'
 
@@ -1985,7 +2099,7 @@ def test_autorouting_says_what_is_armed_and_that_there_is_no_stop(page):
     page.paths['publisher'].publish()
     page.wait_for_function(
         "() => document.querySelector('.fairwin .auto-route-state')"
-        ".textContent.indexOf('60.21') >= 0", timeout=5000)
+        ".textContent.indexOf('60.21') >= 0", timeout=WAIT)
     assert 'no stop' in page.get_attribute('.fairwin .auto-route-state',
                                            'title')
 
@@ -1994,14 +2108,14 @@ def test_autorouting_says_what_is_armed_and_that_there_is_no_stop(page):
     page.paths['publisher'].publish()
     page.wait_for_function(
         "() => document.querySelector('.fairwin .auto-route-state')"
-        ".textContent === 'on'", timeout=5000)
+        ".textContent === 'on'", timeout=WAIT)
     assert 'next fill' in page.get_attribute('.fairwin .auto-route-state',
                                              'title')
 
     # ...and the switch, with the NO STOP caveat, is in this ladder\'s
     # own settings.
     page.click('.ladder .ladder-cog')
-    page.wait_for_selector('.ladder .ls-auto-route', timeout=5000)
+    page.wait_for_selector('.ladder .ls-auto-route', timeout=WAIT)
     assert 'NO STOP' in page.get_attribute('.ladder .lsf.check-row', 'title')
     page.click('.ladder .ls-close')
 
@@ -2084,7 +2198,7 @@ def test_the_exit_box_shows_the_figures_it_is_built_from(page):
     page.wait_for_function(
         "() => document.querySelector('.fairwin .x-comm')"
         " && document.querySelector('.fairwin .x-comm').textContent"
-        " !== '\\u2014'", timeout=5000)
+        " !== '\\u2014'", timeout=WAIT)
 
     assert page.text_content('.fairwin .x-width') == '0.02'
     assert page.text_content('.fairwin .x-comm') == '$1.00'
@@ -2110,7 +2224,7 @@ def test_the_leg_book_is_moved_to_the_bottom_whatever_the_markup_says(page):
     older process cached can put it anywhere, so the position is made
     true at render time rather than assumed from the markup."""
     open_ladder(page)
-    page.wait_for_selector('.ladder .footer table.legbook', timeout=5000)
+    page.wait_for_selector('.ladder .footer table.legbook', timeout=WAIT)
 
     # Put it back in the quote strip, as an older page had it, and let
     # one render pass happen.
@@ -2143,7 +2257,7 @@ def test_the_unclaimed_notice_is_one_line_and_the_table_is_where_it_acts(page):
         {'account': 'acct_a', 'ticket': 1326, 'symbol': 'GCZ6',
          'side': 'BUY', 'volume': 0.01, 'price_open': 4631.84}]
     page.paths['publisher'].publish()
-    page.wait_for_selector('#unclaimed-banner:not(.hidden)', timeout=5000)
+    page.wait_for_selector('#unclaimed-banner:not(.hidden)', timeout=WAIT)
 
     text = page.text_content('#unclaimed-banner')
     assert '1 position(s)' in text
@@ -2154,7 +2268,7 @@ def test_the_unclaimed_notice_is_one_line_and_the_table_is_where_it_acts(page):
     # Review opens the Reconciler, where the position and its Close it
     # button are.
     page.click('#unclaimed-banner .banner-open')
-    page.wait_for_selector('.monitor table.unclaimed', timeout=5000)
+    page.wait_for_selector('.monitor table.unclaimed', timeout=WAIT)
     row = page.text_content('.monitor table.unclaimed')
     assert 'GCZ6' in row and '1326' in row
     assert page.locator('.monitor .close-unclaimed').count() == 1
@@ -2162,7 +2276,7 @@ def test_the_unclaimed_notice_is_one_line_and_the_table_is_where_it_acts(page):
     # ...and the notice can be put away.
     page.click('#unclaimed-banner .banner-close')
     page.wait_for_selector('#unclaimed-banner.hidden', state='attached',
-                           timeout=5000)
+                           timeout=WAIT)
     page.paths['publisher'].unclaimed = None
     page.paths['publisher'].publish()
     page.evaluate("() => window.MT5Trader.closePanel('monitor:')")
@@ -2182,7 +2296,7 @@ def test_the_size_is_on_the_two_buttons_as_well_as_in_the_box(page):
     page.click('.ladder .keypad button.clr')
     page.wait_for_function(
         "() => document.querySelector('.ladder .buy-touch')"
-        ".textContent.trim() === 'BUY 1'", timeout=5000)
+        ".textContent.trim() === 'BUY 1'", timeout=WAIT)
     # CLR is the ladder's own default, not a blank button.
     assert 'SELL 1' in page.text_content('.ladder .sell-touch')
 
@@ -2353,28 +2467,30 @@ def test_an_order_held_back_from_the_broker_does_not_look_like_one_resting(page)
     was in the market.
     """
     open_ladder(page)
-    page.wait_for_selector('.ladder .grid tbody tr td.work', timeout=5000)
+    page.wait_for_selector('.ladder .grid tbody tr td.work', timeout=WAIT)
 
     def put_order(ticket):
         """One working order at a level, with its quote group either
-        holding a broker ticket or not."""
-        page.evaluate("""(ticket) => {
-            const state = window.MT5Trader.state;
-            const row = state.snapshot.pairs['XAUUSD_|GC1226'];
-            const level = row.rows[5].level;
-            row.orders = [{order_id: 'O1', level: level, side: 'BUY',
-                           quantity: 1, filled_quantity: 0,
-                           state: 'WORKING'}];
-            row.quotes = [{pair_key: 'XAUUSD_|GC1226', side: 'BUY',
-                           level: level, leg: 'B', ticket: ticket,
-                           reason: ticket ? null : 'the spread is stale'
-                               + ' — holding off',
-                           orders: ['O1']}];
-            window.MT5Trader.render();
-        }""", ticket)
+        holding a broker ticket or not — PUBLISHED, not poked in. The
+        publisher republishes every 200ms, and a snapshot edited in the
+        page is gone by the next one."""
+        level = page.evaluate(
+            """() => window.MT5Trader.state.snapshot
+                 .pairs['XAUUSD_|GC1226'].rows[5].level""")
+        publisher = page.paths['publisher']
+        publisher.orders = [{'order_id': 'O1', 'level': level,
+                             'side': 'BUY', 'quantity': 1,
+                             'filled_quantity': 0, 'state': 'WORKING'}]
+        publisher.quotes = [{'pair_key': 'XAUUSD_|GC1226', 'side': 'BUY',
+                             'level': level, 'leg': 'B', 'ticket': ticket,
+                             'reason': None if ticket else
+                             'the spread is stale — holding off',
+                             'orders': ['O1']}]
+        publisher.publish()
 
     # Held back: no ticket at the broker.
     put_order(None)
+    page.wait_for_selector('.ladder .grid td.work.held', timeout=WAIT)
     held = page.locator('.ladder .grid td.work.held')
     assert held.count() == 1, 'a held-off order is not marked'
     assert 'NOT at the broker' in (held.first.get_attribute('title') or '')
@@ -2383,9 +2499,14 @@ def test_an_order_held_back_from_the_broker_does_not_look_like_one_resting(page)
     # CONTROL: the same order, now actually resting, is NOT marked — or
     # the mark would mean nothing.
     put_order(987654)
-    assert page.locator('.ladder .grid td.work.held').count() == 0, \
-        'an order resting at the broker was marked as held off'
+    page.wait_for_function(
+        "() => document.querySelectorAll('.ladder .grid td.work.held')"
+        ".length === 0", timeout=WAIT)
     assert page.locator('.ladder .grid td.work[data-order-id]').count() == 1
+
+    page.paths['publisher'].orders = None
+    page.paths['publisher'].quotes = None
+    page.paths['publisher'].publish()
 
 
 def test_a_price_row_is_the_same_element_across_a_repaint(page):
@@ -2394,7 +2515,7 @@ def test_a_price_row_is_the_same_element_across_a_repaint(page):
     pressed state — and a click landing mid-replacement hit a detached
     element or whatever had just slid into that position."""
     open_ladder(page)
-    page.wait_for_selector('.ladder .grid tbody tr[data-level]', timeout=5000)
+    page.wait_for_selector('.ladder .grid tbody tr[data-level]', timeout=WAIT)
 
     same = page.evaluate("""() => {
         const body = document.querySelector('.ladder .grid tbody');
@@ -2416,7 +2537,7 @@ def test_the_ladder_holds_still_while_the_pointer_is_on_it(page):
     """Re-centring between a mousedown and the mouseup is how the wrong
     price gets sent."""
     open_ladder(page)
-    page.wait_for_selector('.ladder .grid tbody tr', timeout=5000)
+    page.wait_for_selector('.ladder .grid tbody tr', timeout=WAIT)
 
     held = page.evaluate("""() => {
         const grid = document.querySelector('.ladder .grid');
@@ -2435,7 +2556,7 @@ def test_the_ladder_holds_still_while_the_pointer_is_on_it(page):
 def test_a_click_sends_the_price_that_was_on_the_row(page):
     """Never the index: an index moves when the window does."""
     open_ladder(page)
-    page.wait_for_selector('.ladder .grid tbody td.ask', timeout=5000)
+    page.wait_for_selector('.ladder .grid tbody td.ask', timeout=WAIT)
 
     cell = page.locator('.ladder .grid tbody tr[data-level] td.ask').nth(4)
     level = float(cell.evaluate('n => n.closest("tr").dataset.level'))
@@ -2461,24 +2582,49 @@ def test_ticking_the_setting_OPENS_the_fair_window(page):
     page.paths['publisher'].show_fair_window = False
     page.paths['publisher'].publish()
     page.wait_for_function(
-        "() => !document.querySelector('.window.fairwin')", timeout=5000)
+        "() => !document.querySelector('.window.fairwin')", timeout=WAIT)
 
     page.evaluate(SPY_ON_PAIR_SAVE)
     page.click('.ladder .ladder-cog')
-    page.wait_for_selector('.ladder .ls-fair-window', timeout=5000)
+    page.wait_for_selector('.ladder .ls-fair-window', timeout=WAIT)
     page.check('.ladder .ls-fair-window')
     page.click('.ladder .ls-save')
-    page.wait_for_function("() => window.__sent !== null", timeout=5000)
+    page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
 
     assert page.evaluate('() => window.__sent')['show_fair_window'] is True
     # ...and it is on the screen NOW, not a poll later and not only once
     # the engine has written the file back.
-    page.wait_for_selector('.window.fairwin', timeout=5000)
+    page.wait_for_selector('.window.fairwin', timeout=WAIT)
 
     page.evaluate('() => { window.fetch = window.__realFetch; }')
     page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
     page.paths['publisher'].show_fair_window = True
     page.paths['publisher'].publish()
+
+
+def test_the_ladder_cannot_be_made_shorter_than_its_own_rail(page):
+    """The durable half of it. A window dragged short enough puts the
+    rail behind a scrollbar however tight the rail is, so the window
+    has a floor: it stops at the height its own controls need, and the
+    LADDER scrolls instead — which is what a ladder is for."""
+    measured = page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        const floor = parseInt(getComputedStyle(node).minHeight, 10) || 0;
+        // Drag it well under the floor and read what the browser
+        // actually gives back.
+        node.classList.add('sized');
+        node.style.height = '200px';
+        const rail = node.querySelector('.rail');
+        const footer = node.querySelector('.footer');
+        return {floor: floor, height: node.getBoundingClientRect().height,
+                railOver: rail.scrollHeight - rail.clientHeight,
+                footerOver: footer.scrollHeight - footer.clientHeight};
+    }""")
+
+    assert measured['floor'] > 0, 'the ladder has no floor at all'
+    assert measured['height'] >= measured['floor'] - 1, measured
+    assert measured['railOver'] <= 1, measured
+    assert measured['footerOver'] <= 1, measured
 
 
 def test_the_left_pane_does_not_scroll_on_a_short_window(page):
@@ -2489,7 +2635,7 @@ def test_the_left_pane_does_not_scroll_on_a_short_window(page):
     page.evaluate("""() => {
         const node = document.querySelector('.window.ladder');
         node.classList.add('sized');
-        node.style.height = '560px';
+        node.style.height = '480px';
     }""")
     page.wait_for_timeout(250)
 

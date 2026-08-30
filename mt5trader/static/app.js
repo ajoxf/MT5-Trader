@@ -36,6 +36,7 @@
     hovering: {},        // pair key -> the pointer is over its ladder
     centredAt: {},       // pair key -> when we last centred it on the mid
     centring: {},        // pair key -> that scroll event was ours
+    centringAgain: {},   // pair key -> a centring is waiting on layout
     filtered: {},        // pair key -> hide rows with nothing on them
     monitorTab: 'positions',
     // Clicks that have been sent but are not in a snapshot yet. The
@@ -961,6 +962,33 @@
               ? '' : value;
           }
         });
+        // Which leg HAS an expiry follows what the legs are. Spot has
+        // none — a contract is what expires — so on a spot/future pair
+        // leg A's row says so instead of asking for a date that does
+        // not exist. Two futures, and both have one.
+        var type = (saved.pair_type || 'SPOT_FUTURE').toUpperCase();
+        var rowA = pane.querySelector('.row-expiry-a');
+        var rowB = pane.querySelector('.row-expiry-b');
+        var note = pane.querySelector('.ls-pairtype');
+        var expiries = {
+          SPOT_FUTURE: {a: false, b: true,
+                        note: 'spot vs a future — only leg B expires'},
+          FUTURE_FUTURE: {a: true, b: true,
+                          note: 'two futures — both legs expire'},
+          RELATED: {a: false, b: false,
+                    note: 'two different instruments — neither expires, '
+                      + 'and there is no fair spread to quote'}
+        }[type] || {a: true, b: true, note: ''};
+        if (note) { note.textContent = expiries.note; }
+        [[rowA, expiries.a, 'Leg A is spot — spot does not expire'],
+         [rowB, expiries.b, 'this pair has no expiry']].forEach(
+          function (entry) {
+            if (!entry[0]) { return; }
+            var input = entry[0].querySelector('input');
+            entry[0].classList.toggle('not-applicable', !entry[1]);
+            input.disabled = !entry[1];
+            input.placeholder = entry[1] ? 'from MT5' : entry[2];
+          });
       }).catch(function (e) { toast('could not read this pair: ' + e); });
     // The allowance is a BUDGET; this is what slippage actually cost
     // this session. Shown beside it so the number is corrected from
@@ -1081,8 +1109,18 @@
     node.querySelector('.title').textContent = row.name || key;
     node.querySelector('.route').textContent =
       (row.account_a || '?') + ' → ' + (row.account_b || '?');
-    node.querySelector('.mode-badge').textContent =
-      row.order_type + ' · ' + row.time_in_force;
+    // AutoRouting is armed on ONE ladder at a time and changes what a
+    // FILL does, so it is stated where the mode is stated — and where
+    // it is visible without opening anything. Ticking the box has to
+    // change the screen, or it reads as having done nothing.
+    var badge = node.querySelector('.mode-badge');
+    badge.textContent = row.order_type + ' · ' + row.time_in_force
+      + (row.auto_route ? ' · AUTO' : '');
+    badge.title = row.auto_route
+      ? 'AutoRouting is ON for this ladder: a fill rests a working '
+        + 'order to close at the take-profit. A target, and no stop.'
+      : 'the mode a click sends, and how long a working order lives';
+    badge.classList.toggle('auto', !!row.auto_route);
 
     var change = market.net_change;
     var netchg = node.querySelector('.netchg');
@@ -1817,7 +1855,22 @@
   function centreOnMid(node, key, market) {
     var row = midRow(node, market);
     var grid = node.querySelector('.grid');
-    if (!row || !grid.clientHeight) { return; }
+    if (!row || !grid.clientHeight) {
+      // The window has not been laid out yet, so there is nothing to
+      // centre IN. Ask again on the next frame rather than dropping it:
+      // dropped, the ladder sits wherever the rows happened to land
+      // until the re-centring timer next fires — seconds of a market
+      // the trader is looking straight at, off centre.
+      if (row && !state.centringAgain[key]) {
+        state.centringAgain[key] = true;
+        window.requestAnimationFrame(function () {
+          state.centringAgain[key] = false;
+          var live = (state.snapshot.pairs[key] || {}).market;
+          if (live) { centreOnMid(node, key, live); }
+        });
+      }
+      return;
+    }
     state.centring[key] = true;                     // our scroll, not theirs
     grid.scrollTop = row.offsetTop -
       (grid.clientHeight - row.offsetHeight) / 2;
