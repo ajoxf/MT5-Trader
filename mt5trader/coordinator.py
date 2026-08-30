@@ -40,7 +40,7 @@ from .spread import (LevelSigma, QuoteAgeTracker, SpreadJumpTracker,
 HOT_SETTINGS = (
     'TP_TARGET_PCT_OF_MARGIN', 'SLIPPAGE_ALLOWANCE', 'BREAK_EVEN_NIGHTS',
     'CARRY_RATE_PCT', 'COMMISSION_PER_LOT_A', 'COMMISSION_PER_LOT_B',
-    'SPREAD_COST_FACTOR', 'BID_ASK_ROUND_TRIP_OVERRIDE',
+    'SPREAD_COST_FACTOR',
 )
 
 
@@ -583,10 +583,12 @@ class Coordinator:
         `-carry / k`, which is size-free — and compared against the
         price each direction would actually trade at, never a midpoint.
 
-        A trader who has typed a swap in SPREAD POINTS per day short-
-        circuits all of it: that is their own number for their own
-        account, and it needs no conversion. Blank, and the four
-        per-lot rates from MT5 do the work.
+        ONE path to the carry: the broker's swap per leg per side,
+        with the four typed fields as overrides. There used to be a
+        second — a single number in spread points per day that
+        short-circuited all of it — and two ways to price the same
+        carry is two answers to reconcile when the reading looks
+        wrong.
         """
         now = self.session_clock.broker_now() or datetime.now()
         expiry = pair.effective_expiry('b')
@@ -598,25 +600,6 @@ class Coordinator:
             kind,
             fairvalue.days_to_expiry(pair.effective_expiry('a'), now),
             fairvalue.days_to_expiry(expiry, now))
-        if pair.swap_per_day is not None:
-            body = fairvalue.describe((md or {}).get('spread'),
-                                      pair.swap_per_day, expiry, now)
-            body['source'] = 'typed'
-            body['expects_expiry'] = pair.expects_expiry()
-            body['kind'] = kind
-            body['kind_note'] = kind_note
-            # Reported in the SAME shape as the swap-priced reading, so
-            # the panel has one thing to draw — and so the gap is
-            # measured against the two prices each direction would
-            # actually trade at rather than against a midpoint.
-            fair = body.get('fair_spread')
-            body['fair_buy'] = body['fair_sell'] = fair
-            for key, side in (('gap_buy', 'long_spread'),
-                              ('gap_sell', 'short_spread')):
-                level = (md or {}).get(side)
-                body[key] = (None if fair is None or level is None
-                             else level - fair)
-            return body
         body = carry.describe(
             pair.meta_a, pair.meta_b, pair.hedge_ratio,
             pair.clip_lots_a, pair.clip_lots_b,

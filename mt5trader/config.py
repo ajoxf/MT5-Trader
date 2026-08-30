@@ -182,12 +182,6 @@ DEFAULT_SETTINGS = {
     #: this gets corrected from data rather than left at whatever was
     #: first guessed. Default 0 — a fabricated cost is charged against
     #: every trade and the operator cannot tell it was never theirs.
-    #: The bid-ask round trip is MEASURED live from both books. This is
-    #: an override in money, and it is CLEARABLE — blank (None) means
-    #: "use the measured value". A field loop that skips blanks can
-    #: only ever set an override, and one that cannot be deleted
-    #: outlives the pair it was typed for.
-    'BID_ASK_ROUND_TRIP_OVERRIDE': None,
     'SLIPPAGE_ALLOWANCE': 0.0,
     #: Break-even is only defined GIVEN a holding period, because the
     #: swap is charged per night. 0 is intraday, where the term
@@ -219,12 +213,6 @@ DEFAULT_SETTINGS = {
     #: this gets corrected from data rather than left at whatever was
     #: first guessed. Default 0 — a fabricated cost is charged against
     #: every trade and the operator cannot tell it was never theirs.
-    #: The bid-ask round trip is MEASURED live from both books. This is
-    #: an override in money, and it is CLEARABLE — blank (None) means
-    #: "use the measured value". A field loop that skips blanks can
-    #: only ever set an override, and one that cannot be deleted
-    #: outlives the pair it was typed for.
-    'BID_ASK_ROUND_TRIP_OVERRIDE': None,
     'SLIPPAGE_ALLOWANCE': 0.0,
     #: Break-even is only defined GIVEN a holding period, because the
     #: swap is charged per night. 0 is intraday, where the term
@@ -349,13 +337,13 @@ class PairConfig:
                  time_in_force=TimeInForce.DAY.value,
                  overnight=OvernightMode.ALLOW.value,
                  quoting_leg=None, enabled=True, rows=30,
-                 expiry=None, swap_per_day=None, expiry_a=None,
+                 expiry=None, expiry_a=None,
                  swap_a_long_per_lot=None, swap_a_short_per_lot=None,
                  swap_b_long_per_lot=None, swap_b_short_per_lot=None,
                  auto_route=False, commission_per_lot_a=None,
                  commission_per_lot_b=None, slippage_allowance=None,
                  break_even_nights=None, tp_target_pct_of_margin=None,
-                 bid_ask_round_trip_override=None, carry_rate_pct=None,
+                 carry_rate_pct=None,
                  show_fair_window=False, algo=None, algo_window=None):
         self.key = key
         self.name = name or key
@@ -391,8 +379,6 @@ class PairConfig:
         #: whose contract month is wrong is exactly what a fair value
         #: beside the market is there to catch. Blank = read MT5's.
         self.expiry_a = expiry_a
-        self.swap_per_day = (None if swap_per_day in (None, '')
-                             else float(swap_per_day))
         #: The broker's own swap, per lot per night, per leg per SIDE —
         #: four numbers, because a pair is long one leg and short the
         #: other and the two are charged differently. Blank means "use
@@ -418,8 +404,6 @@ class PairConfig:
         self.slippage_allowance = _blank_to_none(slippage_allowance)
         self.break_even_nights = _blank_to_none(break_even_nights)
         self.tp_target_pct_of_margin = _blank_to_none(tp_target_pct_of_margin)
-        self.bid_ask_round_trip_override = _blank_to_none(
-            bid_ask_round_trip_override)
         self.carry_rate_pct = _blank_to_none(carry_rate_pct)
         #: Which ALGO is selected on this ladder — exactly one, and
         #: NONE by default. An algo measures and says what it would do;
@@ -514,7 +498,6 @@ class PairConfig:
         'slippage_allowance': 'SLIPPAGE_ALLOWANCE',
         'break_even_nights': 'BREAK_EVEN_NIGHTS',
         'tp_target_pct_of_margin': 'TP_TARGET_PCT_OF_MARGIN',
-        'bid_ask_round_trip_override': 'BID_ASK_ROUND_TRIP_OVERRIDE',
         'carry_rate_pct': 'CARRY_RATE_PCT',
     }
 
@@ -540,7 +523,7 @@ class PairConfig:
     #: Blocking these behind a restart is what put "an assets change
     #: requires a restart" ten lines above a live trade while the values
     #: sat saved and correct.
-    HOT_FIELDS = (('expiry', 'expiry_a', 'swap_per_day', 'auto_route',
+    HOT_FIELDS = (('expiry', 'expiry_a', 'auto_route',
                    'swap_a_long_per_lot', 'swap_a_short_per_lot',
                    'swap_b_long_per_lot', 'swap_b_short_per_lot',
                    'order_type', 'time_in_force', 'overnight', 'increment',
@@ -559,7 +542,7 @@ class PairConfig:
             if field not in (raw or {}):
                 continue
             value = raw[field]
-            if field in self.EXIT_FIELDS or field == 'swap_per_day' or (
+            if field in self.EXIT_FIELDS or (
                     field.startswith('swap_') and field.endswith('_per_lot')):
                 value = _blank_to_none(value)
             elif field in ('auto_route', 'algo_window', 'show_fair_window'):
@@ -599,7 +582,7 @@ class PairConfig:
             'overnight': self.overnight.value,
             'quoting_leg': self.quoting_leg,
             'enabled': self.enabled, 'rows': self.rows,
-            'expiry': self.expiry, 'swap_per_day': self.swap_per_day,
+            'expiry': self.expiry,
             'expiry_a': self.expiry_a,
             'swap_a_long_per_lot': self.swap_a_long_per_lot,
             'swap_a_short_per_lot': self.swap_a_short_per_lot,
@@ -611,7 +594,6 @@ class PairConfig:
             'slippage_allowance': self.slippage_allowance,
             'break_even_nights': self.break_even_nights,
             'tp_target_pct_of_margin': self.tp_target_pct_of_margin,
-            'bid_ask_round_trip_override': self.bid_ask_round_trip_override,
             'carry_rate_pct': self.carry_rate_pct,
             'algo': self.algo, 'algo_window': self.algo_window,
         }

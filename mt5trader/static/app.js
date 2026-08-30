@@ -977,8 +977,6 @@
     ['.ls-slip', 'slippage_allowance', 'inherit', 'SLIPPAGE_ALLOWANCE'],
     ['.ls-nights', 'break_even_nights', 'inherit', 'BREAK_EVEN_NIGHTS'],
     ['.ls-tp', 'tp_target_pct_of_margin', 'inherit', 'TP_TARGET_PCT_OF_MARGIN'],
-    ['.ls-roundtrip', 'bid_ask_round_trip_override', 'inherit',
-     'BID_ASK_ROUND_TRIP_OVERRIDE'],
     ['.ls-carry-rate', 'carry_rate_pct', 'inherit', 'CARRY_RATE_PCT'],
     ['.ls-pair-type', 'pair_type', 'live'],
     ['.ls-expiry-a', 'expiry_a', 'text'],
@@ -986,8 +984,8 @@
     ['.ls-swap-a-long', 'swap_a_long_per_lot', 'text'],
     ['.ls-swap-a-short', 'swap_a_short_per_lot', 'text'],
     ['.ls-swap-b-long', 'swap_b_long_per_lot', 'text'],
-    ['.ls-swap-b-short', 'swap_b_short_per_lot', 'text'],
-    ['.ls-swap-day', 'swap_per_day', 'text']
+    ['.ls-swap-b-short', 'swap_b_short_per_lot', 'text']
+
   ];
 
   function openLadderSettings(node, key) {

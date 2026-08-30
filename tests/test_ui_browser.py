@@ -745,29 +745,26 @@ def test_the_exit_costs_belong_to_ONE_LADDER_and_the_override_CLEARS(page):
     of numbers is wrong for at least one of them. They live behind the
     cog on each ladder, and the Exchanges page says where.
 
-    The clearable field is the point. Blank means "use the width
-    measured live from both books", and a form that reads blank as 0 —
-    or skips it — can only ever SET an override, never delete one.
+    And 0 is a real number: a form that reads a typed zero as "unset"
+    charges a commission nobody agreed to.
     """
     open_ladder(page)
     page.click('.ladder .ladder-cog')
     page.wait_for_selector('.ladder .ladder-settings .ls-tp', timeout=WAIT)
 
-    for field in ('.ls-comm-a', '.ls-comm-b', '.ls-roundtrip', '.ls-slip',
+    for field in ('.ls-comm-a', '.ls-comm-b', '.ls-slip',
                   '.ls-nights', '.ls-tp', '.ls-carry-rate',
                   '.ls-auto-route', '.ls-overnight'):
         assert page.locator(
             '.ladder .ladder-settings ' + field).count() == 1, field
 
     page.evaluate(SPY_ON_PAIR_SAVE)
-    page.fill('.ladder .ladder-settings .ls-roundtrip', '')
     page.fill('.ladder .ladder-settings .ls-slip', '2.5')
     page.fill('.ladder .ladder-settings .ls-comm-a', '0')
     page.click('.ladder .ladder-settings .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
 
     sent = page.evaluate('() => window.__sent')
-    assert sent['bid_ask_round_trip_override'] is None    # cleared, not 0
     assert sent['slippage_allowance'] == 2.5
     assert sent['commission_per_lot_a'] == 0             # ...and 0 is real
     page.evaluate('() => { window.fetch = window.__realFetch; }')

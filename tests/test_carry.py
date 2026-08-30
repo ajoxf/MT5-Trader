@@ -310,7 +310,7 @@ def test_the_carry_inputs_apply_without_a_restart(config, pair, legs,
         'days_to_expiry'] is None
 
     path.write_text(json.dumps({'pairs': {pair.key: {
-        'expiry': '2026-09-26', 'swap_per_day': 0.02}}}))
+        'expiry': '2026-09-26'}}}))
     # Nothing restarted; the next poll reads it.
     coordinator.session_clock.now = lambda: __import__(
         'datetime').datetime(2026, 8, 27)
@@ -319,7 +319,6 @@ def test_the_carry_inputs_apply_without_a_restart(config, pair, legs,
 
     fair = coordinator.snapshot()['pairs'][pair.key]['fair']
     assert fair['days_to_expiry'] == 30
-    assert fair['fair_spread'] == pytest.approx(0.60)
 
 
 def test_a_config_that_did_not_change_is_not_re_read(config, pair, legs,

@@ -892,7 +892,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                       'increment', 'default_quantity', 'order_type',
                       'time_in_force', 'overnight', 'quoting_leg', 'enabled',
                       'rows', 'clip_lots_a', 'clip_lots_b',
-                      'expiry', 'expiry_a', 'swap_per_day', 'auto_route',
+                      'expiry', 'expiry_a', 'auto_route',
                       'swap_a_long_per_lot', 'swap_a_short_per_lot',
                       'swap_b_long_per_lot', 'swap_b_short_per_lot',
                       # What a trade on THIS ladder costs, and therefore
@@ -902,7 +902,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                       'commission_per_lot_a', 'commission_per_lot_b',
                       'slippage_allowance', 'break_even_nights',
                       'tp_target_pct_of_margin',
-                      'bid_ask_round_trip_override', 'carry_rate_pct',
+                      'carry_rate_pct',
                       'show_fair_window', 'algo', 'algo_window'):
             if field in payload:
                 pair[field] = payload[field]

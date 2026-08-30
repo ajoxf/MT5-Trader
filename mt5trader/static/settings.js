@@ -614,18 +614,11 @@
                   '<input class="p-expiry" type="date" value="' +
                   escape(draft.expiry || '') + '">' +
                   '<div class="hint">The futures leg\'s last trading ' +
-                  'day. With the swap below it gives the FAIR spread: a ' +
-                  'basis converges to zero at expiry, and until then it ' +
-                  'is worth its carry.</div>');
-    html += field('Swap per day',
-                  '<input class="p-swap" type="number" step="0.000001" ' +
-                  'value="' + escape(draft.swap_per_day) + '" ' +
-                  'placeholder="in spread points, signed">' +
-                  '<div class="hint">What carrying ONE spread for one ' +
-                  'day is worth at your broker, on your account, in ' +
-                  'spread points — the swap MT5 actually charges you, ' +
-                  'not a textbook rate. Signed the way the spread is ' +
-                  '(B − β × A).</div>');
+                  'day. With the broker\'s own swap it gives the FAIR ' +
+                  'spread: a basis converges to zero at expiry, and ' +
+                  'until then it is worth its carry. The swaps live on ' +
+                  'the ladder\'s own settings, per leg and per side.' +
+                  '</div>');
     html += field('Increment',
                   '<input class="p-increment" type="number" step="0.000001" ' +
                   'value="' + escape(draft.increment) +
@@ -789,7 +782,6 @@
         leg_b_account: (pair.leg_b || {}).account,
         leg_b_symbol: (pair.leg_b || {}).symbol,
         expiry: pair.expiry || '',
-        swap_per_day: pair.swap_per_day
       };
       local.derived = null;
       local.symbols = {};
@@ -962,9 +954,7 @@
       leg_a_symbol: value('.p-symbol-a'),
       leg_b_account: value('.p-account-b'),
       leg_b_symbol: value('.p-symbol-b'),
-      expiry: value('.p-expiry') || null,
-      swap_per_day: value('.p-swap') === ''
-        ? null : parseFloat(value('.p-swap'))
+      expiry: value('.p-expiry') || null
     };
   }
 
@@ -999,8 +989,7 @@
       default_quantity: draft.default_quantity,
       quoting_leg: draft.quoting_leg || null,
       enabled: draft.enabled,
-      expiry: draft.expiry || null,
-      swap_per_day: draft.swap_per_day
+      expiry: draft.expiry || null
     };
   }
 

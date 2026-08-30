@@ -78,7 +78,6 @@ def test_the_days_are_counted_on_the_brokers_calendar(config, pair, legs):
     day. The coordinator passes the broker's clock in."""
     from mt5trader.coordinator import Coordinator
     pair.expiry = '2026-09-26'
-    pair.swap_per_day = 0.02
     coordinator = Coordinator(config, legs)
     coordinator.session_clock.now = lambda: datetime(2026, 9, 25, 23, 0)
     # The broker is a day ahead at this hour: its calendar says the 26th,
@@ -89,7 +88,6 @@ def test_the_days_are_counted_on_the_brokers_calendar(config, pair, legs):
     row = coordinator.snapshot()['pairs'][pair.key]
 
     assert row['fair']['days_to_expiry'] == 0
-    assert row['fair']['fair_spread'] == pytest.approx(0.0)
 
 
 # -- two legs, one account -------------------------------------------------
