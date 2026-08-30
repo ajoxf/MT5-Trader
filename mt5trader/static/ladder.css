@@ -67,9 +67,21 @@
 
 * { box-sizing: border-box; }
 
+/* The page is a column: the desk, then the taskbar. The desk used to
+ * be `calc(100vh - 30px)` against a taskbar that is 33px tall once its
+ * padding and border are counted — and taller again the moment a
+ * button in it grows. Those three pixels were the bottom of every
+ * ladder, sitting behind a fixed bar: the spread row of the two legs'
+ * books, cut off, with nothing to scroll to reach it.
+ *
+ * No number here now. The taskbar takes the height it needs and the
+ * desk takes the rest. */
 body {
   margin: 0;
-  padding: 0 0 30px 0;
+  padding: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: #8d97a5;
   color: var(--text);
   font: 12px/1.35 var(--font);
@@ -133,7 +145,8 @@ body {
   align-items: flex-start;
   gap: 2px;
   padding: 2px;
-  height: calc(100vh - 30px);
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -474,7 +487,14 @@ table.exits td:nth-child(3) { color: #a02722; }
   font-size: 10px;
   color: var(--frame-muted);
 }
-.rail .inline-field input { flex: 0 0 62px; width: 62px; }
+/* Shrinkable. Pinned at a fixed basis, these ran past the rail's
+ * right edge at its narrowest — and the rail hides what overflows, so
+ * the field simply lost its last characters. */
+.rail .inline-field input {
+  flex: 0 1 62px;
+  width: 62px;
+  min-width: 0;
+}
 /* Which box is which, said twice: in the label and in the edge, in the
  * side's own colour. Two identical boxes one above the other is a size
  * typed into the wrong one. */
@@ -482,7 +502,7 @@ table.exits td:nth-child(3) { color: #a02722; }
 .rail .qty-sell { color: var(--bid-strong); font-weight: 700; }
 /* The size boxes stay big enough to read a number in at a glance —
  * they are the last thing checked before a click. */
-.rail .qty-row input { flex: 0 0 72px; width: 72px; }
+.rail .qty-row input { flex: 0 1 72px; width: 72px; min-width: 0; }
 .rail .qty-box.buy { border-left: 3px solid var(--ask-strong); }
 .rail .qty-box.sell { border-left: 3px solid var(--bid-strong); }
 .rail .armed,
@@ -952,8 +972,7 @@ table.unclaimed th, table.unclaimed td {
 /* -- taskbar -------------------------------------------------------- */
 
 #taskbar {
-  position: fixed;
-  bottom: 0; left: 0; right: 0;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 3px;
@@ -1281,12 +1300,15 @@ tr.good td { background: #ebfbee; color: #1b6b32; font: 11px var(--font); }
  * unrelated widgets a row apart. */
 .rail .centre-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 2px 4px;
 }
 .rail .centre-row .lock { flex: 1 1 auto; }
 .rail .btn.recentre {
-  flex: 0 0 auto;
+  /* Takes a row of its own when the two checkboxes have used this one.
+   * Clipped instead, it read "Ce" — a button with half a word on it. */
+  flex: 1 0 auto;
   padding: 1px 6px;
   font-size: 10px;
   line-height: 1.4;

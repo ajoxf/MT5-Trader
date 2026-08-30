@@ -2712,6 +2712,60 @@ def test_the_ladder_is_never_cropped_sideways(page):
     }""")
 
 
+def test_nothing_in_the_rail_is_clipped_at_any_rail_width(page):
+    """`overflow-x: hidden` on the rail means anything too wide for it
+    disappears in SILENCE — the Centre button rendered as "Ce", a
+    button with half a word on it, and nothing anywhere said so.
+
+    So this asks the rail itself: is every control inside your width?
+    At the narrowest the rail can be dragged, where it is hardest.
+    """
+    open_ladder(page)
+    page.wait_for_selector('.ladder .rail .centre-row', timeout=WAIT)
+
+    for width in (96, 116, 160):
+        over = page.evaluate("""(width) => {
+            const rail = document.querySelector('.window.ladder .rail');
+            rail.style.width = width + 'px';
+            const box = rail.getBoundingClientRect();
+            const room = rail.clientWidth;
+            const bad = [];
+            rail.querySelectorAll('*').forEach(function (el) {
+                if (el.offsetParent === null) { return; }   // hidden
+                const r = el.getBoundingClientRect();
+                if (r.width > room + 1 || r.right > box.right + 1) {
+                    bad.push((el.className || el.tagName) + ' ' +
+                             Math.round(r.width) + '/' + room);
+                }
+            });
+            return {bad: bad, scroll: rail.scrollWidth - rail.clientWidth};
+        }""", width)
+
+        assert over['bad'] == [], (width, over['bad'])
+        assert over['scroll'] <= 1, (width, over)
+
+    page.evaluate(
+        "() => { document.querySelector('.ladder .rail').style.width = ''; }")
+
+
+def test_the_desk_ends_exactly_where_the_taskbar_begins(page):
+    """The desk was `calc(100vh - 30px)` against a taskbar 33px tall,
+    so the last three pixels of every ladder sat behind a fixed bar —
+    and what lives there is the spread row of the two legs' books."""
+    fits = page.evaluate("""() => {
+        const desk = document.getElementById('desktop')
+            .getBoundingClientRect();
+        const bar = document.getElementById('taskbar')
+            .getBoundingClientRect();
+        return {gap: Math.round(bar.top - desk.bottom),
+                barBottom: Math.round(window.innerHeight - bar.bottom)};
+    }""")
+
+    # Flush: no overlap, and no strip of nothing between them.
+    assert -1 <= fits['gap'] <= 1, fits
+    assert -1 <= fits['barBottom'] <= 1, fits
+
+
 def test_a_ladder_is_never_taller_than_the_desktop_it_is_on(page):
     """`min-height` beats `max-height` in CSS, so a measured floor
     larger than the screen would push the two legs' books off the
