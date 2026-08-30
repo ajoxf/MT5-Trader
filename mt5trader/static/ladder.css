@@ -42,15 +42,15 @@
    * is red — that convention is global — but neither shouts, and the
    * size printed in the band stays readable, which is the number being
    * traded off. */
-  --bid: #4f95cd;             /* the solid blue bid band */
-  --bid-cell: #86b9e2;        /* a quantity inside it */
-  --ask: #c56e69;             /* the solid red ask band */
-  --ask-cell: #df9894;
+  --bid: #3f82ba;             /* the solid blue bid band */
+  --bid-cell: #6da8d6;        /* a quantity inside it */
+  --ask: #b45a55;             /* the solid red ask band */
+  --ask-cell: #d3817d;
   /* One step deeper, for BUTTONS only. A band is data and gets out of
    * the way; a button is an action and has white text on it, which
    * needs the contrast. */
-  --bid-strong: #3d719c;
-  --ask-strong: #a3544f;
+  --bid-strong: #325f85;
+  --ask-strong: #8c4642;
   --traded: #4a9c5d;          /* LTQ print, positive change */
   --down: #c0504d;
   --last-trade: #e6e0f5;      /* the tinted last-traded price cell */
@@ -304,14 +304,18 @@ body {
   overflow: hidden;
 }
 .quotestrip, .titlebar { flex: 0 0 auto; }
-/* The footer carries the two books AND what is read off them, so on a
- * short window it is the tallest thing in the frame. It may shrink and
- * scroll itself — what it must never do is run off the bottom edge,
- * where the exit prices would simply not be there. */
+/* The two legs' books sit here, and they are the answer to "why is the
+ * spread not moving" — so they get their natural height and the LADDER
+ * gives way instead. The ladder is built to scroll; a bid-ask table
+ * with its last row cut off is just a table missing a number.
+ *
+ * The cap is a floor-guard for a window dragged very short, not a
+ * working size: at any ordinary height the footer is well under it and
+ * nothing scrolls. */
 .footer {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
-  max-height: 60%;
+  max-height: 45%;
   overflow-y: auto;
 }
 
@@ -319,9 +323,10 @@ body {
   display: flex;
   flex-direction: column;
   /* Tightened so the whole rail fits a short window without
-   * scrolling: the operator was scrolling past BUY/SELL to reach
-   * Exit on every ladder. */
-  gap: 2px;
+   * scrolling: the operator was scrolling past BUY/SELL to reach the
+   * cancels on every ladder, and a button behind a scroll is a button
+   * that is not there when the market moves. */
+  gap: 1px;
   width: var(--rail-w, 116px);
   /* Dragged by the operator to fit several ladders side by side. */
   resize: horizontal;
@@ -441,12 +446,30 @@ table.exits td:nth-child(3) { color: #a33; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.rail-label { font-size: 10px; color: var(--frame-muted); margin-top: 4px; }
+.rail-label { font-size: 10px; color: var(--frame-muted); margin-top: 3px; }
+/* Label and field on ONE line where the label is a word, not a
+ * sentence. Every stacked pair is a row of the rail, and the rail is
+ * read while the market moves. */
+.rail .inline-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+.rail .inline-field > span {
+  flex: 1 1 auto;
+  font-size: 10px;
+  color: var(--frame-muted);
+}
+.rail .inline-field input { flex: 0 0 62px; width: 62px; }
 /* Which box is which, said twice: in the label and in the edge, in the
  * side's own colour. Two identical boxes one above the other is a size
  * typed into the wrong one. */
-.rail-label.qty-buy { color: var(--ask-strong); font-weight: 700; }
-.rail-label.qty-sell { color: var(--bid-strong); font-weight: 700; }
+.rail .qty-buy { color: var(--ask-strong); font-weight: 700; }
+.rail .qty-sell { color: var(--bid-strong); font-weight: 700; }
+/* The size boxes stay big enough to read a number in at a glance —
+ * they are the last thing checked before a click. */
+.rail .qty-row input { flex: 0 0 72px; width: 72px; }
 .rail .qty-box.buy { border-left: 3px solid var(--ask-strong); }
 .rail .qty-box.sell { border-left: 3px solid var(--bid-strong); }
 .rail .armed,
@@ -491,7 +514,10 @@ table.exits td:nth-child(3) { color: #a33; }
   font-family: var(--mono);
 }
 .route-box .hint { color: var(--frame-muted); font-size: 9px; }
-.keypad { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+/* Three across, not two: six presets in two rows instead of three, and
+ * the row saved is a row of the rail the trader would otherwise have
+ * to scroll for. */
+.keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
 .keypad button {
   font: 600 11px var(--font);
   background: linear-gradient(#ffffff, #e6e6e6);
@@ -613,8 +639,8 @@ table.exits td:nth-child(3) { color: #a33; }
 /* Dark text on the softer bands: white on a pale blue is the first
  * thing to become unreadable, and the size is the number being traded
  * off. */
-tr.in-bid td.bid { background: var(--bid); color: #10263a; }
-tr.in-ask td.ask { background: var(--ask); color: #3a1210; }
+tr.in-bid td.bid { background: var(--bid); color: #06182a; }
+tr.in-ask td.ask { background: var(--ask); color: #2c0b09; }
 td.bid.has-qty { background: var(--bid-cell); color: #10263a; }
 td.ask.has-qty { background: var(--ask-cell); color: #3a1210; }
 

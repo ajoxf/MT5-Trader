@@ -2449,3 +2449,61 @@ def test_a_click_sends_the_price_that_was_on_the_row(page):
     assert sent['payload']['level'] == level, (
         f"clicked {level}, sent {sent['payload']['level']}")
     assert sent['payload']['side'] == 'BUY'      # the ask side buys
+
+
+def test_ticking_the_setting_OPENS_the_fair_window(page):
+    """The whole path, as the trader walks it: open this ladder's
+    settings, tick Fair Spread window, press Apply — and the window is
+    there. Every piece of this was tested on its own and the walk
+    itself was not, which is exactly where it broke."""
+    open_ladder(page)
+    # Start from OFF, as a fresh config does.
+    page.paths['publisher'].show_fair_window = False
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => !document.querySelector('.window.fairwin')", timeout=5000)
+
+    page.evaluate(SPY_ON_PAIR_SAVE)
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-fair-window', timeout=5000)
+    page.check('.ladder .ls-fair-window')
+    page.click('.ladder .ls-save')
+    page.wait_for_function("() => window.__sent !== null", timeout=5000)
+
+    assert page.evaluate('() => window.__sent')['show_fair_window'] is True
+    # ...and it is on the screen NOW, not a poll later and not only once
+    # the engine has written the file back.
+    page.wait_for_selector('.window.fairwin', timeout=5000)
+
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    page.paths['publisher'].show_fair_window = True
+    page.paths['publisher'].publish()
+
+
+def test_the_left_pane_does_not_scroll_on_a_short_window(page):
+    """The trader reads the rail top to bottom while the market moves.
+    A scrollbar there means the button they want is behind a scroll —
+    and the two legs' books, which live under the ladder, are what got
+    pushed out of the frame to make room for it."""
+    page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        node.classList.add('sized');
+        node.style.height = '560px';
+    }""")
+    page.wait_for_timeout(250)
+
+    measured = page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        const rail = node.querySelector('.rail');
+        const footer = node.querySelector('.footer');
+        const box = node.getBoundingClientRect();
+        return {railOver: rail.scrollHeight - rail.clientHeight,
+                footerOver: footer.scrollHeight - footer.clientHeight,
+                footerInside:
+                    footer.getBoundingClientRect().bottom <= box.bottom + 1};
+    }""")
+
+    assert measured['railOver'] <= 1, measured
+    assert measured['footerOver'] <= 1, measured
+    assert measured['footerInside']

@@ -218,9 +218,9 @@
         <button class="quick flatten" title="Close every open position on this pair, at market, by ticket. It does not touch working orders — use Cancel all for those. Asks once (F)">CLOSE ALL</button>
         <!-- One box per side, each labelled and tinted with the side
              it sends. The keypad sets both; type in one to differ. -->
-        <label class="rail-label qty-buy">Qty BUY</label>
-        <input class="armed qty-box buy" type="number" min="0.01" step="0.01"
-               title="The size a BUY sends. The keypad sets both sides; type here to buy a different size from the one you sell.">
+        <label class="inline-field qty-row"><span class="qty-buy">Qty BUY</span>
+          <input class="armed qty-box buy" type="number" min="0.01" step="0.01"
+                 title="The size a BUY sends. The keypad sets both sides; type here to buy a different size from the one you sell."></label>
         <div class="keypad">
           <button class="qty" data-qty="1">1</button>
           <button class="qty" data-qty="5">5</button>
@@ -229,9 +229,9 @@
           <button class="qty" data-qty="100">100</button>
           <button class="qty clr" data-qty="">CLR</button>
         </div>
-        <label class="rail-label qty-sell">Qty SELL</label>
-        <input class="sell-qty qty-box sell" type="number" min="0.01" step="0.01"
-               title="The size a SELL sends. The keypad sets both sides; type here to sell a different size from the one you buy.">
+        <label class="inline-field qty-row"><span class="qty-sell">Qty SELL</span>
+          <input class="sell-qty qty-box sell" type="number" min="0.01" step="0.01"
+                 title="The size a SELL sends. The keypad sets both sides; type here to sell a different size from the one you buy."></label>
         <!-- One row, not three: the rail is read top to bottom while
              the market moves, and every row it does not need is a row
              between the trader and the price. -->
@@ -240,8 +240,8 @@
           <button class="cxl cxl-all" title="Cancel every working order on this ladder (X)">CXL All<sup class="count-all"></sup></button>
           <button class="cxl cxl-b" title="Cancel this ladder's working BUY orders">B<sup class="count-b"></sup></button>
         </div>
-        <label class="rail-label">Increment</label>
-        <input class="increment" type="number" min="0" step="0.0001">
+        <label class="inline-field"><span>Increment</span>
+          <input class="increment" type="number" min="0" step="0.0001"></label>
         <div class="centre-row">
           <label class="check lock" title="Hold the ladder exactly where it is — no automatic re-centring at all"><input type="checkbox" class="lock-scroll"> Lock</label>
           <button class="btn recentre" title="Put the window back around the market now">Centre</button>

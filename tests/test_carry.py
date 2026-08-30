@@ -399,3 +399,34 @@ def test_the_per_ladder_settings_apply_without_a_restart(config, pair, legs,
     assert pair.tp_target_pct_of_margin == 5.0
     assert pair.order_type.value == 'MARKET'
     assert pair.overnight.value == 'EXIT_IF_PROFIT'
+
+
+def test_the_engine_publishes_the_fair_window_setting(config, pair, legs,
+                                                      tmp_path):
+    """The UI opens the window the moment the box is ticked; the ENGINE
+    is what keeps it open on every poll after that. Both halves, or the
+    window appears and then vanishes a third of a second later.
+
+    A field the command bridge does not know is silently ignored — the
+    save reports success and nothing happens, which is the exact shape
+    of the fault this test exists to catch.
+    """
+    from mt5trader.commands import CommandRunner
+    from mt5trader.coordinator import Coordinator
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+    assert coordinator.snapshot()['pairs'][pair.key][
+        'show_fair_window'] is False
+
+    runner = CommandRunner(coordinator, str(tmp_path / 'commands.jsonl'),
+                           str(tmp_path / 'results.json'))
+    answer = runner._do_set_pair({'pair': pair.key,
+                                  'fields': {'show_fair_window': True,
+                                             'auto_route': True}})
+
+    assert answer['applied']['show_fair_window'] is True
+    assert answer['applied']['auto_route'] is True
+    coordinator.poll_once()
+    assert coordinator.snapshot()['pairs'][pair.key][
+        'show_fair_window'] is True

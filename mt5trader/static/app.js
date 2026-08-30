@@ -1019,6 +1019,15 @@
       // poll, and the live send makes the ladder in front of the trader
       // change now rather than a poll later.
       setPair(key, live);
+      // The windows a setting OPENS are opened here, not waited for.
+      // The engine confirms on its next snapshot; until then a trader
+      // who has just ticked a box is looking at a screen that has not
+      // changed, which reads as "it did not work".
+      var row = (state.snapshot.pairs || {})[key];
+      if (row) {
+        row.show_fair_window = !!payload.show_fair_window;
+        render();
+      }
       (answer.notes || []).forEach(function (note) { toast(note); });
       if (!(answer.notes || []).length) { toast('applied to ' + key, 'ok'); }
       pane.hidden = true;
