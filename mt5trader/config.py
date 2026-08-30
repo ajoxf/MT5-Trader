@@ -202,8 +202,49 @@ DEFAULT_SETTINGS = {
     #: The stat-arb defaults, per system; each ladder may override
     #: both. 30 minutes of quotes and 2.5 sigma is what the system this
     #: is ported from ran on.
-    'LOOKBACK_SEC': 1800.0,
-    'ENTRY_Z': 2.5,
+    #: The master switch for AutoRouting. OFF, no ladder arms a target
+    #: however its own box is ticked — the one place a desk can stand
+    #: every automatic order down before a session without going round
+    #: the ladders one at a time. It is deliberately not per pair: a
+    #: switch you have to find twice is a switch that gets missed once.
+    'AUTO_ROUTE_ENABLED': False,
+
+    # --- the DIVERGENCE algo (spec: it measures, it does not trade) ---
+    #: The window, and how much of it must exist before a z-score is
+    #: quoted at all. A quote COUNT is not history: 300 quotes arrive in
+    #: about three minutes on a live gold feed, which is nothing like
+    #: two hours of spread behaviour.
+    'LOOKBACK_SEC': 7200.0,
+    'MIN_SAMPLES': 300,
+    'MIN_HISTORY_SEC': 7200.0,
+    #: Entries live in [ENTRY_Z, MAX_ENTRY_Z). The ceiling is always
+    #: active: a z that stretched is a spike mid-flight, not a better
+    #: entry. Keep the band at least a sigma wide.
+    'ENTRY_Z': 3.0,
+    'MAX_ENTRY_Z': 4.5,
+    #: The band z must come back inside — the exit, and the gate that
+    #: unblocks a direction after a stop.
+    'EXIT_Z': 0.5,
+    #: Degenerate-window guards. A quiet spread gives a sigma near zero
+    #: and a z in the thousands; a merely SMALL sigma puts z inside the
+    #: entry band on noise. 0 turns the floor off.
+    'MIN_SIGMA': 0.0,
+    'MAX_ABS_Z': 25.0,
+    #: Which directions may be OPENED: 'both', 'long' or 'short'. A pair
+    #: is not always symmetric — one leg can be hard to borrow, or the
+    #: swap asymmetric. Exits are never filtered.
+    'ALLOWED_DIRECTIONS': 'both',
+    #: Never fight the tape: a sell is held back while the spread is
+    #: rising, a buy while it is falling.
+    'TREND_FILTER': True,
+    'TREND_WINDOW_SEC': 900.0,
+    #: How long after a close, and after a STOP, before the same pair is
+    #: suggested again.
+    'ENTRY_COOLDOWN_SEC': 60.0,
+    'STOP_COOLDOWN_SEC': 300.0,
+    #: What the move has to be worth against what the round turn costs.
+    'MIN_EDGE_MULTIPLE': 1.5,
+    'TARGET_FRACTION': 0.5,
 
     # --- housekeeping -------------------------------------------------
     'RECONCILE_INTERVAL_SEC': 20.0,

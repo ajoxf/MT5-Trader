@@ -58,6 +58,8 @@ def test_a_fill_arms_a_closing_order_at_the_take_profit(engine, pair, legs):
     measured from the fill name a level the engine would not fire at."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     coordinator.config.settings['TP_TARGET_PCT_OF_MARGIN'] = 2.0
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = 2000.0
@@ -80,6 +82,8 @@ def test_the_closing_pending_carries_the_POSITION_it_closes(engine, pair,
     position. `position=<ticket>` is what makes it a close."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
@@ -97,6 +101,8 @@ def test_a_take_profit_is_NEVER_merged_into_an_entry_at_the_same_level(
     entry order and one of them silently changes meaning."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
@@ -122,6 +128,8 @@ def test_the_take_profit_filling_closes_the_position_both_legs(engine, pair,
     outright position in gold, not a basis trade."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
@@ -150,6 +158,8 @@ def test_closing_the_position_by_hand_PULLS_the_take_profit_first(engine,
     with nothing to close it opens a naked position instead."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
@@ -173,6 +183,8 @@ def test_a_position_that_vanished_takes_its_take_profit_with_it(engine, pair,
     pulled on the next pass rather than left resting."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
@@ -192,6 +204,8 @@ def test_a_partially_filled_entry_gets_a_partially_sized_target(engine, pair,
     remainder on or asks the broker to close more than is there."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
@@ -211,6 +225,8 @@ def test_a_restart_re_arms_from_the_frozen_levels_and_SAYS_SO(engine, pair,
     who believes a target is armed when it is not."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
@@ -230,6 +246,8 @@ def test_a_target_the_trader_cancelled_is_not_quietly_re_armed(engine, pair,
     be the system arguing with the trader three times a second."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     legs['acct_a'].broker.margin_per_lot = 3000.0
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
@@ -247,6 +265,8 @@ def test_no_take_profit_level_means_nothing_is_armed(engine, pair, legs):
     order at a level built on half a number is worse than none."""
     coordinator = engine
     pair.auto_route = True
+    # The desk's master switch, which every ladder's own box sits under.
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
     coordinator.config.settings['TP_TARGET_PCT_OF_MARGIN'] = 0
     legs['acct_a'].broker.margin_per_lot = None
     legs['acct_b'].broker.margin_per_lot = None
@@ -258,3 +278,29 @@ def test_no_take_profit_level_means_nothing_is_armed(engine, pair, legs):
 
     # Break-even alone is not a target, and nothing rests on it.
     assert coordinator.book.orders_for_position(position.position_id) == []
+
+
+def test_the_master_switch_stands_every_ladder_down(engine, pair, legs):
+    """One switch for the desk, not one per ladder. Off, no ladder arms
+    a target however its own box is ticked — and anything already
+    resting is PULLED, because standing automation down must never
+    leave an order behind it."""
+    coordinator = engine
+    pair.auto_route = True
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
+    legs['acct_a'].broker.margin_per_lot = 3000.0
+    legs['acct_b'].broker.margin_per_lot = 2000.0
+    position = market_entry(coordinator, pair)
+    coordinator.poll_once()
+    assert coordinator.book.orders_for_position(position.position_id)
+
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = False
+    coordinator.poll_once()
+
+    assert coordinator.book.orders_for_position(position.position_id) == []
+    assert not legs['acct_b'].broker.pendings
+
+
+def test_off_by_default_the_master_switch_is_off(config):
+    """A desk that has never heard of AutoRouting has none of it."""
+    assert config.get('AUTO_ROUTE_ENABLED') is False

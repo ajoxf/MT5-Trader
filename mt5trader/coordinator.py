@@ -662,7 +662,23 @@ class Coordinator:
                                    'its position is no longer open')
                 events.append({'pair': pair.key, 'action': 'auto_route_pulled',
                                'position': order.position_id})
-        if not pair.auto_route:
+        # The master switch, and then the ladder's own. OFF at either
+        # level, nothing is armed — AND anything already resting is
+        # PULLED: standing automation down that leaves an order behind
+        # it has stood nothing down, and that order still fills.
+        on = (self.config.get('AUTO_ROUTE_ENABLED', False)
+              and pair.auto_route)
+        if not on:
+            for position in self.book.positions(pair.key):
+                if self.book.orders_for_position(position.position_id):
+                    self.quoter.disarm(position.position_id,
+                                       'AutoRouting was turned off')
+                    position.tp_armed = False
+                    events.append({'pair': pair.key,
+                                   'action': 'auto_route_pulled',
+                                   'position': position.position_id})
+            if events:
+                self.session_events.extend(events)
             return events
         margin = (self.margin_detail(pair) or {}).get('money')
         # This ladder's own numbers: a gold basis and an oil differential
