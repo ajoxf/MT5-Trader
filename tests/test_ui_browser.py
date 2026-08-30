@@ -1092,6 +1092,11 @@ def open_ladder(page):
         const state = window.MT5Trader.state;
         const key = Object.keys(state.snapshot.pairs || {})[0];
         state.open = [window.MT5Trader.panelId('ladder', key)];
+        // A window CLOSED by a previous test stays closed — that is
+        // the product's rule, and it is remembered in this browser. So
+        // the desk is cleared here rather than each test inheriting
+        // whatever the last one decided.
+        state.closed = {};
         window.MT5Trader.render();
         // A pane over the ladder, a stubbed fetch and a stale toast are
         // all things one test leaves for the next one.
@@ -2068,22 +2073,22 @@ def test_the_fair_window_is_no_bigger_than_the_figures_in_it(page):
 
 def test_turning_the_window_off_closes_it_and_KEEPS_it_closed(page):
     """Closing it IS turning it off. A window that comes back on the
-    next poll because the setting still says so is a window the trader
-    cannot get rid of."""
+    next poll — because the pair's setting still says so — is a window
+    the trader cannot get rid of."""
     open_ladder(page)
     page.wait_for_selector('.window.fairwin', timeout=WAIT)
 
-    page.paths['publisher'].show_fair_window = False
-    page.paths['publisher'].publish()
+    page.click('.window.fairwin .close')
     page.wait_for_function(
         "() => !document.querySelector('.window.fairwin')", timeout=WAIT)
 
-    # ...and it stays gone across the polls that follow.
-    page.wait_for_timeout(600)
+    # ...and it stays gone across the polls that follow, with the
+    # engine still publishing the setting as ON.
+    page.wait_for_timeout(700)
     assert page.locator('.window.fairwin').count() == 0
 
-    page.paths['publisher'].show_fair_window = True
-    page.paths['publisher'].publish()
+    page.evaluate(
+        "() => window.MT5Trader.showFairWindow('XAUUSD_|GC1226', true)")
     page.wait_for_selector('.window.fairwin', timeout=WAIT)
 
 
@@ -2620,9 +2625,12 @@ def test_ticking_the_setting_OPENS_the_fair_window(page):
     there. Every piece of this was tested on its own and the walk
     itself was not, which is exactly where it broke."""
     open_ladder(page)
-    # Start from OFF, as a fresh config does.
+    # Start from OFF, as a fresh config does — closed HERE, because a
+    # snapshot alone no longer takes a window off the desk.
     page.paths['publisher'].show_fair_window = False
     page.paths['publisher'].publish()
+    page.evaluate(
+        "() => window.MT5Trader.showFairWindow('XAUUSD_|GC1226', false)")
     page.wait_for_function(
         "() => !document.querySelector('.window.fairwin')", timeout=WAIT)
 
@@ -2640,6 +2648,7 @@ def test_ticking_the_setting_OPENS_the_fair_window(page):
 
     page.evaluate('() => { window.fetch = window.__realFetch; }')
     page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    # Left as it was found, for whichever test runs next.
     page.paths['publisher'].show_fair_window = True
     page.paths['publisher'].publish()
 
@@ -2815,3 +2824,101 @@ def test_the_left_pane_does_not_scroll_on_a_short_window(page):
     assert measured['railOver'] <= 1, measured
     assert measured['footerOver'] <= 1, measured
     assert measured['footerInside']
+
+
+def test_the_fair_window_survives_being_clicked_and_dragged(page):
+    """It vanished when it was moved. A window that disappears when the
+    trader touches it is worse than one that never opened: they now
+    have to work out whether they closed it, whether it crashed, or
+    whether the setting came undone."""
+    open_ladder(page)
+    page.wait_for_selector('.window.fairwin .titlebar', timeout=WAIT)
+
+    bar = page.locator('.window.fairwin .titlebar').bounding_box()
+    before = page.locator('.window.fairwin').bounding_box()
+
+    # A click on it first — focus, not a drag.
+    page.mouse.click(bar['x'] + 40, bar['y'] + 8)
+    page.wait_for_timeout(400)
+    assert page.locator('.window.fairwin').count() == 1, \
+        'clicking the title bar closed it'
+
+    # ...and now drag it somewhere else.
+    page.mouse.move(bar['x'] + 40, bar['y'] + 8)
+    page.mouse.down()
+    page.mouse.move(bar['x'] - 120, bar['y'] + 90, steps=10)
+    page.mouse.up()
+    page.wait_for_timeout(600)
+
+    assert page.locator('.window.fairwin').count() == 1, \
+        'dragging the window closed it'
+    after = page.locator('.window.fairwin').bounding_box()
+    assert abs(after['x'] - before['x']) > 40, (before, after)
+
+    # And it is still there several polls later.
+    page.wait_for_timeout(800)
+    assert page.locator('.window.fairwin').count() == 1, \
+        'the window went away on a later poll'
+
+
+def test_an_engine_that_has_not_caught_up_does_not_take_the_window_away(page):
+    """THE fault. Whether this window is open is a decision about this
+    screen, and the engine's copy of the setting is where it STARTS,
+    not who owns it. Owned by the snapshot, a poll arriving before the
+    save has landed — or with the engine down, or restarted, or writing
+    a config the web process is not reading — takes the window away
+    under the trader's hands, a third of a second after they opened
+    it."""
+    open_ladder(page)
+    page.wait_for_selector('.window.fairwin', timeout=WAIT)
+
+    # The engine says nothing of the sort, poll after poll.
+    page.paths['publisher'].show_fair_window = False
+    page.paths['publisher'].publish()
+    page.wait_for_timeout(900)
+
+    assert page.locator('.window.fairwin').count() == 1, \
+        'a snapshot without the setting closed a window the trader opened'
+
+    # Closing it by hand still closes it, and it STAYS closed.
+    page.click('.window.fairwin .close')
+    page.wait_for_function(
+        "() => !document.querySelector('.window.fairwin')", timeout=WAIT)
+    page.paths['publisher'].show_fair_window = True
+    page.paths['publisher'].publish()
+    page.wait_for_timeout(700)
+    assert page.locator('.window.fairwin').count() == 0, \
+        'a closed window came back on the next poll'
+
+    # ...until it is asked for again.
+    page.evaluate("""() => {
+        const UI = window.MT5Trader;
+        UI.showFairWindow('XAUUSD_|GC1226', true);
+    }""")
+    page.wait_for_selector('.window.fairwin', timeout=WAIT)
+
+
+def test_a_stalled_engine_is_not_called_a_dead_one(page):
+    """Two different faults with two different fixes: a coordinator
+    that has stopped publishing while this page still reads its last
+    file, against no file at all. Both said ENGINE DOWN — and it is the
+    first one where every price on the screen is a photograph, which is
+    the more dangerous of the two to misread."""
+    open_ladder(page)
+
+    # A snapshot from ten minutes ago: the file is there, the engine is
+    # not running.
+    page.paths['publisher'].live.clear()
+    page.paths['publisher'].publish(at=time.time() - 600)
+    page.wait_for_function(
+        "() => document.getElementById('link-badge')"
+        ".textContent.indexOf('STALLED') >= 0", timeout=WAIT)
+
+    detail = page.get_attribute('#link-badge', 'title') or ''
+    assert 's old' in detail and 'Nothing on this screen is live' in detail
+
+    page.paths['publisher'].live.set()
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.getElementById('link-badge')"
+        ".textContent.indexOf('STALLED') < 0", timeout=WAIT)

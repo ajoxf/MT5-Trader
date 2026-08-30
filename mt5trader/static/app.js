@@ -621,9 +621,10 @@
     var node = el('fair-template').content.firstElementChild.cloneNode(true);
     node.dataset.pair = key;
     node.querySelector('.close').addEventListener('click', function () {
-      // Closing it IS turning it off. A window that comes back on the
-      // next poll because the setting still says so is a window the
-      // trader cannot get rid of.
+      // Closing it IS turning it off — for this screen and in the
+      // pair's settings. A window that comes back on the next poll
+      // because the setting still says so is a window the trader
+      // cannot get rid of.
       showFairWindow(key, false);
     });
     node.querySelectorAll('.fw-cog, .open-exits').forEach(function (cog) {
@@ -641,15 +642,23 @@
   }
 
   function showFairWindow(key, on) {
-    /* The setting is the window: saved to the pair, applied at once. */
+    /* Whether this window is open is a decision about THIS SCREEN.
+     *
+     * The pair's setting is where it starts — tick the box and it
+     * opens, here and on the next browser to load the page — but it
+     * does not own the window. Owned by the snapshot, a poll arriving
+     * before the save has landed, or with the engine down, or
+     * restarted, takes the window away under the trader's hands a
+     * third of a second after they opened it. Which is what it did.
+     *
+     * So the panel is opened and closed like every other panel, and
+     * the setting is saved beside it.
+     */
+    var id = panelId('fair', key);
+    if (on) { openPanel(id); } else { closePanel(id); }
     setPair(key, {show_fair_window: !!on});
     var row = (state.snapshot.pairs || {})[key];
     if (row) { row.show_fair_window = !!on; }      // before the next poll
-    if (!on) {
-      var node = document.querySelector(
-        '.fairwin[data-pair="' + cssEscape(key) + '"]');
-      if (node) { node.remove(); }
-    }
     fetch('/api/pairs/' + encodeURIComponent(key), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -1063,8 +1072,14 @@
       // who has just ticked a box is looking at a screen that has not
       // changed, which reads as "it did not work".
       var row = (state.snapshot.pairs || {})[key];
-      if (row) {
-        row.show_fair_window = !!payload.show_fair_window;
+      if (row) { row.show_fair_window = !!payload.show_fair_window; }
+      // One door for the window, so the pane and the window's own X
+      // cannot disagree about whether it is open.
+      var fairId = panelId('fair', key);
+      var wanted = !!payload.show_fair_window;
+      if (wanted !== (state.open.indexOf(fairId) >= 0)) {
+        if (wanted) { openPanel(fairId); } else { closePanel(fairId); }
+      } else {
         render();
       }
       (answer.notes || []).forEach(function (note) { toast(note); });
@@ -2707,7 +2722,14 @@
      */
     var snapshot = state.snapshot;
     if (snapshot.engine !== 'up') {
-      return {state: 'bad', text: 'ENGINE DOWN',
+      // STALLED and DOWN are different faults with different fixes: a
+      // process that has stopped publishing while the page still reads
+      // its last file, against no file at all. Both were called ENGINE
+      // DOWN, and the first one is the one where every price on the
+      // screen is a photograph.
+      return {state: 'bad',
+              text: snapshot.engine === 'stalled' ? 'ENGINE STALLED'
+                : 'ENGINE DOWN',
               detail: snapshot.engine_note || 'the coordinator is not running'};
     }
     var health = (snapshot.account_health || {}).accounts || {};
@@ -2834,11 +2856,18 @@
     Object.keys(snapshot.pairs || {}).forEach(function (key) {
       var id = panelId('ladder', key);
       if (wanted[id]) { renderLadder(key, snapshot.pairs[key]); }
-      // The pair's own setting IS whether this window exists: it is
-      // not something separately opened and closed, or the two would
-      // disagree and the window would come back by itself.
-      if (snapshot.pairs[key].show_fair_window) {
-        wanted[panelId('fair', key)] = true;
+      // The pair's setting SEEDS this window; the desk decides. Open
+      // it because the setting says so, unless this screen has closed
+      // it — and keep it open once it is, whatever a later snapshot
+      // says, because a window that vanishes when the engine hiccups
+      // is a window the trader cannot rely on.
+      var fairId = panelId('fair', key);
+      if (snapshot.pairs[key].show_fair_window && !state.closed[fairId]
+          && state.open.indexOf(fairId) < 0) {
+        state.open.push(fairId);
+      }
+      if (state.open.indexOf(fairId) >= 0) {
+        wanted[fairId] = true;
         renderFairWindow(key, snapshot.pairs[key]);
       }
     });
@@ -3329,6 +3358,7 @@
     state: state, render: render, toast: toast, ask: ask, send: send,
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
-    tidyWindows: tidyWindows, sound: sound
+    tidyWindows: tidyWindows, sound: sound,
+    showFairWindow: showFairWindow
   };
 })();
