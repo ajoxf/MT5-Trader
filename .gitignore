@@ -12,3 +12,8 @@ __pycache__/
 # Private build specification — never commit
 MT5_TRADER_LADDER_PROMPT.md
 *_PROMPT.md
+
+# The runtime journal — created on whichever box runs the engine
+*.db
+*.db-wal
+*.db-shm
