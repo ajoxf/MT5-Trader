@@ -1601,14 +1601,21 @@ def test_the_journal_colours_what_was_made_and_what_was_lost(page):
         "() => document.querySelectorAll('.monitor td.up').length > 0",
         timeout=WAIT)
 
-    assert page.locator('.monitor td.up').count() == 1        # the winner
-    assert page.locator('.monitor td.down').count() == 1      # the loser
-    made = page.locator('.monitor td.up').first
-    assert made.evaluate('n => getComputedStyle(n).color') == \
-        'rgb(74, 156, 93)'
-    lost = page.locator('.monitor td.down').first
-    assert lost.evaluate('n => getComputedStyle(n).color') == \
-        'rgb(192, 80, 77)'
+    # Read in ONE evaluate: the monitor repaints on every publish, and a
+    # node resolved in Python can be detached before its style is read —
+    # which comes back as an empty string, not as a wrong colour.
+    colours = page.evaluate("""() => {
+        const up = [...document.querySelectorAll('.monitor td.up')];
+        const down = [...document.querySelectorAll('.monitor td.down')];
+        return {ups: up.length, downs: down.length,
+                made: up[0] ? getComputedStyle(up[0]).color : null,
+                lost: down[0] ? getComputedStyle(down[0]).color : null};
+    }""")
+
+    assert colours['ups'] == 1                                # the winner
+    assert colours['downs'] == 1                              # the loser
+    assert colours['made'] == 'rgb(74, 156, 93)'
+    assert colours['lost'] == 'rgb(192, 80, 77)'
     page.evaluate("""() => {
         window.fetch = window.__realFetch;
         window.MT5Trader.state.fills = null;
@@ -2022,6 +2029,41 @@ def test_fair_value_and_the_exit_live_in_their_OWN_window(page):
     assert page.locator('.window.ladder .exit').count() == 0
     assert page.text_content('.window.fairwin .fw-pair') == 'Gold basis'
     assert 'XAUUSD_' in page.get_attribute('.window.fairwin .fw-pair', 'title')
+
+
+def test_the_fair_window_is_no_bigger_than_the_figures_in_it(page):
+    """Screen beside a ladder is not spare. Two short tables do not
+    need a pane the size of a ladder — the labels are read down the
+    left and the numbers down the right, and everything between them is
+    room a price could have had.
+
+    Its HEIGHT is the content's, not a number: a fixed one leaves a
+    panel of empty grey under two short tables, which is what it did.
+    """
+    open_ladder(page)
+    page.wait_for_selector('.window.fairwin .exit', timeout=WAIT)
+
+    box = page.evaluate("""() => {
+        const win = document.querySelector('.window.fairwin');
+        const body = win.querySelector('.fw-body');
+        const rect = win.getBoundingClientRect();
+        const chrome = win.querySelector('.titlebar').offsetHeight;
+        return {width: rect.width, height: rect.height,
+                content: body.scrollHeight + chrome,
+                ladder: document.querySelector('.window.ladder')
+                    .getBoundingClientRect().width};
+    }""")
+
+    # Narrower than a ladder, and no taller than what is in it.
+    assert box['width'] <= box['ladder'] * 0.75, box
+    assert box['height'] <= box['content'] + 8, box
+    # ...and the figures still fit: nothing is clipped to achieve it.
+    clipped = page.evaluate("""() => {
+        const cells = [...document.querySelectorAll(
+            '.window.fairwin table.exits td, .window.fairwin table.exits th')];
+        return cells.filter(c => c.scrollWidth > c.clientWidth + 1).length;
+    }""")
+    assert clipped == 0
 
 
 def test_turning_the_window_off_closes_it_and_KEEPS_it_closed(page):

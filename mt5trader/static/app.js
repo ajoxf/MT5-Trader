@@ -434,15 +434,19 @@
      * trader has put it somewhere. */
     var desktop = desktopBox();
     if (!desktop.width) { return; }
-    var wanted = size(node, 230, Math.min(300, desktop.height - 60));
+    // Width only. Its HEIGHT is whatever the figures need — a fixed one
+    // leaves a panel of empty grey under two short tables, and screen
+    // beside a ladder is not spare.
+    var width = 240;
+    node.classList.add('sized');
+    node.style.width = width + 'px';
+    node.style.height = 'auto';
     var open = document.querySelectorAll('.window.fairwin').length;
-    var left = Math.max(desktop.width - wanted.w - 12 - (open - 1) * 18, 8);
-    var top = Math.min(30 + (open - 1) * 20,
-                       Math.max(desktop.height - wanted.h - 8, 0));
+    var left = Math.max(desktop.width - width - 12 - (open - 1) * 18, 8);
+    var top = Math.min(30 + (open - 1) * 20, Math.max(desktop.height - 260, 0));
     var at = place(node, left, top);
     node.style.zIndex = nextZ();
-    layout[id] = {left: at.left, top: at.top, z: topZ,
-                  w: wanted.w, h: wanted.h};
+    layout[id] = {left: at.left, top: at.top, z: topZ, w: width};
     writeLayout();
   }
 
@@ -460,6 +464,13 @@
       return;
     }
     if (saved.w && saved.h) { size(node, saved.w, saved.h); }
+    else if (saved.w) {
+      // Width remembered, height left to the content — what the fair
+      // window is given until the trader drags it themselves.
+      node.classList.add('sized');
+      node.style.width = Math.max(200, saved.w) + 'px';
+      node.style.height = 'auto';
+    }
     if (saved.left === undefined) { return; }   // resized, never moved
     var at = place(node, saved.left, saved.top);
     node.style.zIndex = saved.z || 10;
@@ -1101,6 +1112,41 @@
       (currency ? ' ' + currency : '');
   }
 
+  function fitLadderFloor(node) {
+    /* The ladder's floor, measured on THIS machine.
+     *
+     * A number typed into the stylesheet is a number measured against
+     * one font on one box. Segoe UI on Windows sets taller than the
+     * font this was designed against, so a rail that fits by four
+     * pixels here goes behind a scrollbar there — which is exactly
+     * what happened, twice.
+     *
+     * So it is measured: the rail's own children, the chrome above and
+     * below, and nothing else. Written only when it CHANGES, because
+     * this runs on every render.
+     */
+    var rail = node.querySelector('.rail');
+    var footer = node.querySelector('.footer');
+    if (!rail || !footer || !rail.children.length) { return; }
+    // Measured from the first child's top to the last one's bottom, so
+    // the gaps AND the margins are in it. Adding up offsetHeight
+    // misses margins, and the four pixels that costs is the difference
+    // between fitting and a scrollbar.
+    var first = rail.firstElementChild.getBoundingClientRect();
+    var last = rail.lastElementChild.getBoundingClientRect();
+    var need = (last.bottom - first.top) + 8;     // + the rail's padding
+    var chrome = 0;
+    ['.titlebar', '.quotestrip'].forEach(function (selector) {
+      var part = node.querySelector(selector);
+      if (part) { chrome += part.offsetHeight; }
+    });
+    chrome += footer.scrollHeight + 2;
+    var floor = Math.ceil(need + chrome);
+    if (!floor || node._floor === floor) { return; }
+    node._floor = floor;
+    node.style.minHeight = floor + 'px';
+  }
+
   function renderLadder(key, row) {
     var node = ladderNode(key);
     var market = row.market || {};
@@ -1243,6 +1289,9 @@
       ' per 1.00';
     node.querySelector('.errors').textContent = (row.errors || []).join(' ');
     renderLegBook(node, row, market);
+    // After the books are in: the floor includes them, and they are the
+    // part whose height depends on the symbols' names.
+    fitLadderFloor(node);
     return node;
   }
 
