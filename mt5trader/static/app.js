@@ -712,14 +712,10 @@
     node.querySelector('.ls-save').addEventListener('click', function () {
       saveLadderSettings(node, key);
     });
-    // Touch an inherited field and it becomes this ladder's own. Empty
-    // it and it goes back to the default — which is why the box is
-    // never left showing a number nobody chose.
+    // The pair type decides which legs have an expiry, so the form
+    // follows it as it is changed.
     node.querySelector('.ladder-settings').addEventListener(
       'input', function (e) {
-        if (e.target.classList.contains('inherited')) {
-          e.target.classList.remove('inherited');
-        }
         // Which legs have an expiry follows the pair type, and it must
         // follow it as it is CHANGED — not only when the pane opens.
         if (e.target.classList.contains('ls-pair-type')) {
@@ -955,10 +951,12 @@
   //:           is not "no mode", it is a form that cannot tell you
   //:           what the ladder is doing — and one that would send
   //:           `order_type: null` to an engine that raises on it.
-  //:   inherit a number with a system default behind it. Shows the
-  //:           value ACTUALLY IN FORCE, marked as inherited until it
-  //:           is edited. "default" as a placeholder tells you the
-  //:           name of a thing you cannot see.
+  //:   number  a number this ladder OWNS. There is no defaults page:
+  //:           every ladder carries its own, so the field shows a
+  //:           real value and saving writes it to this pair. A pair
+  //:           that has never been configured starts from the
+  //:           built-in value, shown plainly — nothing inherits, and
+  //:           nothing is hidden behind a word.
   //:   text    a fact about this pair with no default at all — an
   //:           expiry, a swap. Blank is a real state here.
   var LADDER_FIELDS = [
@@ -972,12 +970,14 @@
     ['.ls-auto-route', 'auto_route', 'check'],
     ['.ls-algo', 'algo', 'live'],
     ['.ls-algo-window', 'algo_window', 'check'],
-    ['.ls-comm-a', 'commission_per_lot_a', 'inherit', 'COMMISSION_PER_LOT_A'],
-    ['.ls-comm-b', 'commission_per_lot_b', 'inherit', 'COMMISSION_PER_LOT_B'],
-    ['.ls-slip', 'slippage_allowance', 'inherit', 'SLIPPAGE_ALLOWANCE'],
-    ['.ls-nights', 'break_even_nights', 'inherit', 'BREAK_EVEN_NIGHTS'],
-    ['.ls-tp', 'tp_target_pct_of_margin', 'inherit', 'TP_TARGET_PCT_OF_MARGIN'],
-    ['.ls-carry-rate', 'carry_rate_pct', 'inherit', 'CARRY_RATE_PCT'],
+    ['.ls-comm-a', 'commission_per_lot_a', 'number', 'COMMISSION_PER_LOT_A'],
+    ['.ls-comm-b', 'commission_per_lot_b', 'number', 'COMMISSION_PER_LOT_B'],
+    ['.ls-slip', 'slippage_allowance', 'number', 'SLIPPAGE_ALLOWANCE'],
+    ['.ls-nights', 'break_even_nights', 'number', 'BREAK_EVEN_NIGHTS'],
+    ['.ls-tp', 'tp_target_pct_of_margin', 'number', 'TP_TARGET_PCT_OF_MARGIN'],
+    // Blank here is a real state: no second estimate, so no
+    // cross-check. It is the one number with nothing to fall back to.
+    ['.ls-carry-rate', 'carry_rate_pct', 'blank-number', 'CARRY_RATE_PCT'],
     ['.ls-pair-type', 'pair_type', 'live'],
     ['.ls-expiry-a', 'expiry_a', 'text'],
     ['.ls-expiry', 'expiry', 'text'],
@@ -995,11 +995,12 @@
      * ladder is RUNNING comes from the snapshot — it is the only place
      * that knows, and a form that shows Mode blank while the title bar
      * says LIMIT is a form nobody can trust. A number with a
-     * system-wide default behind it shows THAT NUMBER, marked as
-     * inherited rather than labelled "default": the name of a value
-     * you cannot see is not information. And a fact about this pair
-     * alone — an expiry, a swap — comes from the config, where blank
-     * is a real state.
+     * A cost or a target is this pair's OWN number: there is no
+     * defaults page, so the box shows a real value — seeded from the
+     * built-in one for a pair nobody has configured yet — and saving
+     * writes it to this pair. And a fact about this pair alone — an
+     * expiry, a swap — comes from the config, where blank is a real
+     * state.
      */
     var pane = node.querySelector('.ladder-settings');
     if (!pane) { return; }
@@ -1021,7 +1022,6 @@
         if (field === 'algo_window' && own === undefined) {
           own = saved.show_fair_window;              // the old name
         }
-        input.classList.remove('inherited');
         input.dataset.touched = '';
         if (kind === 'check') {
           input.checked = !!(own === undefined || own === null
@@ -1041,26 +1041,19 @@
           if (field === 'quoting_leg' && !input.value) { input.value = ''; }
           return;
         }
-        if (kind === 'inherit') {
-          var fallback = settings[entry[3]];
-          if (own === undefined || own === null || own === '') {
-            input.value = fallback === undefined || fallback === null
-              ? '' : fallback;
-            // Shown, and shown to be inherited: edit it and it becomes
-            // this ladder's own; empty it and it goes back.
-            input.classList.add('inherited');
-            input.title = 'the system default (' +
-              (fallback === null || fallback === undefined
-                ? 'not set' : fallback) +
-              '). Type here to give this ladder its own; empty the box ' +
-              'to go back to the default.';
-          } else {
-            input.value = own;
-            input.title = "this ladder's own value. Empty the box to go "
-              + 'back to the system default ('
-              + (fallback === null || fallback === undefined
-                  ? 'not set' : fallback) + ').';
-          }
+        if (kind === 'number' || kind === 'blank-number') {
+          // This ladder's own number. A pair that has never been
+          // configured starts from the built-in value, shown plainly:
+          // there is no defaults page, so what is in the box is what
+          // this pair uses.
+          var seed = settings[entry[3]];
+          var value = (own === undefined || own === null || own === '')
+            ? seed : own;
+          input.value = (value === undefined || value === null)
+            ? '' : value;
+          input.title = kind === 'blank-number'
+            ? 'this pair’s own. Leave it empty for no cross-check.'
+            : 'this pair’s own. Every ladder carries its own numbers.';
           return;
         }
         input.value = (own === null || own === undefined) ? '' : own;
@@ -1154,13 +1147,15 @@
         if (!raw) { return; }
         value = parseFloat(raw);
         if (isNaN(value)) { return; }
-      } else if (kind === 'inherit') {
-        if (!raw || input.classList.contains('inherited')) {
-          value = null;                   // keep inheriting
-        } else {
-          value = parseFloat(raw);
-          if (isNaN(value)) { return; }
-        }
+      } else if (kind === 'number') {
+        // Emptied, it goes back to the built-in value rather than to a
+        // null the engine would read as "nothing set" — with no
+        // defaults page there is nothing for a null to mean.
+        value = raw === '' ? null : parseFloat(raw);
+        if (value !== null && isNaN(value)) { return; }
+      } else if (kind === 'blank-number') {
+        value = raw === '' ? null : parseFloat(raw);
+        if (value !== null && isNaN(value)) { return; }
       } else {
         value = raw === '' ? null : raw;
       }

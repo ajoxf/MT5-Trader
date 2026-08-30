@@ -826,30 +826,25 @@ def test_every_setting_shows_the_value_ACTUALLY_IN_FORCE(page):
         assert page.input_value('.ladder .ls-overnight') == 'ALLOW'
         assert page.input_value('.ladder .ls-increment') == '0.01'
 
-        # An inherited number shows the system default, and says so.
+        # A cost this pair has never been given shows the built-in
+        # number, plainly — there is no defaults page, so what is in
+        # the box is what this pair uses.
         assert page.input_value('.ladder .ls-comm-a') == '2'
-        assert 'inherited' in (
-            page.get_attribute('.ladder .ls-comm-a', 'class') or '')
-        assert 'system default' in page.get_attribute(
-            '.ladder .ls-comm-a', 'title')
+        assert 'own' in page.get_attribute('.ladder .ls-comm-a', 'title')
 
-        # This ladder's OWN number is not marked, and says how to clear it.
+        # ...and one it HAS been given shows that.
         assert page.input_value('.ladder .ls-comm-b') == '3.5'
-        assert 'inherited' not in (
-            page.get_attribute('.ladder .ls-comm-b', 'class') or '')
-        assert 'back to the system default' in page.get_attribute(
-            '.ladder .ls-comm-b', 'title')
 
         # Applying sends the RUNNING value for the live fields — never a
-        # null, which raises on the engine — and keeps inheriting the
-        # ones nobody touched.
+        # null, which raises on the engine — and writes every cost to
+        # this pair, so nothing is left implicit.
         page.evaluate(SPY_ON_PAIR_SAVE)
         page.click('.ladder .ls-save')
         page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
         sent = page.evaluate('() => window.__sent')
 
         assert sent['order_type'] == 'LIMIT'
-        assert sent['commission_per_lot_a'] is None      # still inherited
+        assert sent['commission_per_lot_a'] == 2         # written explicitly
         assert sent['commission_per_lot_b'] == 3.5       # its own
     finally:
         page.evaluate('() => { window.fetch = window.__realFetch; }')
@@ -857,17 +852,15 @@ def test_every_setting_shows_the_value_ACTUALLY_IN_FORCE(page):
     page.wait_for_selector('.ladder .grid tbody tr')
 
 
-def test_editing_an_inherited_field_makes_it_this_ladders_own(page):
-    """And emptying it puts it back. The box is never left showing a
-    number nobody chose."""
+def test_a_cost_typed_on_one_ladder_is_saved_to_THAT_pair(page):
+    """Every ladder carries its own numbers. There is no defaults page
+    to fall back to, so what is typed here is what this pair uses."""
     open_ladder(page)
     page.click('.ladder .ladder-cog')
     page.wait_for_selector('.ladder .ls-tp', timeout=WAIT)
 
     page.evaluate(SPY_ON_PAIR_SAVE)
     page.fill('.ladder .ls-tp', '4.5')
-    assert 'inherited' not in (
-        page.get_attribute('.ladder .ls-tp', 'class') or '')
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
     assert page.evaluate('() => window.__sent')['tp_target_pct_of_margin'] \
@@ -876,11 +869,11 @@ def test_editing_an_inherited_field_makes_it_this_ladders_own(page):
     page.click('.ladder .ladder-cog')
     page.wait_for_selector('.ladder .ls-tp', timeout=WAIT)
     page.evaluate("() => { window.__sent = null; }")
-    page.fill('.ladder .ls-tp', '')
+    page.fill('.ladder .ls-tp', '0')
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
-    assert page.evaluate('() => window.__sent')['tp_target_pct_of_margin'] \
-        is None
+    # 0 is a real target: break-even alone, and no profit on top.
+    assert page.evaluate('() => window.__sent')['tp_target_pct_of_margin'] == 0
 
     page.evaluate('() => { window.fetch = window.__realFetch; }')
     page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
