@@ -335,7 +335,10 @@ body {
   /* Dragged by the operator to fit several ladders side by side. */
   resize: horizontal;
   min-width: 96px;
-  max-width: 260px;
+  /* Never more than a third of the window: the rail is the controls,
+   * the grid is the market, and a rail dragged past this leaves the
+   * price column too narrow to read the thing being traded. */
+  max-width: min(260px, 34%);
   padding: 3px;
   /* The rail's height is what the LADDER's floor is set from (see
    * `fitLadderFloor`), so in the ordinary case this never scrolls. It
@@ -607,6 +610,13 @@ table.exits td:nth-child(3) { color: #a02722; }
 .grid {
   position: relative;
   flex: 1;
+  /* WITHOUT this the grid is a flex item at its default `min-width:
+   * auto`, which means "never narrower than my content". Drag the rail
+   * wider, or open the ladder on a box that renders the fonts larger,
+   * and the grid refuses to shrink: it pushes past the window's right
+   * edge, and `.body { overflow: hidden }` silently cuts the LTQ
+   * column off. The ladder looked cropped, and nothing said so. */
+  min-width: 0;
   overflow-y: auto;
   /* The Work and LTQ columns either side of the coloured bands: near
    * white, as on the reference screen, so the two bands are the only
@@ -639,8 +649,13 @@ table.exits td:nth-child(3) { color: #a02722; }
   text-align: right;
   white-space: nowrap;
 }
-.c-work, .c-ltq { width: 46px; }
-.c-bid, .c-ask { width: 58px; }
+/* Proportions, not pixels. `table-layout: fixed` honours percentages
+ * exactly, so the columns keep their relative weights at any window
+ * width and at any display scaling — where a fixed 46px column keeps
+ * its 46px while the text inside it grows, and clips. The price column
+ * takes what is left, which is right: it is the one being read. */
+.c-work, .c-ltq { width: 15%; }
+.c-bid, .c-ask { width: 18%; }
 
 /* The solid bands. Everything at or below the best bid is the bid side;
  * everything at or above the best ask is the ask side. */

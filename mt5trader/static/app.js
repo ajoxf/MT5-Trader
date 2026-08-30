@@ -1141,7 +1141,13 @@
       if (part) { chrome += part.offsetHeight; }
     });
     chrome += footer.scrollHeight + 2;
+    // Never taller than the desktop it is on. `min-height` beats
+    // `max-height` in CSS, so a floor measured larger than the screen
+    // would push the footer off the bottom of a desktop that does not
+    // scroll vertically — the books gone, and no way to get them back.
+    var desktop = desktopBox();
     var floor = Math.ceil(need + chrome);
+    if (desktop.height) { floor = Math.min(floor, Math.floor(desktop.height)); }
     if (!floor || node._floor === floor) { return; }
     node._floor = floor;
     node.style.minHeight = floor + 'px';

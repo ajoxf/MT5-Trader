@@ -2669,6 +2669,72 @@ def test_the_ladder_cannot_be_made_shorter_than_its_own_rail(page):
     assert measured['footerOver'] <= 1, measured
 
 
+def test_the_ladder_is_never_cropped_sideways(page):
+    """A ladder wide enough to hold its columns, whatever is done to
+    it. The grid used to be a flex item at its default "never narrower
+    than my content": drag the rail wider, or render the fonts larger,
+    and it pushed past the window's right edge — where `.body`'s
+    overflow cut the LTQ column off silently. A cropped ladder is a
+    column of the market that is simply not there."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr', timeout=WAIT)
+
+    def cropping():
+        return page.evaluate("""() => {
+            const node = document.querySelector('.window.ladder');
+            const body = node.querySelector('.body');
+            const grid = node.querySelector('.grid');
+            const box = node.getBoundingClientRect();
+            const cells = [...node.querySelectorAll('.grid thead th')];
+            return {
+                bodyOver: body.scrollWidth - body.clientWidth,
+                gridRight: Math.round(
+                    grid.getBoundingClientRect().right - box.right),
+                clipped: cells.filter(
+                    c => c.getBoundingClientRect().right > box.right + 1).length,
+            };
+        }""")
+
+    assert cropping()['bodyOver'] <= 1, cropping()
+
+    # Now shove the rail as wide as it will go — the operator drags it.
+    page.evaluate("""() => {
+        document.querySelector('.window.ladder .rail').style.width = '400px';
+    }""")
+    page.wait_for_timeout(120)
+    wide = cropping()
+
+    assert wide['bodyOver'] <= 1, wide
+    assert wide['gridRight'] <= 1, wide
+    assert wide['clipped'] == 0, wide
+    page.evaluate("""() => {
+        document.querySelector('.window.ladder .rail').style.width = '';
+    }""")
+
+
+def test_a_ladder_is_never_taller_than_the_desktop_it_is_on(page):
+    """`min-height` beats `max-height` in CSS, so a measured floor
+    larger than the screen would push the two legs' books off the
+    bottom of a desktop that does not scroll vertically — gone, with no
+    way to get them back."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .footer', timeout=WAIT)
+
+    fits = page.evaluate("""() => {
+        const desk = document.getElementById('desktop')
+            .getBoundingClientRect();
+        const node = document.querySelector('.window.ladder');
+        const floor = parseInt(getComputedStyle(node).minHeight, 10) || 0;
+        return {floor: floor, desk: Math.floor(desk.height),
+                bottom: Math.round(
+                    node.querySelector('.footer').getBoundingClientRect().bottom
+                    - desk.bottom)};
+    }""")
+
+    assert fits['floor'] <= fits['desk'], fits
+    assert fits['bottom'] <= 1, fits
+
+
 def test_the_left_pane_does_not_scroll_on_a_short_window(page):
     """The trader reads the rail top to bottom while the market moves.
     A scrollbar there means the button they want is behind a scroll —
