@@ -1802,6 +1802,58 @@ def test_a_disputed_swap_replaces_the_reading_and_offers_the_correction(page):
     page.paths['publisher'].publish()
 
 
+def test_fair_value_and_the_exit_sit_UNDER_the_two_legs_books(page):
+    """Prices first, then what they imply. Both panels are read off the
+    two legs' books, and the rail beside the ladder is 100px wide —
+    which is no place for two tables of figures.
+
+    Asserted on the rendered page rather than on the template, because
+    a page served from a template an older process cached can have them
+    anywhere: where they sit is not a detail."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .footer .below-legs .exit', timeout=5000)
+
+    boxes = page.evaluate("""() => {
+        const node = document.querySelector('.window.ladder');
+        const legs = node.querySelector('.footer .legs')
+            .getBoundingClientRect();
+        const fair = node.querySelector('.fair').getBoundingClientRect();
+        const exit = node.querySelector('.exit').getBoundingClientRect();
+        return {legsBottom: legs.bottom, fairTop: fair.top,
+                exitTop: exit.top,
+                inFooter: !!node.querySelector('.footer .fair')
+                    && !!node.querySelector('.footer .exit'),
+                inRail: !!node.querySelector('.rail .exit')};
+    }""")
+
+    assert boxes['inFooter'] and not boxes['inRail']
+    assert boxes['fairTop'] >= boxes['legsBottom'] - 1
+    assert boxes['exitTop'] >= boxes['legsBottom'] - 1
+
+
+def test_the_settings_behind_the_exit_are_one_click_from_it(page):
+    """"Where do I change these?" is a question the panel showing the
+    numbers should answer itself, not one the operator hunts a page
+    for."""
+    open_ladder(page)
+
+    page.click('.ladder .exit .open-exits')
+    page.wait_for_selector('.window.settings .exit-fields', timeout=5000)
+
+    assert page.locator('.window.settings .s-tp').count() == 1
+    page.click('.window.settings .close')
+    page.wait_for_selector('.ladder .grid tbody tr')
+
+
+def test_the_leg_books_width_column_is_called_Spread(page):
+    """The operator's word for it. The spread row's own figure is the
+    two legs' summed — one round turn of both books."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder table.legbook', timeout=5000)
+
+    assert page.text_content('.ladder table.legbook th.c-width') == 'Spread'
+
+
 def test_GTC_carries_its_caveat_on_the_screen(page):
     """A synthetic order lives in THIS process. Nothing at the broker
     knows what a spread is, so GTC cannot mean what it means on an

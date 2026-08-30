@@ -302,7 +302,17 @@ body {
   min-height: 0;
   overflow: hidden;
 }
-.footer, .quotestrip, .titlebar { flex: 0 0 auto; }
+.quotestrip, .titlebar { flex: 0 0 auto; }
+/* The footer carries the two books AND what is read off them, so on a
+ * short window it is the tallest thing in the frame. It may shrink and
+ * scroll itself — what it must never do is run off the bottom edge,
+ * where the exit prices would simply not be there. */
+.footer {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 60%;
+  overflow-y: auto;
+}
 
 .rail {
   display: flex;
@@ -1232,3 +1242,34 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
 .rail .route-box { font-size: 9px; line-height: 1.2; }
 /* Equity under each leg: quieter than the symbol, still legible. */
 .rail .route-eq { font-variant-numeric: tabular-nums; opacity: .95; }
+
+
+/* Fair value and the exit, under the two books they are read off.
+ * Side by side, because each is a narrow table and stacking them
+ * pushes the ladder off a laptop screen. */
+.footer .below-legs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+  width: 100%;
+}
+.footer .below-legs .fair,
+.footer .below-legs .exit {
+  flex: 0 0 auto;
+  min-width: 132px;
+  margin-top: 0;
+}
+.footer .below-legs table.exits { width: 100%; }
+/* The way in to the fields these panels are computed from. */
+.rail-label .cog {
+  float: right;
+  border: 0;
+  background: none;
+  padding: 0 1px;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--frame-muted);
+}
+.rail-label .cog:hover { color: var(--frame-text); }

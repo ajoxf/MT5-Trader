@@ -198,7 +198,7 @@
              to expiry. Not a signal — a number beside the market, which
              is the question the instrument is about. -->
         <div class="fair" title="What the carry says this basis should be: the broker's own swap over the nights to expiry, divided by k. A reference reading — it feeds nothing.">
-          <label class="rail-label">Fair spread</label>
+          <label class="rail-label">Fair spread<button type="button" class="cog open-exits" title="Set the swap, the expiry and the carry rate — Exchanges > Exits">&#9881;</button></label>
           <table class="exits fairs">
             <tr class="heads"><th></th><th class="col-b" title="Buying the spread">B</th><th class="col-s" title="Selling the spread">S</th></tr>
             <tr><th>Fair</th><td class="fair-buy">—</td><td class="fair-sell">—</td></tr>
@@ -218,7 +218,7 @@
              nothing is sent to the broker, and no leg ever carries a
              broker-side stop. -->
         <div class="exit">
-          <label class="rail-label">Exit</label>
+          <label class="rail-label">Exit<button type="button" class="cog open-exits" title="Set commission, the slippage allowance, nights held and the take-profit % — Exchanges > Exits">&#9881;</button></label>
           <table class="exits">
             <tr><th>B-A Sp</th><td class="x-width" colspan="2">—</td></tr>
             <tr><th>Comm</th><td class="x-comm" colspan="2">—</td></tr>
@@ -257,6 +257,11 @@
       <!-- The two legs' own quotes, in ONE place. A spread that is not
            moving is one leg that is not moving, and this says which. -->
       <span class="legs" title="Each leg's own bid/ask and how long since it last changed">—</span>
+      <!-- Prices first, then what they imply. Fair value and the exit
+           sit BELOW the two legs' books, because both are read off
+           them — and the ladder's rail is 100px wide, which is no
+           place for two tables of figures. -->
+      <div class="below-legs"></div>
       <span class="pos">flat</span>
       <span class="pnl">—</span>
       <span class="clip" title="One spread, in leg lots, and the dollars per 1.00 of spread">—</span>

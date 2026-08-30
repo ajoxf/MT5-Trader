@@ -594,6 +594,15 @@
     node.querySelector('.increment').addEventListener('change', function (e) {
       setPair(key, {increment: parseFloat(e.target.value)});
     });
+    // "Where do I change these?" — answered by the panel that shows
+    // the numbers, rather than by the operator hunting for the page.
+    node.querySelectorAll('.open-exits').forEach(function (cog) {
+      cog.addEventListener('click', function (e) {
+        e.preventDefault();
+        var opener = document.getElementById('open-settings');
+        if (opener) { opener.click(); }
+      });
+    });
     node.querySelector('.auto-route').addEventListener('change',
       function (e) {
         setPair(key, {auto_route: e.target.checked});
@@ -1026,6 +1035,24 @@
     if (!legs || !footer) { return; }
     if (legs.parentNode !== footer) { footer.appendChild(legs); }
     legs.innerHTML = legFeed(row, market);
+
+    // Fair value and the exit belong UNDER the two books they are read
+    // off, not in a 100px rail beside the ladder. Moved at render time
+    // for the same reason the leg table is: a page served from a
+    // template an older process cached can have them anywhere, and
+    // where they sit is not a detail.
+    var below = node.querySelector('.below-legs');
+    if (!below) {
+      below = document.createElement('div');
+      below.className = 'below-legs';
+      footer.insertBefore(below, legs.nextSibling);
+    } else if (below.previousSibling !== legs) {
+      footer.insertBefore(below, legs.nextSibling);
+    }
+    ['.fair', '.exit'].forEach(function (selector) {
+      var panel = node.querySelector(selector);
+      if (panel && panel.parentNode !== below) { below.appendChild(panel); }
+    });
   }
 
   function renderFair(node, row) {
@@ -1287,7 +1314,12 @@
     }
     var html = '<table class="legbook"><thead><tr>' +
       '<th></th><th class="sym">leg</th><th class="c-bid">Bid</th>' +
-      '<th class="c-ask">Ask</th><th class="c-width">Width</th>' +
+      '<th class="c-ask">Ask</th>' +
+      // Each leg's own bid-ask, and on the last line the SPREAD's —
+      // which is the two legs' summed, and is one round turn of both
+      // books. That sum is the check that makes the panel readable at
+      // a glance: 0.0460 + 0.0480 = 0.0940.
+      '<th class="c-width" title="the bid-ask each leg is charging — and on the spread row, one round turn of both books">Spread</th>' +
       '<th class="c-age">Age</th></tr></thead><tbody>';
     html += line('A', row.symbol_a, market.leg_a_bid, market.leg_a_ask,
                  market.leg_a_quote_age_sec, market.leg_a_visible,
