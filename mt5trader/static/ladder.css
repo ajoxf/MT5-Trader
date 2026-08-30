@@ -1062,15 +1062,45 @@ table.keys td { padding: 2px 0; font-size: 12px; }
 /* -- settings: accounts and pairs ------------------------------------ */
 
 .window.settings { width: 980px; max-width: 100%; }
-.settings-body { overflow: auto; max-height: 70vh; padding: 8px; background: #fff; }
+/* Dense on purpose. This page is a control panel, not a document: the
+ * operator is looking for ONE field, and every centimetre of white
+ * space between the fields is a centimetre they have to scroll past to
+ * find it. Same theme, same type, half the air. */
+.settings-body { overflow: auto; max-height: 70vh; padding: 6px; background: #fff; }
 .settings-body h3 {
-  margin: 10px 0 4px;
-  font-size: 13px;
+  margin: 8px 0 3px;
+  font-size: 12px;
   border-bottom: 1px solid var(--chrome-dark);
-  padding-bottom: 2px;
+  padding-bottom: 1px;
+}
+.settings-body > *:first-child { margin-top: 0; }
+.settings-body .hint { font-size: 10px; line-height: 1.35; }
+.settings-body .where-exits {
+  margin: 3px 0 0;
+  padding: 3px 5px;
+  background: var(--panel, #f2f1ec);
+  border: 1px solid var(--chrome-dark);
 }
 .settings-body h3 small { font-weight: 400; color: var(--muted); margin-left: 8px; }
-.settings-body h4 { margin: 8px 0 6px; font-size: 12px; }
+.settings-body h4 { margin: 6px 0 3px; font-size: 11px; }
+
+/* Every settings form on this page, on one grid: label and control on
+ * one line, the explanation under them and only where it earns its
+ * place. Three columns where there is room, one where there is not. */
+.settings-body .fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 4px 12px;
+  align-items: start;
+}
+.settings-body .fields .field { gap: 0; }
+.settings-body .fields .field > span { margin-bottom: 0; }
+.settings-body .fields .field .hint {
+  color: var(--muted);
+  margin-top: 1px;
+}
+.settings-body .actions { margin-top: 6px; }
+.conn { padding: 4px 6px; margin-bottom: 5px; }
 
 table.grid-form { border-collapse: collapse; width: 100%; }
 table.grid-form th {
@@ -1167,9 +1197,8 @@ tr.good td { background: #ebfbee; color: #1b6b32; font: 11px var(--font); }
 .trading-fields .check { font-weight: 600; }
 
 .pair-form .fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(280px, 1fr));
-  gap: 8px 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 5px 12px;
 }
 .field { display: flex; flex-direction: column; font: 11px var(--font); }
 .field > span { font-weight: 600; margin-bottom: 2px; }
@@ -1186,13 +1215,13 @@ tr.good td { background: #ebfbee; color: #1b6b32; font: 11px var(--font); }
 /* What MT5 itself says, before anything is saved: the derivation beside
  * every derived number. */
 .derived {
-  margin-top: 8px;
-  padding: 6px;
+  margin-top: 5px;
+  padding: 4px 6px;
   background: #edeae0;
   border: 1px solid #c4bda4;
   font: 11px var(--font);
 }
-.pair-form .actions { margin-top: 8px; display: flex; gap: 6px; }
+.pair-form .actions { margin-top: 5px; display: flex; gap: 6px; }
 
 /* --- the centring controls -------------------------------------------
  * Lock and Centre are one decision — "does this ladder follow the
@@ -1273,3 +1302,98 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
   color: var(--frame-muted);
 }
 .rail-label .cog:hover { color: var(--frame-text); }
+
+
+/* --- this ladder's own settings ---------------------------------------
+ * Over the ladder, not in the rail: the rail is read top to bottom
+ * while the market moves, and a form in it is a form between the
+ * trader and the price. Three groups side by side so the whole thing
+ * fits without scrolling — which is the point of moving it here.
+ */
+.window.ladder { position: relative; }
+/* `display: flex` below beats the `hidden` attribute, and a pane that
+ * is invisible but still laid over the ladder swallows every click on
+ * it — on the panel where a click IS an order. The browser test for a
+ * one-click market entry caught it within the minute. */
+.ladder-settings[hidden] { display: none !important; }
+.ladder-settings {
+  position: absolute;
+  top: 22px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #f2f1ec);
+  border-top: 1px solid var(--frame-line);
+  font: 11px var(--font);
+}
+.ladder-settings .ls-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  background: var(--frame);
+  color: var(--frame-text);
+  border-bottom: 1px solid var(--frame-line);
+}
+.ladder-settings .ls-head .ls-pair { color: var(--frame-muted); flex: 1; }
+.ladder-settings .ls-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 2px 10px;
+  padding: 4px 6px;
+  align-content: start;
+}
+.ladder-settings .ls-group { min-width: 0; }
+.ladder-settings h4 {
+  margin: 2px 0 3px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--frame-line);
+  padding-bottom: 1px;
+}
+/* Label and field on ONE line: a stacked form of twenty fields is a
+ * form nobody can see the bottom of. */
+.ladder-settings .lsf {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 1px;
+  line-height: 1.5;
+}
+.ladder-settings .lsf > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted, #666);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ladder-settings .lsf input[type="number"],
+.ladder-settings .lsf input[type="text"],
+.ladder-settings .lsf select {
+  flex: 0 0 78px;
+  width: 78px;
+  font: 11px var(--mono);
+  padding: 0 2px;
+}
+.ladder-settings .lsf input[type="checkbox"] { flex: 0 0 auto; }
+.ladder-settings .ls-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-top: 1px solid var(--frame-line);
+}
+.ladder-settings .ls-note { font-size: 10px; }
+
+/* The three cancels on one row. They are read as a group and pressed
+ * one at a time, and three stacked rows pushed the exit off the rail. */
+.rail .cxl-row { display: flex; gap: 2px; }
+.rail .cxl-row .cxl { flex: 1 1 auto; min-width: 0; padding: 1px 2px; }
+.rail .cxl-row .cxl-all { flex: 1.6 1 auto; }
+.rail .auto-route-state.armed { color: var(--traded); font-weight: 700; }

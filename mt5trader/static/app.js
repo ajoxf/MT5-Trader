@@ -588,25 +588,25 @@
     node.querySelector('.tif').addEventListener('change', function (e) {
       setPair(key, {time_in_force: e.target.value});
     });
-    node.querySelector('.overnight').addEventListener('change', function (e) {
-      setPair(key, {overnight: e.target.value});
-    });
     node.querySelector('.increment').addEventListener('change', function (e) {
       setPair(key, {increment: parseFloat(e.target.value)});
     });
-    // "Where do I change these?" — answered by the panel that shows
-    // the numbers, rather than by the operator hunting for the page.
-    node.querySelectorAll('.open-exits').forEach(function (cog) {
+    // "Where do I change these?" — answered by the panel showing the
+    // numbers, and answered with THIS ladder's own settings: the next
+    // ladder is a different instrument with different costs.
+    node.querySelectorAll('.open-exits, .ladder-cog').forEach(function (cog) {
       cog.addEventListener('click', function (e) {
         e.preventDefault();
-        var opener = document.getElementById('open-settings');
-        if (opener) { opener.click(); }
+        e.stopPropagation();
+        openLadderSettings(node, key);
       });
     });
-    node.querySelector('.auto-route').addEventListener('change',
-      function (e) {
-        setPair(key, {auto_route: e.target.checked});
-      });
+    node.querySelector('.ls-close').addEventListener('click', function () {
+      node.querySelector('.ladder-settings').hidden = true;
+    });
+    node.querySelector('.ls-save').addEventListener('click', function () {
+      saveLadderSettings(node, key);
+    });
 
     node.querySelector('.lock-scroll').addEventListener('change', function (e) {
       state.locked[key] = e.target.checked;
@@ -814,6 +814,136 @@
     send('set_pair', {pair: key, fields: fields});
   }
 
+  //: The overnight rule in the trader's own words, for the read-only
+  //: line on the Exit panel.
+  var OVERNIGHT_WORDS = {
+    ALLOW: 'hold', EXIT_IF_PROFIT: 'exit if profit', EXIT_ALWAYS: 'exit'
+  };
+
+  //: Every field in this ladder's settings: the class on the control,
+  //: the name the engine and the config both know it by, and how to
+  //: read it back. One list, because a form that saves a field it does
+  //: not load — or loads one it cannot save — is a form that silently
+  //: drops what was typed into it.
+  var LADDER_FIELDS = [
+    ['.ls-order-type', 'order_type', 'text'],
+    ['.ls-tif', 'time_in_force', 'text'],
+    ['.ls-overnight', 'overnight', 'text'],
+    ['.ls-auto-route', 'auto_route', 'check'],
+    ['.ls-increment', 'increment', 'number'],
+    ['.ls-rows', 'rows', 'number'],
+    ['.ls-qty', 'default_quantity', 'number'],
+    ['.ls-quoting', 'quoting_leg', 'text'],
+    ['.ls-comm-a', 'commission_per_lot_a', 'blank'],
+    ['.ls-comm-b', 'commission_per_lot_b', 'blank'],
+    ['.ls-slip', 'slippage_allowance', 'blank'],
+    ['.ls-nights', 'break_even_nights', 'blank'],
+    ['.ls-tp', 'tp_target_pct_of_margin', 'blank'],
+    ['.ls-roundtrip', 'bid_ask_round_trip_override', 'blank'],
+    ['.ls-expiry-a', 'expiry_a', 'blank-text'],
+    ['.ls-expiry', 'expiry', 'blank-text'],
+    ['.ls-swap-a-long', 'swap_a_long_per_lot', 'blank'],
+    ['.ls-swap-a-short', 'swap_a_short_per_lot', 'blank'],
+    ['.ls-swap-b-long', 'swap_b_long_per_lot', 'blank'],
+    ['.ls-swap-b-short', 'swap_b_short_per_lot', 'blank'],
+    ['.ls-swap-day', 'swap_per_day', 'blank'],
+    ['.ls-carry-rate', 'carry_rate_pct', 'blank']
+  ];
+
+  function openLadderSettings(node, key) {
+    /* THIS ladder's settings, over the ladder they belong to.
+     *
+     * Loaded from the config rather than from the snapshot: the
+     * snapshot carries what the engine is running, and the blank
+     * fields — "use the default" — are only distinguishable from zero
+     * in the file.
+     */
+    var pane = node.querySelector('.ladder-settings');
+    if (!pane) { return; }
+    pane.hidden = false;
+    node.querySelector('.ls-pair').textContent = key;
+    fetch('/api/pairs').then(function (r) { return r.json(); })
+      .then(function (body) {
+        var saved = ((body || {}).pairs || {})[key] || {};
+        LADDER_FIELDS.forEach(function (entry) {
+          var input = pane.querySelector(entry[0]);
+          if (!input) { return; }
+          var value = saved[entry[1]];
+          if (entry[2] === 'check') {
+            input.checked = !!value;
+          } else {
+            // `?? ''`, never `|| ''`: a commission of 0 and a swap of 0
+            // are real statements, and blanking them on load is how an
+            // override the operator typed disappears the next time the
+            // form is opened.
+            input.value = (value === null || value === undefined)
+              ? '' : value;
+          }
+        });
+      }).catch(function (e) { toast('could not read this pair: ' + e); });
+    // The allowance is a BUDGET; this is what slippage actually cost
+    // this session. Shown beside it so the number is corrected from
+    // data rather than left at whatever was first guessed. No engine
+    // yet is not a failure of this pane — the row simply says nothing.
+    fetch('/api/slippage').then(function (r) { return r.json(); })
+      .then(function (body) {
+        var stats = body && body.ok && body.overall && body.overall.round_trip;
+        var row = pane.querySelector('.ls-slip');
+        if (!row) { return; }
+        row.title = (stats && stats.money_mean !== null &&
+                     stats.money_mean !== undefined)
+          ? 'a BUDGET, not a measurement. MEASURED this session: ' +
+            stats.money_mean.toFixed(2) + ' a round turn over ' +
+            stats.measured + ' position(s) — positive is a cost.'
+          : 'a BUDGET, not a measurement. Nothing measured this session '
+            + 'yet, so there is nothing to correct it against.';
+      }).catch(function () { /* no engine: the row just says nothing */ });
+  }
+
+  function saveLadderSettings(node, key) {
+    var pane = node.querySelector('.ladder-settings');
+    var payload = {};
+    var live = {};
+    LADDER_FIELDS.forEach(function (entry) {
+      var input = pane.querySelector(entry[0]);
+      if (!input) { return; }
+      var raw = (input.value || '').trim();
+      var value;
+      if (entry[2] === 'check') {
+        value = input.checked;
+      } else if (entry[2] === 'blank' || entry[2] === 'number') {
+        // Blank CLEARS it. A loop that skips blanks can only ever set
+        // an override, and one that cannot be deleted outlives the
+        // pair it was typed for.
+        value = raw === '' ? null : parseFloat(raw);
+        if (value !== null && isNaN(value)) { return; }
+      } else if (entry[2] === 'blank-text') {
+        value = raw === '' ? null : raw;
+      } else {
+        value = raw === '' ? null : raw;
+      }
+      payload[entry[1]] = value;
+      if (value !== null) { live[entry[1]] = value; }
+    });
+    fetch('/api/pairs/' + encodeURIComponent(key), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    }).then(function (r) { return r.json(); }).then(function (answer) {
+      if (!answer || !answer.ok) {
+        toast('could not save: ' + ((answer && answer.error) || 'unknown'));
+        return;
+      }
+      // Saved AND applied: the engine re-reads the file on its next
+      // poll, and the live send makes the ladder in front of the trader
+      // change now rather than a poll later.
+      setPair(key, live);
+      (answer.notes || []).forEach(function (note) { toast(note); });
+      if (!(answer.notes || []).length) { toast('applied to ' + key, 'ok'); }
+      pane.hidden = true;
+    }).catch(function (e) { toast('could not save: ' + e); });
+  }
+
   function atTouch(key, side) {
     // Hit the touch without hunting for the row: the fastest
     // possible "I want in, now" on the ladder already in front of you.
@@ -887,10 +1017,14 @@
 
     setValue(node.querySelector('.order-type'), row.order_type);
     setValue(node.querySelector('.tif'), row.time_in_force);
-    setValue(node.querySelector('.overnight'), row.overnight);
-    var auto = node.querySelector('.auto-route');
-    if (auto && document.activeElement !== auto) {
-      auto.checked = !!row.auto_route;
+    var overnight = node.querySelector('.x-overnight');
+    if (overnight) {
+      // Read-only here: the overnight rule is EXIT logic and lives in
+      // this ladder's settings, beside the other two things that decide
+      // where a position ends.
+      overnight.textContent = OVERNIGHT_WORDS[row.overnight] || row.overnight;
+      overnight.title = 'what happens to an OPEN POSITION at the session '
+        + 'cutoff — change it in this ladder\u2019s settings';
     }
     var armed = node.querySelector('.auto-route-state');
     if (armed) {
@@ -900,7 +1034,9 @@
       // than done quietly.
       var orders = row.auto_route_armed || [];
       armed.textContent = orders.length
-        ? 'out ' + fmt(orders[0].level, digitsFor(row.increment)) : '';
+        ? 'out ' + fmt(orders[0].level, digitsFor(row.increment))
+        : (row.auto_route ? 'on' : 'off');
+      armed.className = 'auto-route-state' + (orders.length ? ' armed' : '');
       armed.title = orders.length
         ? 'a working order is resting to close this position — a target, '
           + 'and no stop'

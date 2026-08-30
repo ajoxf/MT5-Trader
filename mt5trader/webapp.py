@@ -894,7 +894,15 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                       'rows', 'clip_lots_a', 'clip_lots_b',
                       'expiry', 'expiry_a', 'swap_per_day', 'auto_route',
                       'swap_a_long_per_lot', 'swap_a_short_per_lot',
-                      'swap_b_long_per_lot', 'swap_b_short_per_lot'):
+                      'swap_b_long_per_lot', 'swap_b_short_per_lot',
+                      # What a trade on THIS ladder costs, and therefore
+                      # where it gets out. Per pair, because a gold
+                      # basis and an oil differential are not the same
+                      # trade priced twice.
+                      'commission_per_lot_a', 'commission_per_lot_b',
+                      'slippage_allowance', 'break_even_nights',
+                      'tp_target_pct_of_margin',
+                      'bid_ask_round_trip_override', 'carry_rate_pct'):
             if field in payload:
                 pair[field] = payload[field]
         # A date that will not parse is REPORTED and the old value kept:

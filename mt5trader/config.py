@@ -258,7 +258,10 @@ class PairConfig:
                  expiry=None, swap_per_day=None, expiry_a=None,
                  swap_a_long_per_lot=None, swap_a_short_per_lot=None,
                  swap_b_long_per_lot=None, swap_b_short_per_lot=None,
-                 auto_route=False):
+                 auto_route=False, commission_per_lot_a=None,
+                 commission_per_lot_b=None, slippage_allowance=None,
+                 break_even_nights=None, tp_target_pct_of_margin=None,
+                 bid_ask_round_trip_override=None, carry_rate_pct=None):
         self.key = key
         self.name = name or key
         self.leg_a = dict(leg_a or {})      # {'account': ..., 'symbol': ...}
@@ -308,6 +311,21 @@ class PairConfig:
         #: take-profit level, priced from the actual executed spread.
         #: Default OFF (spec section 5.4).
         self.auto_route = bool(auto_route)
+        #: What a trade on THIS ladder costs, and where it therefore
+        #: gets out. Per ladder, not per system: a gold basis and a
+        #: WTI/Brent differential are charged different commissions,
+        #: held for different lengths of time and targeted differently,
+        #: and one set of numbers covering both is a set that is wrong
+        #: for at least one of them. None means "the default"; a typed
+        #: value wins, and 0 is a real statement.
+        self.commission_per_lot_a = _blank_to_none(commission_per_lot_a)
+        self.commission_per_lot_b = _blank_to_none(commission_per_lot_b)
+        self.slippage_allowance = _blank_to_none(slippage_allowance)
+        self.break_even_nights = _blank_to_none(break_even_nights)
+        self.tp_target_pct_of_margin = _blank_to_none(tp_target_pct_of_margin)
+        self.bid_ask_round_trip_override = _blank_to_none(
+            bid_ask_round_trip_override)
+        self.carry_rate_pct = _blank_to_none(carry_rate_pct)
         #: Cached MT5 metadata per leg, refreshed by the coordinator.
         self.meta_a = {}
         self.meta_b = {}
@@ -381,13 +399,46 @@ class PairConfig:
                 'swap_b_long_per_lot': self.swap_b_long_per_lot,
                 'swap_b_short_per_lot': self.swap_b_short_per_lot}
 
-    #: The reference-only fields: they feed a PANEL, not the engine, so
-    #: they hot-apply. Blocking them behind a restart is what put "an
-    #: assets change requires a restart" ten lines above a live trade
-    #: while the values sat saved and correct.
-    HOT_FIELDS = ('expiry', 'expiry_a', 'swap_per_day', 'auto_route',
-                  'swap_a_long_per_lot', 'swap_a_short_per_lot',
-                  'swap_b_long_per_lot', 'swap_b_short_per_lot')
+    #: What ONE ladder's exit is priced from. Each of these has a
+    #: system-wide default; set here, the ladder's own value wins.
+    EXIT_FIELDS = {
+        'commission_per_lot_a': 'COMMISSION_PER_LOT_A',
+        'commission_per_lot_b': 'COMMISSION_PER_LOT_B',
+        'slippage_allowance': 'SLIPPAGE_ALLOWANCE',
+        'break_even_nights': 'BREAK_EVEN_NIGHTS',
+        'tp_target_pct_of_margin': 'TP_TARGET_PCT_OF_MARGIN',
+        'bid_ask_round_trip_override': 'BID_ASK_ROUND_TRIP_OVERRIDE',
+        'carry_rate_pct': 'CARRY_RATE_PCT',
+    }
+
+    def exit_settings(self, settings):
+        """The settings the exit panel reads, for THIS ladder.
+
+        The system-wide defaults, with this ladder's own values laid
+        over them. A blank field is not 0 and not a refusal: it means
+        "whatever the default is", so a desk that prices every pair the
+        same types nothing at all.
+        """
+        merged = dict(settings or {})
+        for field, key in self.EXIT_FIELDS.items():
+            value = getattr(self, field, None)
+            if value is not None:
+                merged[key] = value
+        return merged
+
+    #: Fields a save applies WITHOUT a restart. The reference-only ones
+    #: feed a panel rather than the engine; the per-ladder trading ones
+    #: are what the ladder's own controls already change live, so a save
+    #: from the settings pane and a click on the rail do the same thing.
+    #: Blocking these behind a restart is what put "an assets change
+    #: requires a restart" ten lines above a live trade while the values
+    #: sat saved and correct.
+    HOT_FIELDS = (('expiry', 'expiry_a', 'swap_per_day', 'auto_route',
+                   'swap_a_long_per_lot', 'swap_a_short_per_lot',
+                   'swap_b_long_per_lot', 'swap_b_short_per_lot',
+                   'order_type', 'time_in_force', 'overnight', 'increment',
+                   'default_quantity', 'quoting_leg', 'rows')
+                  + tuple(EXIT_FIELDS))
 
     def apply_hot(self, raw):
         """Take the reference-only fields from a freshly read config.
@@ -400,12 +451,23 @@ class PairConfig:
             if field not in (raw or {}):
                 continue
             value = raw[field]
-            if field.startswith('swap_') and field.endswith('_per_lot'):
+            if field in self.EXIT_FIELDS or field == 'swap_per_day' or (
+                    field.startswith('swap_') and field.endswith('_per_lot')):
                 value = _blank_to_none(value)
             elif field == 'auto_route':
                 value = bool(value)
-            elif field == 'swap_per_day':
+            elif field == 'order_type':
+                value = OrderType(value)
+            elif field == 'time_in_force':
+                value = TimeInForce(value)
+            elif field == 'overnight':
+                value = OvernightMode(value)
+            elif field in ('increment', 'default_quantity'):
                 value = _blank_to_none(value)
+                if field == 'default_quantity' and value is None:
+                    continue          # a ladder always has a size
+            elif field == 'rows':
+                value = int(value or 30)
             if getattr(self, field) != value:
                 setattr(self, field, value)
                 changed.append(field)
@@ -431,6 +493,13 @@ class PairConfig:
             'swap_b_long_per_lot': self.swap_b_long_per_lot,
             'swap_b_short_per_lot': self.swap_b_short_per_lot,
             'auto_route': self.auto_route,
+            'commission_per_lot_a': self.commission_per_lot_a,
+            'commission_per_lot_b': self.commission_per_lot_b,
+            'slippage_allowance': self.slippage_allowance,
+            'break_even_nights': self.break_even_nights,
+            'tp_target_pct_of_margin': self.tp_target_pct_of_margin,
+            'bid_ask_round_trip_override': self.bid_ask_round_trip_override,
+            'carry_rate_pct': self.carry_rate_pct,
         }
 
     @classmethod

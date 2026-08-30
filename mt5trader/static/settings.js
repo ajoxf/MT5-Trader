@@ -28,7 +28,6 @@
     symbols: {},            // account -> last search result
     tests: {},              // account -> last connectivity answer
     settings: null,         // the engine's tunables, with their defaults
-    slippage: null,         // what slippage actually MEASURED this session
     hot: [],                // ...and which of them apply without a restart
     connection: null,       // is the SYSTEM connected, in one answer
     timer: null
@@ -70,11 +69,7 @@
 
   function refresh() {
     return Promise.all([
-      api('/api/accounts'), api('/api/pairs'), api('/api/settings'),
-      // The MEASURED slippage, shown beside the allowance it is meant
-      // to correct. A 503 here (no engine yet) is not a failure of the
-      // settings page, so it resolves to nothing rather than rejecting.
-      api('/api/slippage').catch(function () { return {ok: false}; })
+      api('/api/accounts'), api('/api/pairs'), api('/api/settings')
     ]).then(function (results) {
       local.accounts = results[0].body.accounts || [];
       local.nextPort = results[0].body.next_free_port || local.nextPort;
@@ -82,7 +77,6 @@
       local.settings = results[2].body.settings || {};
       local.defaults = results[2].body.defaults || {};
       local.hot = results[2].body.hot || [];
-      local.slippage = (results[3] && results[3].ok) ? results[3].body : null;
       render();
     });
   }
@@ -316,79 +310,23 @@
       '</div>');
     html += '</div>';
 
-    // -- what a trade COSTS, and therefore where it gets out ----------
-    // Four terms, each its own field, so the break-even on the ladder
-    // can be checked rather than believed.
-    html += '<h3>Exits <small>the four terms break-even is built from' +
-      '</small></h3><div class="fields exit-fields">';
-    html += field('Commission per lot — leg A',
-      '<input class="s-comm-a" type="number" min="0" step="0.01" value="' +
-      escape(settings.COMMISSION_PER_LOT_A) + '">' +
-      '<div class="hint">Per lot, per leg, charged both ends. A lot is a ' +
-      'different amount of money on each leg, so there are two fields. ' +
-      'Defaults to 0 and must: a fabricated cost is charged against ' +
-      'every trade and you cannot tell it was never your number.</div>');
-    html += field('Commission per lot — leg B',
-      '<input class="s-comm-b" type="number" min="0" step="0.01" value="' +
-      escape(settings.COMMISSION_PER_LOT_B) + '">');
-    html += field('Bid-ask round trip (override)',
-      '<input class="s-roundtrip" type="number" step="0.01" value="' +
-      escape(settings.BID_ASK_ROUND_TRIP_OVERRIDE === null ||
-             settings.BID_ASK_ROUND_TRIP_OVERRIDE === undefined
-             ? '' : settings.BID_ASK_ROUND_TRIP_OVERRIDE) + '">' +
-      '<div class="hint">BLANK = use the width measured live from both ' +
-      'books, which is the normal case. It is already inside the two ' +
-      'prices break-even is quoted between, so it is shown and not ' +
-      'charged a second time.</div>');
-    html += field('Slippage allowance',
-      '<input class="s-slip" type="number" min="0" step="0.01" value="' +
-      escape(settings.SLIPPAGE_ALLOWANCE) + '">' +
-      '<div class="hint">A BUDGET, not a measurement — money per spread, ' +
-      'round turn. ' + measuredSlippage() + '</div>');
-    html += field('Nights held (for break-even)',
-      '<input class="s-nights" type="number" min="0" step="1" value="' +
-      escape(settings.BREAK_EVEN_NIGHTS) + '">' +
-      '<div class="hint">The swap is charged per night, so break-even is ' +
-      'only defined given a holding period. 0 is intraday and the term ' +
-      'vanishes. An unconvertible swap is not a zero swap: over nights, ' +
-      'break-even says so rather than quoting a number with the ' +
-      'financing silently left out.</div>');
-    html += field('Take-profit (% of margin)',
-      '<input class="s-tp" type="number" min="0" step="0.1" value="' +
-      escape(settings.TP_TARGET_PCT_OF_MARGIN) + '">' +
-      '<div class="hint">TP = break-even + this % of the margin ONE ' +
-      'spread ties up, priced by the terminals themselves. 0 shows ' +
-      'break-even alone. Nothing is ever sent to the broker from it.' +
-      '</div>');
-    html += field('Carry rate (% a year)',
-      '<input class="s-carryrate" type="number" step="0.1" value="' +
-      escape(settings.CARRY_RATE_PCT === null ||
-             settings.CARRY_RATE_PCT === undefined
-             ? '' : settings.CARRY_RATE_PCT) + '">' +
-      '<div class="hint">Prices the basis a SECOND time, to cross-check ' +
-      'the broker\'s swap. Disagree in sign, or by more than 3x, and the ' +
-      'fair spread is replaced by the warning — one wrong sign in a swap ' +
-      'field is all it takes to display a licence to print money. Blank ' +
-      'turns the check off.</div>');
+    // What a trade COSTS — and therefore where it gets out — is NOT
+    // here. Commission, the slippage allowance, the nights held, the
+    // take-profit percentage and the carry rate belong to ONE LADDER:
+    // a gold basis and an oil differential are charged differently and
+    // held for different lengths of time, and one set of numbers
+    // covering both is a set that is wrong for at least one of them.
+    // They live behind the cog on each ladder.
+    html += '<p class="hint where-exits">Commission, the slippage ' +
+      'allowance, nights held, the take-profit % and the carry rate are ' +
+      'per LADDER \u2014 open a ladder\u2019s <b>&#9881;</b> for its own. ' +
+      'They are not the same trade on every pair.</p>';
+
     html += '</div><div class="actions">' +
       '<button class="btn save-settings">Apply</button>' +
       '<span class="hint">These apply to the running engine at once — ' +
       'no restart.</span></div>';
     return html;
-  }
-
-  function measuredSlippage() {
-    /* The realised figure beside the budget, so the allowance is
-     * corrected from data rather than left at whatever was guessed. */
-    var stats = local.slippage && local.slippage.overall &&
-      local.slippage.overall.round_trip;
-    if (!stats || stats.money_mean === null || stats.money_mean === undefined) {
-      return 'Nothing measured this session yet, so there is nothing to ' +
-        'correct it against — it stays a budget until there is.';
-    }
-    return 'MEASURED this session: ' + stats.money_mean.toFixed(2) +
-      ' a round turn over ' + stats.measured + ' position(s). Positive is ' +
-      'a cost.';
   }
 
   // -- accounts -----------------------------------------------------------
@@ -944,26 +882,13 @@
     function number(selector) {
       return parseFloat(panel.querySelector(selector).value);
     }
-    function blank(selector) {
-      var text = (panel.querySelector(selector).value || '').trim();
-      return text === '' ? null : parseFloat(text);
-    }
     var fields = {
       CONFIRM_MARKET_CLICKS: panel.querySelector('.s-confirm').checked,
       MARKET_PROTECTION_TICKS: number('.s-protection'),
       ROW_HEIGHT_PX: number('.s-rowheight'),
       COMMAND_POLL_SEC: number('.s-drain'),
       REPEG_DEAD_BAND_TICKS: number('.s-repeg'),
-      MAX_QUOTE_AGE_SEC: number('.s-stale'),
-      COMMISSION_PER_LOT_A: number('.s-comm-a'),
-      COMMISSION_PER_LOT_B: number('.s-comm-b'),
-      SLIPPAGE_ALLOWANCE: number('.s-slip'),
-      BREAK_EVEN_NIGHTS: number('.s-nights'),
-      TP_TARGET_PCT_OF_MARGIN: number('.s-tp'),
-      // Clearable: blank is null, not 0, and not skipped. A field loop
-      // that skips blanks can only ever SET an override.
-      BID_ASK_ROUND_TRIP_OVERRIDE: blank('.s-roundtrip'),
-      CARRY_RATE_PCT: blank('.s-carryrate')
+      MAX_QUOTE_AGE_SEC: number('.s-stale')
     };
     return api('/api/settings',
                {method: 'POST', headers: {'Content-Type': 'application/json'},

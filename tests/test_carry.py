@@ -335,3 +335,67 @@ def test_a_config_that_did_not_change_is_not_re_read(config, pair, legs,
     coordinator.reload_reference_fields()
 
     assert coordinator.reload_reference_fields() == []
+
+
+# -- one ladder's settings are its own -----------------------------------
+
+
+def test_each_ladder_prices_its_own_exit(config, pair, legs):
+    """A gold basis and an oil differential are charged different
+    commissions and held for different lengths of time. One set of
+    numbers covering both is a set that is wrong for at least one of
+    them — so the ladder's own value wins over the system default."""
+    from mt5trader.coordinator import Coordinator
+    config.settings['COMMISSION_PER_LOT_A'] = 2.0
+    config.settings['COMMISSION_PER_LOT_B'] = 2.0
+    pair.clip_lots_a = pair.clip_lots_b = 0.1
+    pair.commission_per_lot_a = 20.0        # this ladder is expensive
+    coordinator = Coordinator(config, legs)
+    coordinator.start()
+    coordinator.poll_once()
+
+    exit_box = coordinator.snapshot()['pairs'][pair.key]['exit']
+
+    # 2 x (20.00 x 0.1 + 2.00 x 0.1) = 4.40, not the default's 0.80.
+    assert exit_box['commission'] == pytest.approx(4.40)
+
+
+def test_a_blank_field_means_the_default_and_zero_means_zero(pair):
+    """The difference the whole per-ladder form turns on. Blank is not
+    0: a form that reads it as 0 charges a commission of nothing to
+    every pair the operator has not visited."""
+    defaults = {'COMMISSION_PER_LOT_A': 7.0, 'TP_TARGET_PCT_OF_MARGIN': 2.0}
+
+    assert pair.exit_settings(defaults)['COMMISSION_PER_LOT_A'] == 7.0
+
+    pair.commission_per_lot_a = 0.0
+    assert pair.exit_settings(defaults)['COMMISSION_PER_LOT_A'] == 0.0
+
+    pair.commission_per_lot_a = None            # cleared again
+    assert pair.exit_settings(defaults)['COMMISSION_PER_LOT_A'] == 7.0
+
+
+def test_the_per_ladder_settings_apply_without_a_restart(config, pair, legs,
+                                                         tmp_path):
+    """They are saved to the config and read on the next poll — which is
+    what lets one form both persist a setting and change the ladder in
+    front of the trader."""
+    import json
+    from mt5trader.coordinator import Coordinator
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({'pairs': {pair.key: {}}}))
+    config.path = str(path)
+    coordinator = Coordinator(config, legs)
+    coordinator.start()
+    coordinator.poll_once()
+    assert pair.auto_route is False
+
+    path.write_text(json.dumps({'pairs': {pair.key: {
+        'auto_route': True, 'tp_target_pct_of_margin': 5.0,
+        'order_type': 'MARKET', 'overnight': 'EXIT_IF_PROFIT'}}}))
+    coordinator.poll_once()
+
+    assert pair.auto_route is True
+    assert pair.tp_target_pct_of_margin == 5.0
+    assert pair.order_type.value == 'MARKET'
+    assert pair.overnight.value == 'EXIT_IF_PROFIT'

@@ -183,6 +183,24 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
     }
 
 
+#: Intercept the pair save so a test can read exactly what the form
+#: sent — a blank that arrives as 0, or not at all, is the bug.
+SPY_ON_PAIR_SAVE = """() => {
+    window.__realFetch = window.__realFetch || window.fetch;
+    window.__sent = null;
+    window.fetch = function (url, options) {
+        if (String(url).indexOf('/api/pairs/') >= 0 && options &&
+            options.method === 'POST') {
+          window.__sent = JSON.parse(options.body);
+          return Promise.resolve(new Response(
+            JSON.stringify({ok: true, notes: []}),
+            {status: 200, headers: {'Content-Type': 'application/json'}}));
+        }
+        return window.__realFetch(url, options);
+    };
+}"""
+
+
 def chromium_path():
     """The browser this machine actually has.
 
@@ -676,47 +694,112 @@ def test_the_exchanges_page_carries_connect_test_and_diagnose(page):
     assert 'Exchanges' in page.text_content('.window.settings .accounts h3')
 
 
-def test_the_exit_costs_are_editable_and_the_override_can_be_CLEARED(page):
-    """Break-even is built from four terms and every one of them is a
-    field: a number nobody can edit is a number nobody can correct.
+def test_the_exit_costs_belong_to_ONE_LADDER_and_the_override_CLEARS(page):
+    """Commission, the allowance, the nights and the target are not one
+    trade repeated: a gold basis and an oil differential are charged
+    differently and held for different lengths of time, so a single set
+    of numbers is wrong for at least one of them. They live behind the
+    cog on each ladder, and the Exchanges page says where.
 
-    The clearable one is the point. Blank means "use the width measured
-    live from both books", and a form that reads blank as 0 — or skips
-    it — can only ever SET an override, never delete one, and an
-    override outlives the pair it was typed for.
+    The clearable field is the point. Blank means "use the width
+    measured live from both books", and a form that reads blank as 0 —
+    or skips it — can only ever SET an override, never delete one.
     """
-    page.click('#open-settings')
-    page.wait_for_selector('.window.settings .exit-fields', timeout=5000)
+    open_ladder(page)
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ladder-settings .ls-tp', timeout=5000)
 
-    for field in ('.s-comm-a', '.s-comm-b', '.s-roundtrip', '.s-slip',
-                  '.s-nights', '.s-tp', '.s-carryrate'):
-        assert page.locator('.window.settings ' + field).count() == 1, field
+    for field in ('.ls-comm-a', '.ls-comm-b', '.ls-roundtrip', '.ls-slip',
+                  '.ls-nights', '.ls-tp', '.ls-carry-rate',
+                  '.ls-auto-route', '.ls-overnight'):
+        assert page.locator(
+            '.ladder .ladder-settings ' + field).count() == 1, field
 
-    sent = page.evaluate("""() => {
+    page.evaluate(SPY_ON_PAIR_SAVE)
+    page.fill('.ladder .ladder-settings .ls-roundtrip', '')
+    page.fill('.ladder .ladder-settings .ls-slip', '2.5')
+    page.fill('.ladder .ladder-settings .ls-comm-a', '0')
+    page.click('.ladder .ladder-settings .ls-save')
+    page.wait_for_function("() => window.__sent !== null", timeout=5000)
+
+    sent = page.evaluate('() => window.__sent')
+    assert sent['bid_ask_round_trip_override'] is None    # cleared, not 0
+    assert sent['slippage_allowance'] == 2.5
+    assert sent['commission_per_lot_a'] == 0             # ...and 0 is real
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+    # Leave the desk as it was found: this test's own "applied" toast is
+    # a message a LATER test reads as its own.
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    page.wait_for_selector('.ladder .grid tbody tr')
+
+
+def test_the_ladder_settings_load_from_the_CONFIG_not_the_snapshot(page):
+    """Blank means "use the default", and blank is only distinguishable
+    from 0 in the file: the snapshot carries what the engine is
+    RUNNING, where a default and a typed zero look identical. Loading
+    the form from it would turn every unset field into a 0 the operator
+    never typed — and saving it back would make that permanent."""
+    open_ladder(page)
+    page.evaluate("""() => {
         window.__realFetch = window.__realFetch || window.fetch;
-        window.__sent = null;
         window.fetch = function (url, options) {
-            if (String(url).indexOf('/api/settings') >= 0 && options &&
-                options.method === 'POST') {
-              window.__sent = JSON.parse(options.body).fields;
-              return Promise.resolve(new Response(
-                JSON.stringify({ok: true, restart_required: []}),
+            if (String(url).indexOf('/api/pairs') >= 0 &&
+                !(options && options.method === 'POST')) {
+              return Promise.resolve(new Response(JSON.stringify({
+                ok: true, pairs: {'XAUUSD_|GC1226': {
+                  commission_per_lot_a: 0, slippage_allowance: null,
+                  tp_target_pct_of_margin: 2.5, auto_route: true,
+                  overnight: 'EXIT_IF_PROFIT'}}}),
                 {status: 200, headers: {'Content-Type': 'application/json'}}));
             }
             return window.__realFetch(url, options);
         };
-        return true;
     }""")
-    assert sent
-    page.fill('.window.settings .s-roundtrip', '')
-    page.fill('.window.settings .s-slip', '2.5')
-    page.click('.window.settings .save-settings')
-    page.wait_for_function("() => window.__sent !== null", timeout=5000)
 
-    fields = page.evaluate('() => window.__sent')
-    assert fields['BID_ASK_ROUND_TRIP_OVERRIDE'] is None   # cleared, not 0
-    assert fields['SLIPPAGE_ALLOWANCE'] == 2.5
+    page.click('.ladder .ladder-cog')
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .ls-tp').value === '2.5'",
+        timeout=5000)
+
+    # A typed 0 survives the round trip; an unset field stays EMPTY.
+    assert page.input_value('.ladder .ls-comm-a') == '0'
+    assert page.input_value('.ladder .ls-slip') == ''
+    assert page.locator('.ladder .ls-auto-route').is_checked() is True
+    assert page.input_value('.ladder .ls-overnight') == 'EXIT_IF_PROFIT'
+
+    page.click('.ladder .ls-close')
     page.evaluate('() => { window.fetch = window.__realFetch; }')
+
+
+def test_the_rail_carries_no_form_the_market_can_outrun(page):
+    """The rail is read top to bottom while the market moves. The
+    overnight rule and the AutoRoute switch are exit logic, not
+    something pressed at the touch, so they are in this ladder's
+    settings — and the three cancels are one row, not three."""
+    open_ladder(page)
+
+    assert page.locator('.ladder .rail .overnight').count() == 0
+    assert page.locator('.ladder .rail .auto-route').count() == 0
+    assert page.locator('.ladder .rail .cxl-row .cxl').count() == 3
+
+    # ...and the rail fits without scrolling at the default size.
+    fits = page.evaluate("""() => {
+        const rail = document.querySelector('.window.ladder .rail');
+        return rail.scrollHeight <= rail.clientHeight + 1;
+    }""")
+    assert fits
+
+
+def test_the_exchanges_page_says_where_the_per_ladder_settings_are(page):
+    """A generic Exits page would be four numbers that are right for
+    whichever pair the operator had in mind when they typed them."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .trading-fields', timeout=5000)
+
+    assert page.locator('.window.settings .s-comm-a').count() == 0
+    assert 'per LADDER' in page.text_content('.window.settings .where-exits')
+    page.click('.window.settings .close')
+    page.wait_for_selector('.ladder .grid tbody tr')
 
 
 def test_a_check_shows_its_answer_as_a_checklist_with_fixes(page):
@@ -1833,16 +1916,16 @@ def test_fair_value_and_the_exit_sit_UNDER_the_two_legs_books(page):
 
 def test_the_settings_behind_the_exit_are_one_click_from_it(page):
     """"Where do I change these?" is a question the panel showing the
-    numbers should answer itself, not one the operator hunts a page
-    for."""
+    numbers should answer itself — and answer with THIS ladder\'s own
+    settings, because the next ladder is a different instrument."""
     open_ladder(page)
 
     page.click('.ladder .exit .open-exits')
-    page.wait_for_selector('.window.settings .exit-fields', timeout=5000)
+    page.wait_for_selector('.ladder .ladder-settings .ls-tp', timeout=5000)
 
-    assert page.locator('.window.settings .s-tp').count() == 1
-    page.click('.window.settings .close')
-    page.wait_for_selector('.ladder .grid tbody tr')
+    assert page.text_content('.ladder .ls-pair') == 'XAUUSD_|GC1226'
+    page.click('.ladder .ls-close')
+    assert page.locator('.ladder .ladder-settings').is_hidden()
 
 
 def test_the_leg_books_width_column_is_called_Spread(page):
@@ -1871,12 +1954,12 @@ def test_GTC_carries_its_caveat_on_the_screen(page):
 
 def test_autorouting_says_what_is_armed_and_that_there_is_no_stop(page):
     """The switch is not the state. A trader who believes a target is
-    armed when it is not is the worse failure, so the rail shows what
-    is ACTUALLY resting — and says in words that it is a target with no
-    stop, because a stop nobody has is not a stop to assume."""
+    armed when it is not is the worse failure, so the Exit panel shows
+    what is ACTUALLY resting — while the switch itself lives in this
+    ladder\'s settings, because one ladder can arm AutoRouting and the
+    next not."""
     open_ladder(page)
-    assert page.locator('.ladder .auto-route').is_checked() is False
-    assert 'NO STOP' in page.get_attribute('.ladder .auto-route-box', 'title')
+    assert page.text_content('.ladder .auto-route-state') == 'off'
 
     page.paths['publisher'].auto_route = True
     page.paths['publisher'].auto_route_armed = [
@@ -1886,19 +1969,24 @@ def test_autorouting_says_what_is_armed_and_that_there_is_no_stop(page):
     page.wait_for_function(
         "() => document.querySelector('.ladder .auto-route-state')"
         ".textContent.indexOf('60.21') >= 0", timeout=5000)
-
-    assert page.locator('.ladder .auto-route').is_checked() is True
     assert 'no stop' in page.get_attribute('.ladder .auto-route-state',
-                                            'title')
+                                           'title')
 
     # On, but nothing resting yet — and it says which of the two it is.
     page.paths['publisher'].auto_route_armed = []
     page.paths['publisher'].publish()
     page.wait_for_function(
         "() => document.querySelector('.ladder .auto-route-state')"
-        ".textContent === ''", timeout=5000)
+        ".textContent === 'on'", timeout=5000)
     assert 'next fill' in page.get_attribute('.ladder .auto-route-state',
-                                              'title')
+                                             'title')
+
+    # ...and the switch, with the NO STOP caveat, is in this ladder\'s
+    # own settings.
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-auto-route', timeout=5000)
+    assert 'NO STOP' in page.get_attribute('.ladder .lsf.check-row', 'title')
+    page.click('.ladder .ls-close')
 
     page.paths['publisher'].auto_route = False
     page.paths['publisher'].auto_route_armed = None

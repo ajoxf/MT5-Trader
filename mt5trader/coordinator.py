@@ -614,7 +614,8 @@ class Coordinator:
                                 (pair.meta_b or {}).get('contract_size')),
             days, market=md, overrides=pair.swap_overrides(),
             expects_expiry=pair.expects_expiry(),
-            rate_pct=self.config.get('CARRY_RATE_PCT'))
+            rate_pct=pair.exit_settings(
+                self.config.settings).get('CARRY_RATE_PCT'))
 
     def work_auto_route(self, pair, md):
         """Arm — and keep honest — the closing orders AutoRouting rests.
@@ -652,14 +653,17 @@ class Coordinator:
         if not pair.auto_route:
             return events
         margin = (self.margin_detail(pair) or {}).get('money')
-        nights = float(self.config.get('BREAK_EVEN_NIGHTS', 0.0) or 0.0)
+        # This ladder's own numbers: a gold basis and an oil differential
+        # are charged differently and held for different lengths of time.
+        settings = pair.exit_settings(self.config.settings)
+        nights = float(settings.get('BREAK_EVEN_NIGHTS', 0.0) or 0.0)
         for position in self.book.positions(pair.key):
             if getattr(position, 'tp_armed', False):
                 continue
             if self.book.orders_for_position(position.position_id):
                 continue
             exit_levels = takeprofit.for_position(
-                position, md, pair, self.config.settings, margin,
+                position, md, pair, settings, margin,
                 nights=nights,
                 carry_for=self.holding_carry(pair, position.side.value,
                                              nights))
@@ -1294,7 +1298,8 @@ class Coordinator:
             # Break-even is only DEFINED given a holding period: the
             # swap is charged per night. 0 is intraday, where the term
             # vanishes, and it is the default.
-            nights = float(self.config.get('BREAK_EVEN_NIGHTS', 0.0) or 0.0)
+            settings = pair.exit_settings(self.config.settings)
+            nights = float(settings.get('BREAK_EVEN_NIGHTS', 0.0) or 0.0)
             margin = self.margin_detail(pair) or {}
             # The pair's own range this session, so a target can be read
             # against what the spread actually travels.
@@ -1308,7 +1313,7 @@ class Coordinator:
             open_pnl = 0.0
             for position in self.book.positions(key):
                 gross, net_pnl, closing = mark_position(
-                    position, md, self.config.settings)
+                    position, md, settings)
                 row = position.to_dict()
                 row.update({'gross_pnl': gross, 'net_pnl': net_pnl,
                             'closing_spread': closing,
@@ -1316,7 +1321,7 @@ class Coordinator:
                             # ENTERED at: a take-profit that moves with
                             # the market is not a take-profit.
                             'exit': takeprofit.for_position(
-                                position, md, pair, self.config.settings,
+                                position, md, pair, settings,
                                 margin.get('money'),
                                 nights=nights,
                                 carry_for=self.holding_carry(
@@ -1366,7 +1371,7 @@ class Coordinator:
                 # a target on the margin the spread ties up. A price on
                 # the screen — nothing is sent to the broker.
                 'exit': takeprofit.describe(
-                    pair, md, self.config.settings,
+                    pair, md, settings,
                     margin_per_spread=margin.get('money'),
                     margin_source=margin.get('source'),
                     session_range=session_range,
@@ -1527,8 +1532,11 @@ class Coordinator:
                                'count': len(expired)})
             md = self.market.get(key)
             for position in self.book.positions(key):
+                # "In profit" is NET P&L, less THIS ladder's commission —
+                # read on any other basis it flattens trades that are not
+                # actually in profit.
                 _gross, net_pnl, _closing = mark_position(
-                    position, md, self.config.settings)
+                    position, md, pair.exit_settings(self.config.settings))
                 verdict = overnight_action(
                     pair.overnight, net_pnl, self.session_clock.now(),
                     self.config.get('OVERNIGHT_CLOSE_HOUR'),
