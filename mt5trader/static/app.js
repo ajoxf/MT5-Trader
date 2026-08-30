@@ -264,7 +264,9 @@
     return node.classList.contains('market-grid') ? panelId('grid')
       : node.classList.contains('monitor') ? panelId('monitor')
         : node.classList.contains('settings') ? panelId('settings')
-          : panelId('ladder', node.dataset.pair);
+          : node.classList.contains('fairwin')
+            ? panelId('fair', node.dataset.pair)
+            : panelId('ladder', node.dataset.pair);
   }
 
   // -- moving the windows ------------------------------------------------
@@ -425,6 +427,24 @@
     writeLayout();
   }
 
+  function fairFloatByDefault(node, id) {
+    /* A small window, landing clear of the ladders rather than over the
+     * prices. It is dragged and resized like anything else once the
+     * trader has put it somewhere. */
+    var desktop = desktopBox();
+    if (!desktop.width) { return; }
+    var wanted = size(node, 230, Math.min(300, desktop.height - 60));
+    var open = document.querySelectorAll('.window.fairwin').length;
+    var left = Math.max(desktop.width - wanted.w - 12 - (open - 1) * 18, 8);
+    var top = Math.min(30 + (open - 1) * 20,
+                       Math.max(desktop.height - wanted.h - 8, 0));
+    var at = place(node, left, top);
+    node.style.zIndex = nextZ();
+    layout[id] = {left: at.left, top: at.top, z: topZ,
+                  w: wanted.w, h: wanted.h};
+    writeLayout();
+  }
+
   function applyLayout(node) {
     /* Put a window back where it was left. Called for every window on
      * every render, because panels are created lazily — the monitor
@@ -433,6 +453,9 @@
     var saved = layout[id];
     if (!saved) {
       if (FLOATING_BY_DEFAULT.indexOf(id) >= 0) { floatByDefault(node, id); }
+      else if (node.classList.contains('fairwin')) {
+        fairFloatByDefault(node, id);
+      }
       return;
     }
     if (saved.w && saved.h) { size(node, saved.w, saved.h); }
@@ -577,6 +600,63 @@
   }
 
   function cssEscape(value) { return String(value).replace(/"/g, '\\"'); }
+
+  function fairNode(key) {
+    /* One pair's fair value and exit, in a window of their own. */
+    var existing = document.querySelector(
+      '.fairwin[data-pair="' + cssEscape(key) + '"]');
+    if (existing) { return existing; }
+    var node = el('fair-template').content.firstElementChild.cloneNode(true);
+    node.dataset.pair = key;
+    node.querySelector('.close').addEventListener('click', function () {
+      // Closing it IS turning it off. A window that comes back on the
+      // next poll because the setting still says so is a window the
+      // trader cannot get rid of.
+      showFairWindow(key, false);
+    });
+    node.querySelectorAll('.fw-cog, .open-exits').forEach(function (cog) {
+      cog.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var ladder = document.querySelector(
+          '.ladder[data-pair="' + cssEscape(key) + '"]');
+        if (ladder) { openLadderSettings(ladder, key); }
+        else { toast('open the ' + key + ' ladder to reach its settings'); }
+      });
+    });
+    el('desktop').appendChild(node);
+    return node;
+  }
+
+  function showFairWindow(key, on) {
+    /* The setting is the window: saved to the pair, applied at once. */
+    setPair(key, {show_fair_window: !!on});
+    var row = (state.snapshot.pairs || {})[key];
+    if (row) { row.show_fair_window = !!on; }      // before the next poll
+    if (!on) {
+      var node = document.querySelector(
+        '.fairwin[data-pair="' + cssEscape(key) + '"]');
+      if (node) { node.remove(); }
+    }
+    fetch('/api/pairs/' + encodeURIComponent(key), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({show_fair_window: !!on})
+    }).catch(function () { /* the engine already has it */ });
+  }
+
+  function renderFairWindow(key, row) {
+    var node = fairNode(key);
+    var name = row.name || key;
+    var title = node.querySelector('.fw-pair');
+    // Named across the top: two of these open at once are otherwise two
+    // identical tables of numbers with nothing to say which instrument
+    // either belongs to.
+    title.textContent = name;
+    title.title = key + ' — leg A ' + (row.symbol_a || '?') + ', leg B '
+      + (row.symbol_b || '?');
+    renderFair(node, row);
+  }
 
   function wireLadder(node, key) {
     node.querySelector('.close').addEventListener('click', function () {
@@ -830,6 +910,7 @@
     ['.ls-tif', 'time_in_force', 'text'],
     ['.ls-overnight', 'overnight', 'text'],
     ['.ls-auto-route', 'auto_route', 'check'],
+    ['.ls-fair-window', 'show_fair_window', 'check'],
     ['.ls-increment', 'increment', 'number'],
     ['.ls-rows', 'rows', 'number'],
     ['.ls-qty', 'default_quantity', 'number'],
@@ -1017,33 +1098,6 @@
 
     setValue(node.querySelector('.order-type'), row.order_type);
     setValue(node.querySelector('.tif'), row.time_in_force);
-    var overnight = node.querySelector('.x-overnight');
-    if (overnight) {
-      // Read-only here: the overnight rule is EXIT logic and lives in
-      // this ladder's settings, beside the other two things that decide
-      // where a position ends.
-      overnight.textContent = OVERNIGHT_WORDS[row.overnight] || row.overnight;
-      overnight.title = 'what happens to an OPEN POSITION at the session '
-        + 'cutoff — change it in this ladder\u2019s settings';
-    }
-    var armed = node.querySelector('.auto-route-state');
-    if (armed) {
-      // What is ACTUALLY resting, not what the switch says. A target
-      // believed to be armed when it is not is the worse failure — and
-      // it is the reason a re-arm after a restart is announced rather
-      // than done quietly.
-      var orders = row.auto_route_armed || [];
-      armed.textContent = orders.length
-        ? 'out ' + fmt(orders[0].level, digitsFor(row.increment))
-        : (row.auto_route ? 'on' : 'off');
-      armed.className = 'auto-route-state' + (orders.length ? ' armed' : '');
-      armed.title = orders.length
-        ? 'a working order is resting to close this position — a target, '
-          + 'and no stop'
-        : (row.auto_route
-            ? 'on: the next fill arms a target at the take-profit'
-            : 'off');
-    }
     setValue(node.querySelector('.increment'), row.increment);
 
     // One box per SIDE, each beside the button that sends it. Never
@@ -1142,7 +1196,6 @@
       ' per 1.00';
     node.querySelector('.errors').textContent = (row.errors || []).join(' ');
     renderLegBook(node, row, market);
-    renderFair(node, row);
     return node;
   }
 
@@ -1172,23 +1225,6 @@
     if (legs.parentNode !== footer) { footer.appendChild(legs); }
     legs.innerHTML = legFeed(row, market);
 
-    // Fair value and the exit belong UNDER the two books they are read
-    // off, not in a 100px rail beside the ladder. Moved at render time
-    // for the same reason the leg table is: a page served from a
-    // template an older process cached can have them anywhere, and
-    // where they sit is not a detail.
-    var below = node.querySelector('.below-legs');
-    if (!below) {
-      below = document.createElement('div');
-      below.className = 'below-legs';
-      footer.insertBefore(below, legs.nextSibling);
-    } else if (below.previousSibling !== legs) {
-      footer.insertBefore(below, legs.nextSibling);
-    }
-    ['.fair', '.exit'].forEach(function (selector) {
-      var panel = node.querySelector(selector);
-      if (panel && panel.parentNode !== below) { below.appendChild(panel); }
-    });
   }
 
   function renderFair(node, row) {
@@ -1251,6 +1287,36 @@
       fix.textContent = 'set ' + fair.fix.field.replace(/_/g, ' ') +
         ' = ' + fmt(fair.fix.value, 2);
       fix.onclick = function () { applyCarryFix(row.key, fair.fix); };
+    }
+    // The other two things that decide where a position ends, beside
+    // the two figures that price it: read-only here, because both are
+    // set in the ladder's own settings.
+    var overnight = node.querySelector('.x-overnight');
+    if (overnight) {
+      // Read-only here: the overnight rule is EXIT logic and lives in
+      // this ladder's settings, beside the other two things that decide
+      // where a position ends.
+      overnight.textContent = OVERNIGHT_WORDS[row.overnight] || row.overnight;
+      overnight.title = 'what happens to an OPEN POSITION at the session '
+        + 'cutoff — change it in this ladder\u2019s settings';
+    }
+    var armed = node.querySelector('.auto-route-state');
+    if (armed) {
+      // What is ACTUALLY resting, not what the switch says. A target
+      // believed to be armed when it is not is the worse failure — and
+      // it is the reason a re-arm after a restart is announced rather
+      // than done quietly.
+      var orders = row.auto_route_armed || [];
+      armed.textContent = orders.length
+        ? 'out ' + fmt(orders[0].level, digitsFor(row.increment))
+        : (row.auto_route ? 'on' : 'off');
+      armed.className = 'auto-route-state' + (orders.length ? ' armed' : '');
+      armed.title = orders.length
+        ? 'a working order is resting to close this position — a target, '
+          + 'and no stop'
+        : (row.auto_route
+            ? 'on: the next fill arms a target at the take-profit'
+            : 'off');
     }
     renderExit(node, row);
   }
@@ -2651,6 +2717,13 @@
     Object.keys(snapshot.pairs || {}).forEach(function (key) {
       var id = panelId('ladder', key);
       if (wanted[id]) { renderLadder(key, snapshot.pairs[key]); }
+      // The pair's own setting IS whether this window exists: it is
+      // not something separately opened and closed, or the two would
+      // disagree and the window would come back by itself.
+      if (snapshot.pairs[key].show_fair_window) {
+        wanted[panelId('fair', key)] = true;
+        renderFairWindow(key, snapshot.pairs[key]);
+      }
     });
     if (wanted[panelId('grid')]) { renderGrid(); }
     if (wanted[panelId('monitor')]) { renderMonitor(); }

@@ -1351,6 +1351,7 @@ class Coordinator:
                 # at the take-profit, priced from the actual fill. A
                 # target and NO stop — the panel says so in words.
                 'auto_route': pair.auto_route,
+                'show_fair_window': pair.show_fair_window,
                 'auto_route_armed': [
                     {'position_id': o.position_id, 'level': o.level,
                      'order_id': o.order_id, 'quantity': o.remaining}

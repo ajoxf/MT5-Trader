@@ -261,7 +261,8 @@ class PairConfig:
                  auto_route=False, commission_per_lot_a=None,
                  commission_per_lot_b=None, slippage_allowance=None,
                  break_even_nights=None, tp_target_pct_of_margin=None,
-                 bid_ask_round_trip_override=None, carry_rate_pct=None):
+                 bid_ask_round_trip_override=None, carry_rate_pct=None,
+                 show_fair_window=False):
         self.key = key
         self.name = name or key
         self.leg_a = dict(leg_a or {})      # {'account': ..., 'symbol': ...}
@@ -326,6 +327,11 @@ class PairConfig:
         self.bid_ask_round_trip_override = _blank_to_none(
             bid_ask_round_trip_override)
         self.carry_rate_pct = _blank_to_none(carry_rate_pct)
+        #: Show this pair's fair value and exit in their OWN window.
+        #: Off by default: the ladder is for the price, and a panel of
+        #: derived figures beside it is a panel between the trader and
+        #: the market. On, it floats where the trader puts it.
+        self.show_fair_window = bool(show_fair_window)
         #: Cached MT5 metadata per leg, refreshed by the coordinator.
         self.meta_a = {}
         self.meta_b = {}
@@ -437,7 +443,8 @@ class PairConfig:
                    'swap_a_long_per_lot', 'swap_a_short_per_lot',
                    'swap_b_long_per_lot', 'swap_b_short_per_lot',
                    'order_type', 'time_in_force', 'overnight', 'increment',
-                   'default_quantity', 'quoting_leg', 'rows')
+                   'default_quantity', 'quoting_leg', 'rows',
+                   'show_fair_window')
                   + tuple(EXIT_FIELDS))
 
     def apply_hot(self, raw):
@@ -454,7 +461,7 @@ class PairConfig:
             if field in self.EXIT_FIELDS or field == 'swap_per_day' or (
                     field.startswith('swap_') and field.endswith('_per_lot')):
                 value = _blank_to_none(value)
-            elif field == 'auto_route':
+            elif field in ('auto_route', 'show_fair_window'):
                 value = bool(value)
             elif field == 'order_type':
                 value = OrderType(value)
@@ -500,6 +507,7 @@ class PairConfig:
             'tp_target_pct_of_margin': self.tp_target_pct_of_margin,
             'bid_ask_round_trip_override': self.bid_ask_round_trip_override,
             'carry_rate_pct': self.carry_rate_pct,
+            'show_fair_window': self.show_fair_window,
         }
 
     @classmethod

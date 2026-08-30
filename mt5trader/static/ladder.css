@@ -161,6 +161,7 @@ body {
 .window.sized > .body,
 .window.sized > .pane,
 .window.sized > .grid,
+.window.sized > .fw-body,
 .window.sized > .settings-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -1273,23 +1274,23 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
 .rail .route-eq { font-variant-numeric: tabular-nums; opacity: .95; }
 
 
-/* Fair value and the exit, under the two books they are read off.
- * Side by side, because each is a narrow table and stacking them
- * pushes the ladder off a laptop screen. */
-.footer .below-legs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: flex-start;
-  width: 100%;
+/* Fair value and the exit, in a window of their own — off by default,
+ * and per pair. The pair is named across the title bar because two of
+ * these open at once are otherwise two identical tables of figures
+ * with nothing to say which instrument either belongs to. */
+.window.fairwin { width: 230px; }
+.window.fairwin .titlebar .fw-pair {
+  font-weight: 700;
+  letter-spacing: .02em;
 }
-.footer .below-legs .fair,
-.footer .below-legs .exit {
-  flex: 0 0 auto;
-  min-width: 132px;
-  margin-top: 0;
+.window.fairwin .fw-body {
+  padding: 4px;
+  background: var(--panel, #f2f1ec);
+  overflow: auto;
 }
-.footer .below-legs table.exits { width: 100%; }
+.window.fairwin .fair,
+.window.fairwin .exit { margin-top: 0; margin-bottom: 4px; }
+.window.fairwin table.exits { width: 100%; }
 /* The way in to the fields these panels are computed from. */
 .rail-label .cog {
   float: right;

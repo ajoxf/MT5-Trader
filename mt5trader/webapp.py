@@ -902,7 +902,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                       'commission_per_lot_a', 'commission_per_lot_b',
                       'slippage_allowance', 'break_even_nights',
                       'tp_target_pct_of_margin',
-                      'bid_ask_round_trip_override', 'carry_rate_pct'):
+                      'bid_ask_round_trip_override', 'carry_rate_pct',
+                      'show_fair_window'):
             if field in payload:
                 pair[field] = payload[field]
         # A date that will not parse is REPORTED and the old value kept:

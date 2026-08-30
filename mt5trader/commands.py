@@ -158,6 +158,8 @@ class CommandRunner:
         #: AutoRouting: on a fill, rest a working order to close at the
         #: take-profit. Default OFF, and it arms a target and NO STOP.
         'auto_route': bool,
+        #: This pair's fair value and exit, in their own window.
+        'show_fair_window': bool,
     }
 
     def _do_click(self, payload):

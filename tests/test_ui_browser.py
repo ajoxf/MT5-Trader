@@ -56,6 +56,9 @@ class Publisher:
         #: AutoRouting: the switch, and what is ACTUALLY resting.
         self.auto_route = False
         self.auto_route_armed = None
+        #: The fair-value window is per pair and off by default; the
+        #: fixture turns it on so the panels it holds can be read.
+        self.show_fair_window = True
         self.live = threading.Event()
         self.live.set()
         self.stop = threading.Event()
@@ -71,7 +74,8 @@ class Publisher:
         payload = snapshot(self.order_type, self.confirm, self.same_login,
                            self.stale_leg, self.dead_orders, self.exits,
                            self.positions, self.unclaimed, self.fair,
-                           self.auto_route, self.auto_route_armed)
+                           self.auto_route, self.auto_route_armed,
+                           self.show_fair_window)
         if at is not None:
             payload['at'] = at
         tmp = self.path + '.tmp'
@@ -109,7 +113,8 @@ def server(tmp_path_factory):
 def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              stale_leg=False, dead_orders=None, exits=None,
              positions=None, unclaimed=None, fair=None,
-             auto_route=False, auto_route_armed=None):
+             auto_route=False, auto_route_armed=None,
+             show_fair_window=True):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -155,6 +160,7 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'order_type': order_type, 'time_in_force': 'DAY',
                 'overnight': 'ALLOW', 'default_quantity': 1.0,
                 'auto_route': auto_route,
+                'show_fair_window': show_fair_window,
                 'auto_route_armed': auto_route_armed or [],
                 'clip_lots_a': 0.1, 'clip_lots_b': 0.1, 'spread_units': 10.0,
                 'short_spread': 59.09, 'long_spread': 59.11,
@@ -1790,15 +1796,15 @@ def test_the_exit_price_is_on_the_rail_for_both_directions(page):
         'note': '2% of 500.00 margin per spread = 10.00, over commission'}
     page.paths['publisher'].publish()
     page.wait_for_function(
-        "() => document.querySelector('.ladder .tp-buy')"
-        " && document.querySelector('.ladder .tp-buy').textContent"
+        "() => document.querySelector('.fairwin .tp-buy')"
+        " && document.querySelector('.fairwin .tp-buy').textContent"
         " === '60.21'", timeout=5000)
 
-    assert page.text_content('.ladder .be-buy') == '59.21'
-    assert page.text_content('.ladder .tp-sell') == '57.99'
+    assert page.text_content('.fairwin .be-buy') == '59.21'
+    assert page.text_content('.fairwin .tp-sell') == '57.99'
     # The long wording is the tooltip; the rail carries the short form.
-    assert '2% of' in page.text_content('.ladder .exit-note')
-    assert 'over commission' in page.get_attribute('.ladder .exit-note',
+    assert '2% of' in page.text_content('.fairwin .exit-note')
+    assert 'over commission' in page.get_attribute('.fairwin .exit-note',
                                                     'title')
 
     # A position that is ON gets its own line, anchored on the price it
@@ -1811,9 +1817,9 @@ def test_the_exit_price_is_on_the_rail_for_both_directions(page):
         'exit': {'break_even': 59.21, 'tp': 60.21, 'side': 'BUY'}}]
     page.paths['publisher'].publish()
     page.wait_for_function(
-        "() => document.querySelector('.ladder .exit-note')"
+        "() => document.querySelector('.fairwin .exit-note')"
         ".textContent.indexOf('out') >= 0", timeout=5000)
-    assert 'flat at 59.2100' in page.get_attribute('.ladder .exit-note',
+    assert 'flat at 59.2100' in page.get_attribute('.fairwin .exit-note',
                                                     'title')
 
     page.paths['publisher'].exits = None
@@ -1834,19 +1840,19 @@ def test_the_fair_spread_is_quoted_for_both_directions(page):
         'note': "30 nights of the broker's own swap, over k"}
     page.paths['publisher'].publish()
     page.wait_for_function(
-        "() => document.querySelector('.ladder .fair-buy')"
-        " && document.querySelector('.ladder .fair-buy').textContent"
+        "() => document.querySelector('.fairwin .fair-buy')"
+        " && document.querySelector('.fairwin .fair-buy').textContent"
         " === '0.60'", timeout=5000)
 
-    assert page.text_content('.ladder .fair-sell') == '0.40'
+    assert page.text_content('.fairwin .fair-sell') == '0.40'
     # Rich on the buy side, cheap on the sell side — and the sign is
     # said in colour as well, because the direction of a basis is the
     # thing everyone gets backwards once.
-    assert page.text_content('.ladder .gap-buy') == '+0.15'
-    assert 'down' in (page.get_attribute('.ladder .gap-buy', 'class') or '')
-    assert 'up' in (page.get_attribute('.ladder .gap-sell', 'class') or '')
-    assert '30d' in page.text_content('.ladder .fair-note')
-    assert page.is_hidden('.ladder .fair-warn')
+    assert page.text_content('.fairwin .gap-buy') == '+0.15'
+    assert 'down' in (page.get_attribute('.fairwin .gap-buy', 'class') or '')
+    assert 'up' in (page.get_attribute('.fairwin .gap-sell', 'class') or '')
+    assert '30d' in page.text_content('.fairwin .fair-note')
+    assert page.is_hidden('.fairwin .fair-warn')
 
     page.paths['publisher'].fair = None
     page.paths['publisher'].publish()
@@ -1871,47 +1877,58 @@ def test_a_disputed_swap_replaces_the_reading_and_offers_the_correction(page):
         'disputed': {'fair_buy': -51.82, 'fair_sell': -51.82}}
     page.paths['publisher'].publish()
     page.wait_for_function(
-        "() => document.querySelector('.ladder .fair-warn')"
-        " && !document.querySelector('.ladder .fair-warn').hidden",
+        "() => document.querySelector('.fairwin .fair-warn')"
+        " && !document.querySelector('.fairwin .fair-warn').hidden",
         timeout=5000)
 
     # The number is GONE, not printed beneath the warning.
-    assert page.text_content('.ladder .fair-buy') == '—'
-    assert 'CREDIT' in page.text_content('.ladder .fair-warn-text')
-    assert 'swap a long per lot' in page.text_content('.ladder .fair-fix')
-    assert '-58.00' in page.text_content('.ladder .fair-fix')
+    assert page.text_content('.fairwin .fair-buy') == '—'
+    assert 'CREDIT' in page.text_content('.fairwin .fair-warn-text')
+    assert 'swap a long per lot' in page.text_content('.fairwin .fair-fix')
+    assert '-58.00' in page.text_content('.fairwin .fair-fix')
 
     page.paths['publisher'].fair = None
     page.paths['publisher'].publish()
 
 
-def test_fair_value_and_the_exit_sit_UNDER_the_two_legs_books(page):
-    """Prices first, then what they imply. Both panels are read off the
-    two legs' books, and the rail beside the ladder is 100px wide —
-    which is no place for two tables of figures.
+def test_fair_value_and_the_exit_live_in_their_OWN_window(page):
+    """The ladder is for the price. A panel of derived figures beside it
+    is a panel between the trader and the market, so fair value and the
+    exit are a separate window — off by default, per pair, and floating
+    where it is put.
 
-    Asserted on the rendered page rather than on the template, because
-    a page served from a template an older process cached can have them
-    anywhere: where they sit is not a detail."""
+    And the pair is named across the top of it: two of these open at
+    once are otherwise two identical tables of figures with nothing to
+    say which instrument either belongs to.
+    """
     open_ladder(page)
-    page.wait_for_selector('.ladder .footer .below-legs .exit', timeout=5000)
+    page.wait_for_selector('.window.fairwin .exit', timeout=5000)
 
-    boxes = page.evaluate("""() => {
-        const node = document.querySelector('.window.ladder');
-        const legs = node.querySelector('.footer .legs')
-            .getBoundingClientRect();
-        const fair = node.querySelector('.fair').getBoundingClientRect();
-        const exit = node.querySelector('.exit').getBoundingClientRect();
-        return {legsBottom: legs.bottom, fairTop: fair.top,
-                exitTop: exit.top,
-                inFooter: !!node.querySelector('.footer .fair')
-                    && !!node.querySelector('.footer .exit'),
-                inRail: !!node.querySelector('.rail .exit')};
-    }""")
+    assert page.locator('.window.ladder .fair').count() == 0
+    assert page.locator('.window.ladder .exit').count() == 0
+    assert page.text_content('.window.fairwin .fw-pair') == 'Gold basis'
+    assert 'XAUUSD_' in page.get_attribute('.window.fairwin .fw-pair', 'title')
 
-    assert boxes['inFooter'] and not boxes['inRail']
-    assert boxes['fairTop'] >= boxes['legsBottom'] - 1
-    assert boxes['exitTop'] >= boxes['legsBottom'] - 1
+
+def test_turning_the_window_off_closes_it_and_KEEPS_it_closed(page):
+    """Closing it IS turning it off. A window that comes back on the
+    next poll because the setting still says so is a window the trader
+    cannot get rid of."""
+    open_ladder(page)
+    page.wait_for_selector('.window.fairwin', timeout=5000)
+
+    page.paths['publisher'].show_fair_window = False
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => !document.querySelector('.window.fairwin')", timeout=5000)
+
+    # ...and it stays gone across the polls that follow.
+    page.wait_for_timeout(600)
+    assert page.locator('.window.fairwin').count() == 0
+
+    page.paths['publisher'].show_fair_window = True
+    page.paths['publisher'].publish()
+    page.wait_for_selector('.window.fairwin', timeout=5000)
 
 
 def test_the_settings_behind_the_exit_are_one_click_from_it(page):
@@ -1920,7 +1937,7 @@ def test_the_settings_behind_the_exit_are_one_click_from_it(page):
     settings, because the next ladder is a different instrument."""
     open_ladder(page)
 
-    page.click('.ladder .exit .open-exits')
+    page.click('.fairwin .exit .open-exits')
     page.wait_for_selector('.ladder .ladder-settings .ls-tp', timeout=5000)
 
     assert page.text_content('.ladder .ls-pair') == 'XAUUSD_|GC1226'
@@ -1959,7 +1976,7 @@ def test_autorouting_says_what_is_armed_and_that_there_is_no_stop(page):
     ladder\'s settings, because one ladder can arm AutoRouting and the
     next not."""
     open_ladder(page)
-    assert page.text_content('.ladder .auto-route-state') == 'off'
+    assert page.text_content('.fairwin .auto-route-state') == 'off'
 
     page.paths['publisher'].auto_route = True
     page.paths['publisher'].auto_route_armed = [
@@ -1967,18 +1984,18 @@ def test_autorouting_says_what_is_armed_and_that_there_is_no_stop(page):
          'quantity': 1.0}]
     page.paths['publisher'].publish()
     page.wait_for_function(
-        "() => document.querySelector('.ladder .auto-route-state')"
+        "() => document.querySelector('.fairwin .auto-route-state')"
         ".textContent.indexOf('60.21') >= 0", timeout=5000)
-    assert 'no stop' in page.get_attribute('.ladder .auto-route-state',
+    assert 'no stop' in page.get_attribute('.fairwin .auto-route-state',
                                            'title')
 
     # On, but nothing resting yet — and it says which of the two it is.
     page.paths['publisher'].auto_route_armed = []
     page.paths['publisher'].publish()
     page.wait_for_function(
-        "() => document.querySelector('.ladder .auto-route-state')"
+        "() => document.querySelector('.fairwin .auto-route-state')"
         ".textContent === 'on'", timeout=5000)
-    assert 'next fill' in page.get_attribute('.ladder .auto-route-state',
+    assert 'next fill' in page.get_attribute('.fairwin .auto-route-state',
                                              'title')
 
     # ...and the switch, with the NO STOP caveat, is in this ladder\'s
@@ -2065,14 +2082,14 @@ def test_the_exit_box_shows_the_figures_it_is_built_from(page):
         'note': '2% of 500.00 margin per spread = 10.00, over commission'}
     page.paths['publisher'].publish()
     page.wait_for_function(
-        "() => document.querySelector('.ladder .x-comm')"
-        " && document.querySelector('.ladder .x-comm').textContent"
+        "() => document.querySelector('.fairwin .x-comm')"
+        " && document.querySelector('.fairwin .x-comm').textContent"
         " !== '\\u2014'", timeout=5000)
 
-    assert page.text_content('.ladder .x-width') == '0.02'
-    assert page.text_content('.ladder .x-comm') == '$1.00'
-    assert page.text_content('.ladder .x-target') == '$10.00'
-    assert '2% of' in page.get_attribute('.ladder .x-target', 'title')
+    assert page.text_content('.fairwin .x-width') == '0.02'
+    assert page.text_content('.fairwin .x-comm') == '$1.00'
+    assert page.text_content('.fairwin .x-target') == '$10.00'
+    assert '2% of' in page.get_attribute('.fairwin .x-target', 'title')
 
     # Nothing overflows the rail it lives in.
     fits = page.evaluate("""() => {
