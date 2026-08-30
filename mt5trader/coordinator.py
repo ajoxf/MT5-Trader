@@ -590,11 +590,21 @@ class Coordinator:
         """
         now = self.session_clock.broker_now() or datetime.now()
         expiry = pair.effective_expiry('b')
+        # A CALENDAR is decided when its near leg expires, so that is
+        # where the carry runs to. Running it to the far leg prices a
+        # trade that is already over.
+        kind = algo_module.pair_kind(pair, pair.effective_expiry('a'), expiry)
+        nights, kind_note = algo_module.carry_nights(
+            kind,
+            fairvalue.days_to_expiry(pair.effective_expiry('a'), now),
+            fairvalue.days_to_expiry(expiry, now))
         if pair.swap_per_day is not None:
             body = fairvalue.describe((md or {}).get('spread'),
                                       pair.swap_per_day, expiry, now)
             body['source'] = 'typed'
             body['expects_expiry'] = pair.expects_expiry()
+            body['kind'] = kind
+            body['kind_note'] = kind_note
             # Reported in the SAME shape as the swap-priced reading, so
             # the panel has one thing to draw — and so the gap is
             # measured against the two prices each direction would
@@ -607,16 +617,18 @@ class Coordinator:
                 body[key] = (None if fair is None or level is None
                              else level - fair)
             return body
-        days = fairvalue.days_to_expiry(expiry, now)
-        return carry.describe(
+        body = carry.describe(
             pair.meta_a, pair.meta_b, pair.hedge_ratio,
             pair.clip_lots_a, pair.clip_lots_b,
             sizing.spread_units(pair.clip_lots_b,
                                 (pair.meta_b or {}).get('contract_size')),
-            days, market=md, overrides=pair.swap_overrides(),
-            expects_expiry=pair.expects_expiry(),
+            nights, market=md, overrides=pair.swap_overrides(),
+            expects_expiry=(kind != algo_module.RELATED),
             rate_pct=pair.exit_settings(
                 self.config.settings).get('CARRY_RATE_PCT'))
+        body['kind'] = kind
+        body['kind_note'] = kind_note
+        return body
 
     def work_auto_route(self, pair, md):
         """Arm — and keep honest — the closing orders AutoRouting rests.
@@ -1384,6 +1396,10 @@ class Coordinator:
                 'key': key, 'name': pair.name, 'enabled': pair.enabled,
                 'account_a': pair.account_a, 'account_b': pair.account_b,
                 'symbol_a': pair.symbol_a, 'symbol_b': pair.symbol_b,
+                # What KIND of pair this is — the operator's own
+                # declaration, and the only thing that says whether a
+                # fair spread applies at all.
+                'pair_type': pair.pair_type,
                 'hedge_ratio': pair.hedge_ratio,
                 'hedge_ratio_for': pair.hedge_ratio_for,
                 'increment': pair.effective_increment(),

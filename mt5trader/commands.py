@@ -163,6 +163,10 @@ class CommandRunner:
         #: trade, and a click on the ladder is unaffected either way.
         'algo': str,
         'algo_window': bool,
+        #: Spot vs future, calendar, or two different instruments. It
+        #: decides whether a fair spread applies at all, and it is
+        #: DECLARED: two expiries do not make a calendar.
+        'pair_type': lambda v: str(v or 'SPOT_FUTURE').upper(),
         #: The name the window toggle had before there were two algos.
         'show_fair_window': bool,
     }

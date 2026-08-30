@@ -720,6 +720,12 @@
         if (e.target.classList.contains('inherited')) {
           e.target.classList.remove('inherited');
         }
+        // Which legs have an expiry follows the pair type, and it must
+        // follow it as it is CHANGED — not only when the pane opens.
+        if (e.target.classList.contains('ls-pair-type')) {
+          var pane = node.querySelector('.ladder-settings');
+          fairKindFields(pane, {pair_type: e.target.value});
+        }
       });
 
     node.querySelector('.lock-scroll').addEventListener('change', function (e) {
@@ -974,6 +980,7 @@
     ['.ls-roundtrip', 'bid_ask_round_trip_override', 'inherit',
      'BID_ASK_ROUND_TRIP_OVERRIDE'],
     ['.ls-carry-rate', 'carry_rate_pct', 'inherit', 'CARRY_RATE_PCT'],
+    ['.ls-pair-type', 'pair_type', 'live'],
     ['.ls-expiry-a', 'expiry_a', 'text'],
     ['.ls-expiry', 'expiry', 'text'],
     ['.ls-swap-a-long', 'swap_a_long_per_lot', 'text'],
@@ -1060,7 +1067,8 @@
         }
         input.value = (own === null || own === undefined) ? '' : own;
       });
-      fairKindFields(pane, saved);
+      fairKindFields(pane, {pair_type: saved.pair_type
+        || live.pair_type || 'SPOT_FUTURE'});
       measuredSlippageInto(pane);
     }).catch(function (e) {
       toast('could not read this pair: ' + e);

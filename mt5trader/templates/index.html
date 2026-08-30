@@ -353,6 +353,17 @@
             Clicks on the ladder are unaffected.</div>
         <div class="ls-group">
           <h4>Carry <small class="ls-pairtype"></small></h4>
+          <!-- DECLARED, not inferred. Two futures with two expiries are
+               not a calendar: UKOILV6 against USOILV6 is Brent against
+               WTI, which is two different instruments with no carry
+               between them, and nothing in an expiry says whether two
+               contracts share an underlying. -->
+          <label class="lsf"><span>Pair type</span>
+            <select class="ls-pair-type" title="Spot vs Future and Calendar have a fair spread — the carry to expiry. Related does not: nothing forces two different instruments together, so there is nothing to quote.">
+              <option value="SPOT_FUTURE">Spot vs Future</option>
+              <option value="FUTURE_FUTURE">Calendar (same underlying)</option>
+              <option value="RELATED">Related (no fair spread)</option>
+            </select></label>
           <!-- An expiry belongs to a CONTRACT. Spot has none, and a
                field asking for one is a field the operator will either
                fill in wrongly or spend a minute deciding to leave

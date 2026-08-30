@@ -54,23 +54,20 @@ RELATED = 'RELATED'
 def pair_kind(pair, expiry_a=None, expiry_b=None):
     """Spot vs future, calendar, or two different instruments.
 
-    The configured `pair_type` is what the operator SAID; the expiries
-    are what the contracts ARE. Where they disagree the expiries win
-    for the arithmetic — a leg with a date is a contract that expires,
-    whatever the pair was labelled — but only to narrow, never to
-    invent a basis between two instruments that have none.
+    The OPERATOR declares it. This used to be inferred — both legs
+    carry an expiry, so call it a calendar — and that is wrong in the
+    one case it matters: UKOILV6 against USOILV6 is two futures with
+    two dates and NO carry between them, because Brent and WTI are
+    different oil. A calendar is the same underlying in two months,
+    and nothing in a symbol's expiry says whether two contracts share
+    an underlying.
+
+    So the declaration is authoritative and the dates never change it.
+    A pair declared RELATED has no fair spread however many expiries
+    its legs report.
     """
     said = (getattr(pair, 'pair_type', None) or SPOT_FUTURE).upper()
-    if said == RELATED:
-        return RELATED
-    has_a, has_b = bool(expiry_a), bool(expiry_b)
-    if has_a and has_b:
-        return FUTURE_FUTURE
-    if has_b:
-        return SPOT_FUTURE
-    # Leg B with no date is not a future. Say what it is rather than
-    # pricing a carry to a date nobody has given.
-    return said if said in (SPOT_FUTURE, FUTURE_FUTURE) else RELATED
+    return said if said in (SPOT_FUTURE, FUTURE_FUTURE, RELATED) else RELATED
 
 
 def carry_nights(kind, days_a, days_b):

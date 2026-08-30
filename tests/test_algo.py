@@ -42,6 +42,7 @@ def test_a_spot_and_a_future_carries_to_the_futures_expiry(pair):
 def test_a_calendar_carries_to_the_NEAR_expiry(pair):
     """Two futures: the spread is decided when the FIRST one expires.
     Running the carry to the far leg prices a trade that is over."""
+    pair.pair_type = 'FUTURE_FUTURE'
     kind = algo.pair_kind(pair, expiry_a='2026-09-26', expiry_b='2026-12-26')
     assert kind == algo.FUTURE_FUTURE
 
@@ -65,15 +66,23 @@ def test_two_different_instruments_have_no_date_at_all(pair):
     assert nights is None and 'no date' in note
 
 
-def test_the_expiries_narrow_what_the_operator_said(pair):
-    """A pair labelled spot/future whose leg A turns out to have an
-    expiry IS a calendar, and the arithmetic follows the contracts. It
-    never invents a basis between two instruments that have none."""
-    pair.pair_type = 'SPOT_FUTURE'
-    assert algo.pair_kind(pair, '2026-09-26', '2026-12-26') == \
-        algo.FUTURE_FUTURE
+def test_two_expiries_do_NOT_make_a_calendar(pair):
+    """The fault this replaced. UKOILV6 against USOILV6 is two futures
+    with two dates and NO carry between them — Brent and WTI are
+    different oil — and nothing in an expiry says whether two contracts
+    share an underlying. Inferred, that pair got a fair value with
+    nothing behind it.
+
+    The operator declares it, and the dates never overrule them."""
     pair.pair_type = 'RELATED'
     assert algo.pair_kind(pair, '2026-09-26', '2026-12-26') == algo.RELATED
+    nights, note = algo.carry_nights(algo.RELATED, 30, 121)
+    assert nights is None and 'no date' in note
+
+    # ...and a pair the operator DID declare a calendar still is one.
+    pair.pair_type = 'FUTURE_FUTURE'
+    assert algo.pair_kind(pair, '2026-09-26', '2026-12-26') == \
+        algo.FUTURE_FUTURE
 
 
 # -- the line an algo must not cross -------------------------------------

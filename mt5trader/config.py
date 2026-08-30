@@ -545,7 +545,7 @@ class PairConfig:
                    'swap_b_long_per_lot', 'swap_b_short_per_lot',
                    'order_type', 'time_in_force', 'overnight', 'increment',
                    'default_quantity', 'quoting_leg', 'rows',
-                   'algo', 'algo_window', 'show_fair_window')
+                   'algo', 'algo_window', 'show_fair_window', 'pair_type')
                   + tuple(EXIT_FIELDS))
 
     def apply_hot(self, raw):
@@ -567,6 +567,8 @@ class PairConfig:
                 value = bool(value)
             elif field == 'algo':
                 value = _algo_name(value)
+            elif field == 'pair_type':
+                value = str(value or 'SPOT_FUTURE').upper()
             elif field == 'order_type':
                 value = OrderType(value)
             elif field == 'time_in_force':

@@ -187,6 +187,7 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'account_a': 'acct_a', 'account_b': 'acct_b',
                 'symbol_a': 'XAUUSD_', 'symbol_b': 'GC1226',
                 'hedge_ratio': 1.0, 'hedge_ratio_for': 'XAUUSD_|GC1226',
+                'pair_type': 'SPOT_FUTURE',
                 'increment': 0.01, 'increment_derived': 0.01,
                 'order_type': order_type, 'time_in_force': 'DAY',
                 'overnight': 'ALLOW', 'default_quantity': 1.0,
@@ -2996,3 +2997,35 @@ def test_a_stalled_engine_is_not_called_a_dead_one(page):
     page.wait_for_function(
         "() => document.getElementById('link-badge')"
         ".textContent.indexOf('STALLED') < 0", timeout=WAIT)
+
+
+def test_the_pair_type_is_declared_and_the_expiries_follow_it(page):
+    """Two futures with two expiries are NOT a calendar. UKOILV6
+    against USOILV6 is Brent against WTI: two different instruments
+    with no carry between them, and nothing in an expiry says whether
+    two contracts share an underlying. So the operator declares it —
+    and the form follows the declaration as it is changed, not only
+    when it opens."""
+    open_ladder(page)
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-pair-type', timeout=WAIT)
+
+    page.select_option('.ladder .ls-pair-type', 'FUTURE_FUTURE')
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .ls-pairtype')"
+        ".textContent.indexOf('two futures') >= 0", timeout=WAIT)
+    assert page.locator('.ladder .ls-expiry-a').is_enabled()
+    assert 'NEAR' in page.text_content('.ladder .ls-pairtype')
+
+    page.select_option('.ladder .ls-pair-type', 'RELATED')
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .ls-pairtype')"
+        ".textContent.indexOf('no fair spread') >= 0", timeout=WAIT)
+    assert page.locator('.ladder .ls-expiry-a').is_disabled()
+    assert page.locator('.ladder .ls-expiry').is_disabled()
+
+    page.select_option('.ladder .ls-pair-type', 'SPOT_FUTURE')
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .ls-pairtype')"
+        ".textContent.indexOf('only leg B') >= 0", timeout=WAIT)
+    page.click('.ladder .ls-close')
