@@ -434,19 +434,21 @@
      * trader has put it somewhere. */
     var desktop = desktopBox();
     if (!desktop.width) { return; }
-    // Width only. Its HEIGHT is whatever the figures need — a fixed one
-    // leaves a panel of empty grey under two short tables, and screen
-    // beside a ladder is not spare.
-    var width = 240;
+    // NEITHER dimension is set. The window is as wide as its widest row
+    // and as tall as its figures — fix either one and the difference
+    // comes back as empty grey, beside a ladder, where screen is not
+    // spare. It is still dragged and resized like anything else; that
+    // is when a size gets remembered.
     node.classList.add('sized');
-    node.style.width = width + 'px';
+    node.style.width = '';
     node.style.height = 'auto';
     var open = document.querySelectorAll('.window.fairwin').length;
+    var width = node.getBoundingClientRect().width || 240;
     var left = Math.max(desktop.width - width - 12 - (open - 1) * 18, 8);
     var top = Math.min(30 + (open - 1) * 20, Math.max(desktop.height - 260, 0));
     var at = place(node, left, top);
     node.style.zIndex = nextZ();
-    layout[id] = {left: at.left, top: at.top, z: topZ, w: width};
+    layout[id] = {left: at.left, top: at.top, z: topZ};
     writeLayout();
   }
 

@@ -2062,6 +2062,46 @@ def test_the_fair_window_is_no_bigger_than_the_figures_in_it(page):
     # Narrower than a ladder, and no taller than what is in it.
     assert box['width'] <= box['ladder'] * 0.75, box
     assert box['height'] <= box['content'] + 8, box
+
+    # And no CORRIDOR: on every row the figure follows its label rather
+    # than sitting against the far edge with nothing in between. That
+    # empty middle was most of the window.
+    gaps = page.evaluate("""() => {
+        const rows = [...document.querySelectorAll(
+            '.window.fairwin table.exits tr')];
+        return rows.map(function (tr) {
+            const label = tr.querySelector('th');
+            const value = tr.querySelector('td');
+            if (!label || !value) { return 0; }
+            return Math.round(value.getBoundingClientRect().left
+                              - label.getBoundingClientRect().right);
+        });
+    }""")
+    assert max(gaps) <= 40, gaps
+
+    # A long note does not set the width: it wraps inside whatever the
+    # figures need. `width: max-content` sizes to the longest line in
+    # the window, and the derivation is a sentence.
+    page.paths['publisher'].exits = {
+        'break_even_buy': 59.21, 'break_even_sell': 58.99,
+        'tp_buy': 60.21, 'tp_sell': 57.99, 'target_money': 10.0,
+        'target_pct': 2.0, 'margin_per_spread': 135.8,
+        'note': '2% of 135.80 margin per spread = 10.00 = 1.0000 of '
+                'spread, against a 0.3000 session range (margin from '
+                'the terminal)'}
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => (document.querySelector('.window.fairwin .exit-note')"
+        ".title || '').indexOf('session range') >= 0", timeout=WAIT)
+
+    wide = page.evaluate(
+        "() => document.querySelector('.window.fairwin')"
+        ".getBoundingClientRect().width")
+    # Room for the figures themselves to be wider than em dashes, and
+    # nothing like the width of the sentence underneath them.
+    assert wide <= box['width'] + 24, (box['width'], wide)
+    page.paths['publisher'].exits = None
+    page.paths['publisher'].publish()
     # ...and the figures still fit: nothing is clipped to achieve it.
     clipped = page.evaluate("""() => {
         const cells = [...document.querySelectorAll(

@@ -1355,12 +1355,21 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
  * pane the size of a ladder: the labels are read down the left and the
  * numbers down the right, and everything between them is screen the
  * trader could have given to a price. */
-.window.fairwin { width: 240px; min-width: 200px; }
+/* The window is as wide as its widest ROW and no wider. A fixed width
+ * puts the labels down the left and the numbers hard against the right
+ * with a corridor of nothing between them — which is what this looked
+ * like. Hugging the content, the number sits where the eye already is.
+ */
+.window.fairwin {
+  width: max-content;
+  min-width: 0;
+  max-width: 260px;
+}
 .window.fairwin .fw-body { padding: 0; }
 .window.fairwin .fair,
 .window.fairwin .exit {
   margin: 0;
-  padding: 2px 4px 3px;
+  padding: 2px 4px;
   border: 0;
   border-bottom: 1px solid var(--frame-line);
   background: #fff;
@@ -1374,31 +1383,56 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
   text-transform: none;
 }
 .window.fairwin .rail-label .cog { float: right; font-size: 10px; }
+/* `auto`, not `fixed`: the label column takes what the words need and
+ * the figures follow immediately after. Fixed percentages are what put
+ * the corridor there. */
 .window.fairwin table.exits {
   width: 100%;
-  table-layout: fixed;
+  table-layout: auto;
   font: 11px var(--mono);
 }
 .window.fairwin table.exits th {
-  width: 46%;
+  width: auto;
+  white-space: nowrap;
   font: 10px var(--font);
   color: var(--frame-muted);
-  padding: 0;
-  line-height: 1.35;
+  padding: 0 6px 0 0;
+  line-height: 1.25;
 }
 .window.fairwin table.exits th.col-b,
-.window.fairwin table.exits th.col-s { width: 27%; text-align: right; }
-.window.fairwin table.exits td { padding: 0 0 0 4px; line-height: 1.35; }
+.window.fairwin table.exits th.col-s {
+  width: 1%;
+  padding: 0 0 0 6px;
+  text-align: right;
+}
+.window.fairwin table.exits td {
+  width: 1%;
+  padding: 0 0 0 6px;
+  line-height: 1.25;
+}
 /* One value, not two: the rows that carry a single figure use the
  * whole right-hand side rather than leaving a column of nothing. */
 .window.fairwin table.exits td[colspan="2"] { text-align: right; }
+/* The notes must not DRIVE the width. `width: max-content` sizes to
+ * the longest line in the window, and "2% of 135.80 margin per spread
+ * = 10.00, over commission" is a sentence — it would set the width of
+ * a panel of four-character numbers. Zero width with a 100% minimum
+ * takes them out of that measurement and wraps them inside whatever
+ * the tables settle on. */
 .window.fairwin .fair-note,
 .window.fairwin .exit-note {
+  width: 0;
+  min-width: 100%;
   font: 9px var(--font);
   color: var(--frame-muted);
   line-height: 1.3;
   white-space: normal;
 }
+/* Wide enough for the figures that actually appear, so the window does
+ * not breathe in and out as a value changes from an em dash to -4.17.
+ * A panel that resizes three times a second is a panel that cannot be
+ * read. */
+.window.fairwin table.exits td { min-width: 5.2ch; }
 .window.fairwin .exit { border-bottom: 0; }
 .window.fairwin .titlebar .fw-pair {
   font-weight: 700;
