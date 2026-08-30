@@ -776,110 +776,116 @@ def test_the_exit_costs_belong_to_ONE_LADDER_and_the_override_CLEARS(page):
     page.wait_for_selector('.ladder .grid tbody tr')
 
 
-def test_the_ladder_settings_load_from_the_CONFIG_not_the_snapshot(page):
-    """Blank means "use the default", and blank is only distinguishable
-    from 0 in the file: the snapshot carries what the engine is
-    RUNNING, where a default and a typed zero look identical. Loading
-    the form from it would turn every unset field into a 0 the operator
-    never typed — and saving it back would make that permanent."""
+def test_every_setting_shows_the_value_ACTUALLY_IN_FORCE(page):
+    """A form that cannot tell you what the ladder is doing.
+
+    Mode, Time in force and Overnight came up BLANK whenever the config
+    had no saved value — while the title bar said LIMIT · DAY and the
+    engine ran exactly that. And the cost fields said "default", which
+    is the NAME of a number you cannot see. Both are now the value in
+    force: the running one for what the ladder is doing, the system
+    default for what it is inheriting, marked as inherited rather than
+    hidden behind a word.
+    """
     open_ladder(page)
     page.evaluate("""() => {
         window.__realFetch = window.__realFetch || window.fetch;
         window.fetch = function (url, options) {
-            if (String(url).indexOf('/api/pairs') >= 0 &&
-                !(options && options.method === 'POST')) {
+            const get = !(options && options.method === 'POST');
+            if (String(url).indexOf('/api/pairs') >= 0 && get) {
+              // A config with almost nothing in it, which is the case
+              // that broke: the engine is running defaults and the
+              // file has no opinion at all.
               return Promise.resolve(new Response(JSON.stringify({
                 ok: true, pairs: {'XAUUSD_|GC1226': {
-                  commission_per_lot_a: 0, slippage_allowance: null,
-                  tp_target_pct_of_margin: 2.5, auto_route: true,
-                  overnight: 'EXIT_IF_PROFIT'}}}),
-                {status: 200, headers: {'Content-Type': 'application/json'}}));
+                  pair_type: 'SPOT_FUTURE', commission_per_lot_b: 3.5}}}),
+                {status: 200,
+                 headers: {'Content-Type': 'application/json'}}));
+            }
+            if (String(url).indexOf('/api/settings') >= 0 && get) {
+              return Promise.resolve(new Response(JSON.stringify({
+                settings: {COMMISSION_PER_LOT_A: 2.0,
+                           COMMISSION_PER_LOT_B: 2.0,
+                           TP_TARGET_PCT_OF_MARGIN: 2.0,
+                           SLIPPAGE_ALLOWANCE: 0.0,
+                           BREAK_EVEN_NIGHTS: 0.0}}),
+                {status: 200,
+                 headers: {'Content-Type': 'application/json'}}));
             }
             return window.__realFetch(url, options);
         };
     }""")
 
-    page.click('.ladder .ladder-cog')
-    page.wait_for_function(
-        "() => document.querySelector('.ladder .ls-tp').value === '2.5'",
-        timeout=WAIT)
-
-    # A typed 0 survives the round trip; an unset field stays EMPTY.
-    assert page.input_value('.ladder .ls-comm-a') == '0'
-    assert page.input_value('.ladder .ls-slip') == ''
-    assert page.locator('.ladder .ls-auto-route').is_checked() is True
-    assert page.input_value('.ladder .ls-overnight') == 'EXIT_IF_PROFIT'
-
-    page.click('.ladder .ls-close')
-    page.evaluate('() => { window.fetch = window.__realFetch; }')
-
-
-def test_an_expiry_is_only_asked_for_where_a_CONTRACT_expires(page):
-    """Spot does not expire — a contract is what expires. Asking leg A
-    for a date on a spot/future pair is a field the operator either
-    fills in wrongly or spends a minute deciding to leave blank. Two
-    futures, and both legs have one."""
-    open_ladder(page)
-
-    def open_with(pair_type, expected):
-        # Cleared first: the note is left behind by the previous open,
-        # and a wait that is already satisfied waits for nothing.
-        page.evaluate("""(type) => {
-            document.querySelector('.ladder .ls-pairtype').textContent = '';
-            window.__realFetch = window.__realFetch || window.fetch;
-            window.fetch = function (url, options) {
-                if (String(url).indexOf('/api/pairs') >= 0 &&
-                    !(options && options.method === 'POST')) {
-                  return Promise.resolve(new Response(JSON.stringify({
-                    ok: true, pairs: {'XAUUSD_|GC1226': {pair_type: type}}}),
-                    {status: 200,
-                     headers: {'Content-Type': 'application/json'}}));
-                }
-                return window.__realFetch(url, options);
-            };
-        }""", pair_type)
+    try:
         page.click('.ladder .ladder-cog')
         page.wait_for_function(
-            "(want) => document.querySelector('.ladder .ls-pairtype')"
-            ".textContent.indexOf(want) >= 0", arg=expected, timeout=WAIT)
+            "() => document.querySelector('.ladder .ls-comm-a').value !== ''",
+            timeout=WAIT)
 
-    try:
-        open_with('SPOT_FUTURE', 'only leg B expires')
-        assert page.locator('.ladder .ls-expiry-a').is_disabled()
-        assert 'spot does not expire' in page.get_attribute(
-            '.ladder .ls-expiry-a', 'placeholder')
-        assert page.locator('.ladder .ls-expiry').is_enabled()
-        page.click('.ladder .ls-close')
+        # What the ladder is RUNNING, from the snapshot — never blank.
+        assert page.input_value('.ladder .ls-order-type') == 'LIMIT'
+        assert page.input_value('.ladder .ls-tif') == 'DAY'
+        assert page.input_value('.ladder .ls-overnight') == 'ALLOW'
+        assert page.input_value('.ladder .ls-increment') == '0.01'
 
-        open_with('FUTURE_FUTURE', 'both legs expire')
-        assert page.locator('.ladder .ls-expiry-a').is_enabled()
-        assert page.locator('.ladder .ls-expiry').is_enabled()
-        page.click('.ladder .ls-close')
+        # An inherited number shows the system default, and says so.
+        assert page.input_value('.ladder .ls-comm-a') == '2'
+        assert 'inherited' in (
+            page.get_attribute('.ladder .ls-comm-a', 'class') or '')
+        assert 'system default' in page.get_attribute(
+            '.ladder .ls-comm-a', 'title')
 
-        open_with('RELATED', 'no fair spread')
-        assert page.locator('.ladder .ls-expiry-a').is_disabled()
-        assert page.locator('.ladder .ls-expiry').is_disabled()
-        page.click('.ladder .ls-close')
+        # This ladder's OWN number is not marked, and says how to clear it.
+        assert page.input_value('.ladder .ls-comm-b') == '3.5'
+        assert 'inherited' not in (
+            page.get_attribute('.ladder .ls-comm-b', 'class') or '')
+        assert 'back to the system default' in page.get_attribute(
+            '.ladder .ls-comm-b', 'title')
+
+        # Applying sends the RUNNING value for the live fields — never a
+        # null, which raises on the engine — and keeps inheriting the
+        # ones nobody touched.
+        page.evaluate(SPY_ON_PAIR_SAVE)
+        page.click('.ladder .ls-save')
+        page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
+        sent = page.evaluate('() => window.__sent')
+
+        assert sent['order_type'] == 'LIMIT'
+        assert sent['commission_per_lot_a'] is None      # still inherited
+        assert sent['commission_per_lot_b'] == 3.5       # its own
     finally:
-        # Always: a stub left in place answers the NEXT test's fetches.
         page.evaluate('() => { window.fetch = window.__realFetch; }')
+        page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    page.wait_for_selector('.ladder .grid tbody tr')
 
 
-def test_autorouting_is_stated_where_the_mode_is(page):
-    """It changes what a FILL does. Ticking a box that changes nothing
-    on the screen reads as having done nothing at all."""
+def test_editing_an_inherited_field_makes_it_this_ladders_own(page):
+    """And emptying it puts it back. The box is never left showing a
+    number nobody chose."""
     open_ladder(page)
-    assert 'AUTO' not in page.text_content('.ladder .mode-badge')
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-tp', timeout=WAIT)
 
-    page.paths['publisher'].auto_route = True
-    page.paths['publisher'].publish()
-    page.wait_for_function(
-        "() => document.querySelector('.ladder .mode-badge')"
-        ".textContent.indexOf('AUTO') >= 0", timeout=WAIT)
+    page.evaluate(SPY_ON_PAIR_SAVE)
+    page.fill('.ladder .ls-tp', '4.5')
+    assert 'inherited' not in (
+        page.get_attribute('.ladder .ls-tp', 'class') or '')
+    page.click('.ladder .ls-save')
+    page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
+    assert page.evaluate('() => window.__sent')['tp_target_pct_of_margin'] \
+        == 4.5
 
-    assert 'no stop' in page.get_attribute('.ladder .mode-badge', 'title')
-    page.paths['publisher'].auto_route = False
-    page.paths['publisher'].publish()
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-tp', timeout=WAIT)
+    page.evaluate("() => { window.__sent = null; }")
+    page.fill('.ladder .ls-tp', '')
+    page.click('.ladder .ls-save')
+    page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
+    assert page.evaluate('() => window.__sent')['tp_target_pct_of_margin'] \
+        is None
+
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
 
 
 def test_the_rail_carries_no_form_the_market_can_outrun(page):

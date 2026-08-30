@@ -712,6 +712,15 @@
     node.querySelector('.ls-save').addEventListener('click', function () {
       saveLadderSettings(node, key);
     });
+    // Touch an inherited field and it becomes this ladder's own. Empty
+    // it and it goes back to the default — which is why the box is
+    // never left showing a number nobody chose.
+    node.querySelector('.ladder-settings').addEventListener(
+      'input', function (e) {
+        if (e.target.classList.contains('inherited')) {
+          e.target.classList.remove('inherited');
+        }
+      });
 
     node.querySelector('.lock-scroll').addEventListener('change', function (e) {
       state.locked[key] = e.target.checked;
@@ -930,99 +939,169 @@
   //: read it back. One list, because a form that saves a field it does
   //: not load — or loads one it cannot save — is a form that silently
   //: drops what was typed into it.
+  //: Every field in this ladder's settings: the control, the name the
+  //: engine and the config both know it by, how to read it, and — for
+  //: the ones with a system-wide default — which setting that is.
+  //:
+  //: Three kinds, and the difference is the whole point of the form:
+  //:
+  //:   live    what the ladder is RUNNING. Never blank: a blank Mode
+  //:           is not "no mode", it is a form that cannot tell you
+  //:           what the ladder is doing — and one that would send
+  //:           `order_type: null` to an engine that raises on it.
+  //:   inherit a number with a system default behind it. Shows the
+  //:           value ACTUALLY IN FORCE, marked as inherited until it
+  //:           is edited. "default" as a placeholder tells you the
+  //:           name of a thing you cannot see.
+  //:   text    a fact about this pair with no default at all — an
+  //:           expiry, a swap. Blank is a real state here.
   var LADDER_FIELDS = [
-    ['.ls-order-type', 'order_type', 'text'],
-    ['.ls-tif', 'time_in_force', 'text'],
-    ['.ls-overnight', 'overnight', 'text'],
+    ['.ls-order-type', 'order_type', 'live'],
+    ['.ls-tif', 'time_in_force', 'live'],
+    ['.ls-overnight', 'overnight', 'live'],
+    ['.ls-increment', 'increment', 'live-number'],
+    ['.ls-rows', 'row_count', 'live-number', null, 'rows'],
+    ['.ls-qty', 'default_quantity', 'live-number'],
+    ['.ls-quoting', 'quoting_leg', 'live'],
     ['.ls-auto-route', 'auto_route', 'check'],
-    ['.ls-algo', 'algo', 'text'],
+    ['.ls-algo', 'algo', 'live'],
     ['.ls-algo-window', 'algo_window', 'check'],
-    ['.ls-increment', 'increment', 'number'],
-    ['.ls-rows', 'rows', 'number'],
-    ['.ls-qty', 'default_quantity', 'number'],
-    ['.ls-quoting', 'quoting_leg', 'text'],
-    ['.ls-comm-a', 'commission_per_lot_a', 'blank'],
-    ['.ls-comm-b', 'commission_per_lot_b', 'blank'],
-    ['.ls-slip', 'slippage_allowance', 'blank'],
-    ['.ls-nights', 'break_even_nights', 'blank'],
-    ['.ls-tp', 'tp_target_pct_of_margin', 'blank'],
-    ['.ls-roundtrip', 'bid_ask_round_trip_override', 'blank'],
-    ['.ls-expiry-a', 'expiry_a', 'blank-text'],
-    ['.ls-expiry', 'expiry', 'blank-text'],
-    ['.ls-swap-a-long', 'swap_a_long_per_lot', 'blank'],
-    ['.ls-swap-a-short', 'swap_a_short_per_lot', 'blank'],
-    ['.ls-swap-b-long', 'swap_b_long_per_lot', 'blank'],
-    ['.ls-swap-b-short', 'swap_b_short_per_lot', 'blank'],
-    ['.ls-swap-day', 'swap_per_day', 'blank'],
-    ['.ls-carry-rate', 'carry_rate_pct', 'blank']
+    ['.ls-comm-a', 'commission_per_lot_a', 'inherit', 'COMMISSION_PER_LOT_A'],
+    ['.ls-comm-b', 'commission_per_lot_b', 'inherit', 'COMMISSION_PER_LOT_B'],
+    ['.ls-slip', 'slippage_allowance', 'inherit', 'SLIPPAGE_ALLOWANCE'],
+    ['.ls-nights', 'break_even_nights', 'inherit', 'BREAK_EVEN_NIGHTS'],
+    ['.ls-tp', 'tp_target_pct_of_margin', 'inherit', 'TP_TARGET_PCT_OF_MARGIN'],
+    ['.ls-roundtrip', 'bid_ask_round_trip_override', 'inherit',
+     'BID_ASK_ROUND_TRIP_OVERRIDE'],
+    ['.ls-carry-rate', 'carry_rate_pct', 'inherit', 'CARRY_RATE_PCT'],
+    ['.ls-expiry-a', 'expiry_a', 'text'],
+    ['.ls-expiry', 'expiry', 'text'],
+    ['.ls-swap-a-long', 'swap_a_long_per_lot', 'text'],
+    ['.ls-swap-a-short', 'swap_a_short_per_lot', 'text'],
+    ['.ls-swap-b-long', 'swap_b_long_per_lot', 'text'],
+    ['.ls-swap-b-short', 'swap_b_short_per_lot', 'text'],
+    ['.ls-swap-day', 'swap_per_day', 'text']
   ];
 
   function openLadderSettings(node, key) {
-    /* THIS ladder's settings, over the ladder they belong to.
+    /* THIS ladder's settings, showing what is ACTUALLY IN FORCE.
      *
-     * Loaded from the config rather than from the snapshot: the
-     * snapshot carries what the engine is running, and the blank
-     * fields — "use the default" — are only distinguishable from zero
-     * in the file.
+     * Three sources, because there are three kinds of field. What the
+     * ladder is RUNNING comes from the snapshot — it is the only place
+     * that knows, and a form that shows Mode blank while the title bar
+     * says LIMIT is a form nobody can trust. A number with a
+     * system-wide default behind it shows THAT NUMBER, marked as
+     * inherited rather than labelled "default": the name of a value
+     * you cannot see is not information. And a fact about this pair
+     * alone — an expiry, a swap — comes from the config, where blank
+     * is a real state.
      */
     var pane = node.querySelector('.ladder-settings');
     if (!pane) { return; }
     pane.hidden = false;
     node.querySelector('.ls-pair').textContent = key;
-    fetch('/api/pairs').then(function (r) { return r.json(); })
-      .then(function (body) {
-        var saved = ((body || {}).pairs || {})[key] || {};
-        LADDER_FIELDS.forEach(function (entry) {
-          var input = pane.querySelector(entry[0]);
-          if (!input) { return; }
-          var value = saved[entry[1]];
-          if (entry[1] === 'algo') { value = value || 'NONE'; }
-          if (entry[1] === 'algo_window' && value === undefined) {
-            value = saved.show_fair_window;      // the old name
-          }
-          if (entry[2] === 'check') {
-            input.checked = !!value;
+    Promise.all([
+      fetch('/api/pairs').then(function (r) { return r.json(); }),
+      fetch('/api/settings').then(function (r) { return r.json(); })
+    ]).then(function (answers) {
+      var saved = ((answers[0] || {}).pairs || {})[key] || {};
+      var settings = (answers[1] || {}).settings || {};
+      var live = (state.snapshot.pairs || {})[key] || {};
+      LADDER_FIELDS.forEach(function (entry) {
+        var input = pane.querySelector(entry[0]);
+        if (!input) { return; }
+        var field = entry[1];
+        var kind = entry[2];
+        var own = saved[field];
+        if (field === 'algo_window' && own === undefined) {
+          own = saved.show_fair_window;              // the old name
+        }
+        input.classList.remove('inherited');
+        input.dataset.touched = '';
+        if (kind === 'check') {
+          input.checked = !!(own === undefined || own === null
+            ? live[entry[4] || field] : own);
+          return;
+        }
+        if (kind === 'live' || kind === 'live-number') {
+          // What the ladder is running, whatever the file does or does
+          // not say. Never blank.
+          var running = live[entry[4] || field];
+          if (own === undefined || own === null || own === '') {
+            input.value = running === undefined || running === null
+              ? '' : running;
           } else {
-            // `?? ''`, never `|| ''`: a commission of 0 and a swap of 0
-            // are real statements, and blanking them on load is how an
-            // override the operator typed disappears the next time the
-            // form is opened.
-            input.value = (value === null || value === undefined)
-              ? '' : value;
+            input.value = own;
           }
-        });
-        // Which leg HAS an expiry follows what the legs are. Spot has
-        // none — a contract is what expires — so on a spot/future pair
-        // leg A's row says so instead of asking for a date that does
-        // not exist. Two futures, and both have one.
-        var type = (saved.pair_type || 'SPOT_FUTURE').toUpperCase();
-        var rowA = pane.querySelector('.row-expiry-a');
-        var rowB = pane.querySelector('.row-expiry-b');
-        var note = pane.querySelector('.ls-pairtype');
-        var expiries = {
-          SPOT_FUTURE: {a: false, b: true,
-                        note: 'spot vs a future — only leg B expires'},
-          FUTURE_FUTURE: {a: true, b: true,
-                          note: 'two futures — both legs expire'},
-          RELATED: {a: false, b: false,
-                    note: 'two different instruments — neither expires, '
-                      + 'and there is no fair spread to quote'}
-        }[type] || {a: true, b: true, note: ''};
-        if (note) { note.textContent = expiries.note; }
-        [[rowA, expiries.a, 'Leg A is spot — spot does not expire'],
-         [rowB, expiries.b, 'this pair has no expiry']].forEach(
-          function (entry) {
-            if (!entry[0]) { return; }
-            var input = entry[0].querySelector('input');
-            entry[0].classList.toggle('not-applicable', !entry[1]);
-            input.disabled = !entry[1];
-            input.placeholder = entry[1] ? 'from MT5' : entry[2];
-          });
-      }).catch(function (e) { toast('could not read this pair: ' + e); });
-    // The allowance is a BUDGET; this is what slippage actually cost
-    // this session. Shown beside it so the number is corrected from
-    // data rather than left at whatever was first guessed. No engine
-    // yet is not a failure of this pane — the row simply says nothing.
+          if (field === 'quoting_leg' && !input.value) { input.value = ''; }
+          return;
+        }
+        if (kind === 'inherit') {
+          var fallback = settings[entry[3]];
+          if (own === undefined || own === null || own === '') {
+            input.value = fallback === undefined || fallback === null
+              ? '' : fallback;
+            // Shown, and shown to be inherited: edit it and it becomes
+            // this ladder's own; empty it and it goes back.
+            input.classList.add('inherited');
+            input.title = 'the system default (' +
+              (fallback === null || fallback === undefined
+                ? 'not set' : fallback) +
+              '). Type here to give this ladder its own; empty the box ' +
+              'to go back to the default.';
+          } else {
+            input.value = own;
+            input.title = "this ladder's own value. Empty the box to go "
+              + 'back to the system default ('
+              + (fallback === null || fallback === undefined
+                  ? 'not set' : fallback) + ').';
+          }
+          return;
+        }
+        input.value = (own === null || own === undefined) ? '' : own;
+      });
+      fairKindFields(pane, saved);
+      measuredSlippageInto(pane);
+    }).catch(function (e) {
+      toast('could not read this pair: ' + e);
+    });
+  }
+
+  function fairKindFields(pane, saved) {
+    /* An expiry belongs to a CONTRACT, and a fair spread to a pair
+     * whose legs are the same underlying. Spot vs a future: only leg B
+     * expires. Two futures: both do. Two different instruments — WTI
+     * against Brent — have no carry between them and no fair spread at
+     * all, and asking for a date there is asking for something that
+     * does not exist. */
+    var type = (saved.pair_type || 'SPOT_FUTURE').toUpperCase();
+    var shape = {
+      SPOT_FUTURE: {a: false, b: true,
+                    note: 'spot vs a future — only leg B expires'},
+      FUTURE_FUTURE: {a: true, b: true,
+                      note: 'two futures — both legs expire, and the '
+                        + 'carry runs to the NEAR one'},
+      RELATED: {a: false, b: false,
+                note: 'two different instruments — no carry ties them '
+                  + 'together, and there is no fair spread to quote'}
+    }[type] || {a: true, b: true, note: ''};
+    var note = pane.querySelector('.ls-pairtype');
+    if (note) { note.textContent = shape.note; }
+    [['.row-expiry-a', shape.a, 'Leg A is spot — spot does not expire'],
+     ['.row-expiry-b', shape.b, 'this pair has no expiry']].forEach(
+      function (entry) {
+        var row = pane.querySelector(entry[0]);
+        if (!row) { return; }
+        var input = row.querySelector('input');
+        row.classList.toggle('not-applicable', !entry[1]);
+        input.disabled = !entry[1];
+        input.placeholder = entry[1] ? 'from MT5' : entry[2];
+      });
+  }
+
+  function measuredSlippageInto(pane) {
+    /* The allowance is a BUDGET; this is what slippage actually cost.
+     * Beside it, so the number is corrected from data. */
     fetch('/api/slippage').then(function (r) { return r.json(); })
       .then(function (body) {
         var stats = body && body.ok && body.overall && body.overall.round_trip;
@@ -1030,38 +1109,57 @@
         if (!row) { return; }
         row.title = (stats && stats.money_mean !== null &&
                      stats.money_mean !== undefined)
-          ? 'a BUDGET, not a measurement. MEASURED this session: ' +
+          ? row.title + ' MEASURED this session: ' +
             stats.money_mean.toFixed(2) + ' a round turn over ' +
-            stats.measured + ' position(s) — positive is a cost.'
-          : 'a BUDGET, not a measurement. Nothing measured this session '
-            + 'yet, so there is nothing to correct it against.';
-      }).catch(function () { /* no engine: the row just says nothing */ });
+            stats.measured + ' position(s).'
+          : row.title;
+      }).catch(function () { /* no engine: the row says nothing extra */ });
   }
 
   function saveLadderSettings(node, key) {
+    /* What the form sends, and what it must never send.
+     *
+     * A LIVE field — Mode, Time in force, Overnight — is never sent as
+     * null. `OrderType(null)` raises on the engine, so a blank Mode
+     * used to make Apply fail silently: the save reported success and
+     * the ladder went on running whatever it had.
+     *
+     * An INHERITED number that has not been touched is sent as null,
+     * which means "keep using the system default" — not as the number
+     * it happens to be showing, which would silently freeze today's
+     * default into this pair for ever.
+     */
     var pane = node.querySelector('.ladder-settings');
     var payload = {};
     var live = {};
     LADDER_FIELDS.forEach(function (entry) {
       var input = pane.querySelector(entry[0]);
       if (!input) { return; }
+      var field = entry[1];
+      var kind = entry[2];
       var raw = (input.value || '').trim();
       var value;
-      if (entry[2] === 'check') {
+      if (kind === 'check') {
         value = input.checked;
-      } else if (entry[2] === 'blank' || entry[2] === 'number') {
-        // Blank CLEARS it. A loop that skips blanks can only ever set
-        // an override, and one that cannot be deleted outlives the
-        // pair it was typed for.
-        value = raw === '' ? null : parseFloat(raw);
-        if (value !== null && isNaN(value)) { return; }
-      } else if (entry[2] === 'blank-text') {
-        value = raw === '' ? null : raw;
+      } else if (kind === 'live') {
+        if (!raw && field !== 'quoting_leg') { return; }   // never a null
+        value = raw || null;              // '' on quoting_leg = wider book
+      } else if (kind === 'live-number') {
+        if (!raw) { return; }
+        value = parseFloat(raw);
+        if (isNaN(value)) { return; }
+      } else if (kind === 'inherit') {
+        if (!raw || input.classList.contains('inherited')) {
+          value = null;                   // keep inheriting
+        } else {
+          value = parseFloat(raw);
+          if (isNaN(value)) { return; }
+        }
       } else {
         value = raw === '' ? null : raw;
       }
-      payload[entry[1]] = value;
-      if (value !== null) { live[entry[1]] = value; }
+      payload[field] = value;
+      if (value !== null) { live[field] = value; }
     });
     fetch('/api/pairs/' + encodeURIComponent(key), {
       method: 'POST',
@@ -1073,18 +1171,17 @@
         return;
       }
       // Saved AND applied: the engine re-reads the file on its next
-      // poll, and the live send makes the ladder in front of the trader
-      // change now rather than a poll later.
+      // poll, and the live send changes the ladder in front of the
+      // trader now rather than a poll later.
       setPair(key, live);
-      // The windows a setting OPENS are opened here, not waited for.
-      // The engine confirms on its next snapshot; until then a trader
-      // who has just ticked a box is looking at a screen that has not
-      // changed, which reads as "it did not work".
       var row = (state.snapshot.pairs || {})[key];
       if (row) {
         row.algo_window = !!payload.algo_window;
         row.algo = payload.algo || 'NONE';
       }
+      (answer.notes || []).forEach(function (note) { toast(note); });
+      if (!(answer.notes || []).length) { toast('applied to ' + key, 'ok'); }
+      pane.hidden = true;
       // One door for the window, so the pane and the window's own X
       // cannot disagree about whether it is open.
       var fairId = panelId('fair', key);
@@ -1094,9 +1191,6 @@
       } else {
         render();
       }
-      (answer.notes || []).forEach(function (note) { toast(note); });
-      if (!(answer.notes || []).length) { toast('applied to ' + key, 'ok'); }
-      pane.hidden = true;
     }).catch(function (e) { toast('could not save: ' + e); });
   }
 

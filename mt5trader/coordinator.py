@@ -1407,6 +1407,12 @@ class Coordinator:
                      'order_id': o.order_id, 'quantity': o.remaining}
                     for o in self.book.orders(key) if o.position_id],
                 'default_quantity': pair.default_quantity,
+                # How many price levels the ladder draws. Named apart
+                # from `rows`, which is the rows THEMSELVES — one of
+                # them is a count and the other is a list, and a
+                # settings pane reading the wrong one shows a form full
+                # of prices.
+                'row_count': pair.rows,
                 'clip_lots_a': pair.clip_lots_a,
                 'clip_lots_b': pair.clip_lots_b,
                 'spread_units': sizing.spread_units(
