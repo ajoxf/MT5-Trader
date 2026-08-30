@@ -209,6 +209,43 @@ DEFAULT_SETTINGS = {
     #: switch you have to find twice is a switch that gets missed once.
     'AUTO_ROUTE_ENABLED': False,
 
+    # --- costs --------------------------------------------------------
+    'SPREAD_COST_FACTOR': 1.0,
+    'COMMISSION_PER_LOT_A': 0.0,
+    'COMMISSION_PER_LOT_B': 0.0,
+    #: A BUDGET, not a measurement: how much slippage break-even should
+    #: allow for, in money per spread per round turn. The MEASURED
+    #: realised slippage is shown beside it (the slippage report), so
+    #: this gets corrected from data rather than left at whatever was
+    #: first guessed. Default 0 — a fabricated cost is charged against
+    #: every trade and the operator cannot tell it was never theirs.
+    #: The bid-ask round trip is MEASURED live from both books. This is
+    #: an override in money, and it is CLEARABLE — blank (None) means
+    #: "use the measured value". A field loop that skips blanks can
+    #: only ever set an override, and one that cannot be deleted
+    #: outlives the pair it was typed for.
+    'BID_ASK_ROUND_TRIP_OVERRIDE': None,
+    'SLIPPAGE_ALLOWANCE': 0.0,
+    #: Break-even is only defined GIVEN a holding period, because the
+    #: swap is charged per night. 0 is intraday, where the term
+    #: vanishes; type the nights you expect to hold to see it.
+    'BREAK_EVEN_NIGHTS': 0.0,
+    #: An annual carry rate (percent), used ONLY to price the basis a
+    #: second time as a cross-check on the broker's swap. Unset means
+    #: no cross-check — which is honest — but it is the cheapest check
+    #: on the screen and one wrong sign in a swap field is all it takes
+    #: to display a licence to print money.
+    'CARRY_RATE_PCT': None,
+    #: The stat-arb defaults, per system; each ladder may override
+    #: both. 30 minutes of quotes and 2.5 sigma is what the system this
+    #: is ported from ran on.
+    #: The master switch for AutoRouting. OFF, no ladder arms a target
+    #: however its own box is ticked — the one place a desk can stand
+    #: every automatic order down before a session without going round
+    #: the ladders one at a time. It is deliberately not per pair: a
+    #: switch you have to find twice is a switch that gets missed once.
+    'AUTO_ROUTE_ENABLED': False,
+
     # --- the DIVERGENCE algo (spec: it measures, it does not trade) ---
     #: The window, and how much of it must exist before a z-score is
     #: quoted at all. A quote COUNT is not history: 300 quotes arrive in
@@ -319,8 +356,7 @@ class PairConfig:
                  commission_per_lot_b=None, slippage_allowance=None,
                  break_even_nights=None, tp_target_pct_of_margin=None,
                  bid_ask_round_trip_override=None, carry_rate_pct=None,
-                 show_fair_window=False, algo=None, algo_window=None,
-                 lookback_sec=None, entry_z=None):
+                 show_fair_window=False, algo=None, algo_window=None):
         self.key = key
         self.name = name or key
         self.leg_a = dict(leg_a or {})      # {'account': ..., 'symbol': ...}
@@ -397,10 +433,6 @@ class PairConfig:
         #: two algos; a config written then still opens its window.
         self.algo_window = bool(show_fair_window if algo_window is None
                                 else algo_window)
-        #: How far back the stat-arb window looks, and how many sigma
-        #: it takes to call a spread stretched.
-        self.lookback_sec = _blank_to_none(lookback_sec)
-        self.entry_z = _blank_to_none(entry_z)
         #: Cached MT5 metadata per leg, refreshed by the coordinator.
         self.meta_a = {}
         self.meta_b = {}
@@ -513,8 +545,7 @@ class PairConfig:
                    'swap_b_long_per_lot', 'swap_b_short_per_lot',
                    'order_type', 'time_in_force', 'overnight', 'increment',
                    'default_quantity', 'quoting_leg', 'rows',
-                   'algo', 'algo_window', 'show_fair_window',
-                   'lookback_sec', 'entry_z')
+                   'algo', 'algo_window', 'show_fair_window')
                   + tuple(EXIT_FIELDS))
 
     def apply_hot(self, raw):
@@ -581,7 +612,6 @@ class PairConfig:
             'bid_ask_round_trip_override': self.bid_ask_round_trip_override,
             'carry_rate_pct': self.carry_rate_pct,
             'algo': self.algo, 'algo_window': self.algo_window,
-            'lookback_sec': self.lookback_sec, 'entry_z': self.entry_z,
         }
 
     @classmethod

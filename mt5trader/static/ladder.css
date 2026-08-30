@@ -1595,20 +1595,6 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
 }
 .ladder-settings h4 small { font-weight: 400; color: var(--muted, #777); }
 
-/* The stat-arb block: the same compact table as the exit, plus a
- * verdict that is a WORD — a number nobody can act on is a number, and
- * "2.7 sigma" is not an instruction. It is still only a reading. */
-.window.fairwin .statarb {
-  margin: 0;
-  padding: 2px 4px;
-  border-bottom: 1px solid var(--frame-line);
-  background: #fff;
-}
-.window.fairwin .verdict { font-weight: 700; }
-.window.fairwin .verdict.buy { color: var(--bid-strong); }
-.window.fairwin .verdict.sell { color: var(--ask-strong); }
-.window.fairwin .verdict.wait,
-.window.fairwin .verdict.warming { color: var(--frame-muted); }
 .window.fairwin .fair-kind,
 .window.fairwin .stat-note {
   width: 0;

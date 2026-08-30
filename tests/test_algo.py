@@ -1,13 +1,13 @@
-"""The two algos — and the line they must not cross.
+"""The fair-value algo — and the line an algo must not cross.
 
 This system is a MANUAL ladder. Every rule it is built on says so, and
 the rule that matters most here is the one an algo is most likely to
 break: nothing places, modifies or cancels an order by itself.
 
 So these tests are in two halves. The first says the arithmetic is
-right. The second says that whatever the arithmetic concludes, NOTHING
-HAPPENS — no order, no change to a click, no difference to the manual
-path at all.
+right — which KIND of pair this is, and therefore what its carry runs
+to. The second says that whatever it concludes, NOTHING HAPPENS: no
+order, no change to a click, no difference to the manual path at all.
 """
 
 import pytest
@@ -76,123 +76,6 @@ def test_the_expiries_narrow_what_the_operator_said(pair):
     assert algo.pair_kind(pair, '2026-09-26', '2026-12-26') == algo.RELATED
 
 
-# -- the statistics ------------------------------------------------------
-
-
-def test_the_window_counts_QUOTES_not_polls():
-    """The fault that produced a z of +53,026 on a spread of 9.13. The
-    coordinator polls faster than either broker ticks, so counting
-    polls fills the window with the same quote over and over: sigma
-    collapses toward zero and z explodes."""
-    clock = Clock()
-    series = algo.Series(lookback_sec=600, clock=clock)
-
-    for value, quote in ((10.0, 'q1'), (10.5, 'q2'), (11.0, 'q3')):
-        series.observe(value, quote)
-    real = series.sigma
-
-    # ...and now a hundred polls that saw nothing new.
-    for _ in range(100):
-        clock.tick(0.3)
-        series.observe(11.0, 'q3')
-
-    assert series.sigma == pytest.approx(real)
-    assert len(series.samples) == 3
-
-
-def test_a_feed_that_stops_ticking_goes_COLD_rather_than_freezing():
-    """Ageing runs on every call, sample or not. A frozen mean is worse
-    than no mean: it goes on quoting a z off history nobody is in."""
-    clock = Clock()
-    series = algo.Series(lookback_sec=60, clock=clock)
-    for i in range(5):
-        clock.tick(1)
-        series.observe(10.0 + i, 'q%d' % i)
-    assert series.ready
-
-    clock.tick(120)                      # two minutes of silence
-    series.observe(None)
-
-    assert series.ready is False
-    assert series.z(10.0) is None
-
-
-def test_the_z_is_measured_on_each_executable_side_separately():
-    """A z-score off a midpoint is measured against a price nobody
-    fills at. A buy is judged on what it would PAY and a sell on what
-    it would RECEIVE."""
-    clock = Clock()
-    stats = algo.PairStats(lookback_sec=600, clock=clock)
-    for i in range(30):
-        clock.tick(1)
-        stats.observe({'long_spread': 10.0 + (i % 2) * 0.1,
-                       'short_spread': 9.0 + (i % 2) * 0.1,
-                       'leg_a_tick_time': i, 'leg_b_tick_time': i})
-
-    body = algo.stat_arb(stats, {'long_spread': 10.05, 'short_spread': 9.05})
-
-    assert body['mu_buy'] == pytest.approx(10.05, abs=0.01)
-    assert body['mu_sell'] == pytest.approx(9.05, abs=0.01)
-    assert body['mu_buy'] != body['mu_sell']
-
-
-def test_it_says_BUY_when_the_offer_is_cheap_and_SELL_when_the_bid_is_rich():
-    """The sign that everyone gets backwards once. You BUY what is
-    below its own mean and SELL what is above it."""
-    clock = Clock()
-    stats = algo.PairStats(lookback_sec=600, clock=clock)
-    for i in range(40):
-        clock.tick(1)
-        value = 10.0 + (0.05 if i % 2 else -0.05)
-        stats.observe({'long_spread': value, 'short_spread': value - 1.0,
-                       'leg_a_tick_time': i, 'leg_b_tick_time': i})
-
-    cheap = algo.stat_arb(stats, {'long_spread': 9.0, 'short_spread': 8.0},
-                          entry_z=2.5)
-    rich = algo.stat_arb(stats, {'long_spread': 12.0, 'short_spread': 11.0},
-                         entry_z=2.5)
-    quiet = algo.stat_arb(stats, {'long_spread': 10.0, 'short_spread': 9.0},
-                          entry_z=2.5)
-
-    assert cheap['verdict'] == 'BUY'
-    assert rich['verdict'] == 'SELL'
-    assert quiet['verdict'] == 'WAIT'
-
-
-def test_a_window_with_nothing_in_it_says_WARMING_not_a_number():
-    """A z-score off two prices is not a z-score, and a screen that
-    quotes one is a screen that will be acted on."""
-    clock = Clock()
-    stats = algo.PairStats(lookback_sec=600, clock=clock)
-    stats.observe({'long_spread': 10.0, 'short_spread': 9.0,
-                   'leg_a_tick_time': 1, 'leg_b_tick_time': 1})
-
-    body = algo.stat_arb(stats, {'long_spread': 10.0, 'short_spread': 9.0})
-
-    assert body['verdict'] == 'WARMING'
-    assert body['z_buy'] is None
-    assert 'not a z-score' in body['note']
-
-
-def test_the_exit_it_names_is_the_MANUAL_take_profit(pair):
-    """One exit arithmetic on this screen, not two. What the algo would
-    leave at is what the Exit box already says."""
-    clock = Clock()
-    stats = algo.PairStats(lookback_sec=600, clock=clock)
-    for i in range(40):
-        clock.tick(1)
-        value = 10.0 + (0.05 if i % 2 else -0.05)
-        stats.observe({'long_spread': value, 'short_spread': value - 1.0,
-                       'leg_a_tick_time': i, 'leg_b_tick_time': i})
-
-    body = algo.stat_arb(stats, {'long_spread': 9.0, 'short_spread': 8.0},
-                         entry_z=2.5,
-                         exit_levels={'tp_buy': 11.5, 'tp_sell': 7.5})
-
-    assert body['verdict'] == 'BUY'
-    assert body['exit_level'] == 11.5
-
-
 # -- the line an algo must not cross -------------------------------------
 
 
@@ -247,45 +130,16 @@ def test_selecting_an_algo_changes_NOTHING_about_a_click(config, pair, legs):
         return answer.get('ok'), sent
 
     off_ok, off_sent = click_once('NONE')
-    on_ok, on_sent = click_once('STAT_ARB')
+    on_ok, on_sent = click_once('FAIR_SPREAD')
 
     assert off_ok and on_ok
     assert off_sent == on_sent, (off_sent, on_sent)
 
 
-def test_an_algo_that_says_ENTER_still_sends_nothing(config, pair, legs):
-    """Left alone with a screaming signal, poll after poll, the engine
-    does nothing at all. This is the test that would fail the day
-    somebody wires the other half in without saying so."""
-    from mt5trader.coordinator import Coordinator
-    pair.algo = 'STAT_ARB'
-    pair.entry_z = 0.0001              # everything is a signal
-    coordinator = Coordinator(config, legs, sleep=lambda s: None)
-    coordinator.start()
-    spot = legs['acct_a'].broker.symbols['XAUUSD_']
-    for i in range(40):
-        spot.quote(4292.00 + (0.05 if i % 2 else -0.05), 4292.20)
-        coordinator.poll_once()
-    legs['acct_a'].broker.sent.clear()
-    legs['acct_b'].broker.sent.clear()
-
-    for _ in range(20):
-        spot.quote(4200.00, 4200.20)   # a mile from the mean
-        coordinator.poll_once()
-
-    row = coordinator.snapshot()['pairs'][pair.key]
-    assert row['algo_block']['stat']['verdict'] in ('BUY', 'SELL')
-    # ...and not one order, position or working order came of it.
-    assert legs['acct_a'].broker.sent == []
-    assert legs['acct_b'].broker.sent == []
-    assert coordinator.book.positions() == []
-    assert coordinator.book.orders(pair.key) == []
-
-
-def test_a_ladder_running_NONE_measures_nothing_at_all(config, pair, legs):
+def test_a_ladder_running_NONE_computes_nothing_at_all(config, pair, legs):
     """"Nothing is incorporated until it is enabled" has to be true of
-    the measuring as well as the acting: no window, no statistics, no
-    memory, no cost."""
+    the computing as well as the acting: no reading, nothing on the
+    wire, nothing to go wrong."""
     from mt5trader.coordinator import Coordinator
     coordinator = Coordinator(config, legs, sleep=lambda s: None)
     coordinator.start()
@@ -293,30 +147,11 @@ def test_a_ladder_running_NONE_measures_nothing_at_all(config, pair, legs):
         coordinator.poll_once()
 
     assert pair.algo == 'NONE'
-    assert coordinator._stats == {}
     block = coordinator.snapshot()['pairs'][pair.key]['algo_block']
     assert block == {'algo': 'NONE', 'window': False}
 
-    # The control: select it, and the window starts filling.
-    pair.algo = 'STAT_ARB'
-    coordinator.poll_once()
-    assert coordinator._stats[pair.key].buy.samples
-
-
-def test_only_one_algo_runs_at_a_time(config, pair, legs):
-    """One selector, so the question cannot arise. Selecting the other
-    one drops the first, statistics and all."""
-    from mt5trader.coordinator import Coordinator
-    coordinator = Coordinator(config, legs, sleep=lambda s: None)
-    coordinator.start()
-    pair.algo = 'STAT_ARB'
-    coordinator.poll_once()
-    assert pair.key in coordinator._stats
-
+    # The control: select it, and the reading appears.
     pair.algo = 'FAIR_SPREAD'
     coordinator.poll_once()
-
     block = coordinator.snapshot()['pairs'][pair.key]['algo_block']
-    assert block['algo'] == 'FAIR_SPREAD'
-    assert 'stat' not in block
-    assert coordinator._stats == {}
+    assert block['algo'] == 'FAIR_SPREAD' and 'fair' in block

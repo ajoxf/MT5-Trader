@@ -97,10 +97,6 @@ class Coordinator:
         #: (mtime, size) of the config last read, so the hot-apply
         #: watcher opens the file only when it has actually changed.
         self._config_marker = None
-        #: pair key -> the rolling statistics behind STAT_ARB. Built
-        #: only for a ladder that has the algo SELECTED: nothing is
-        #: measured, stored or computed for a pair whose algo is NONE.
-        self._stats = {}
         #: pair key -> the price its ladder window is anchored on. Held
         #: still between polls so a row keeps its price; see
         #: `ladder_anchor`.
@@ -420,13 +416,6 @@ class Coordinator:
             # see what they are clicking into (spec §8).
             md['feed_badge'] = _badge(md, stale, jumped)
             self._observe_session(key, md, pair)
-            # The stat-arb window, fed by quote EVENTS rather than by
-            # polls: the coordinator polls faster than either broker
-            # ticks, and counting polls collapses sigma toward zero and
-            # explodes the z-score.
-            stats = self.algo_stats(pair)
-            if stats is not None:
-                stats.observe(md)
             self.market[key] = md
             # LIMIT-mode orders are worked on the SAME pass that priced
             # them: a peg re-priced off a snapshot older than the one on
@@ -716,28 +705,6 @@ class Coordinator:
             self.session_events.extend(events)
         return events
 
-    def algo_stats(self, pair):
-        """The rolling window for this ladder, or None.
-
-        Built on demand and thrown away when the algo is turned off, so
-        a ladder running NONE carries no statistics, no memory and no
-        cost. "Nothing is incorporated until it is enabled" has to be
-        true of the measuring as well as the acting.
-        """
-        if pair.algo != algo_module.STAT_ARB:
-            self._stats.pop(pair.key, None)
-            return None
-        settings = pair.exit_settings(self.config.settings)
-        lookback = float(pair.lookback_sec
-                         or settings.get('LOOKBACK_SEC', 1800.0) or 1800.0)
-        stats = self._stats.get(pair.key)
-        if stats is None:
-            stats = algo_module.PairStats(lookback, clock=self.clock)
-            self._stats[pair.key] = stats
-        else:
-            stats.resize(lookback)
-        return stats
-
     def algo_block(self, pair, md, exit_levels=None):
         """What the selected algo says. NONE says nothing at all.
 
@@ -747,19 +714,10 @@ class Coordinator:
         """
         selected = pair.algo or algo_module.NONE
         body = {'algo': selected, 'window': pair.algo_window}
-        if selected == algo_module.NONE:
-            return body
         if selected == algo_module.FAIR_SPREAD:
             body['fair'] = self.fair_spread(pair, md)
             body['kind'] = body['fair'].get('kind')
             body['kind_note'] = body['fair'].get('kind_note')
-            return body
-        settings = pair.exit_settings(self.config.settings)
-        body['stat'] = algo_module.stat_arb(
-            self._stats.get(pair.key), md,
-            entry_z=(pair.entry_z if pair.entry_z is not None
-                     else settings.get('ENTRY_Z', 2.5)),
-            exit_levels=exit_levels)
         return body
 
     def holding_carry(self, pair, direction, nights):

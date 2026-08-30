@@ -140,23 +140,6 @@
           <button type="button" class="fair-fix" hidden></button>
         </div>
       </div>
-      <!-- STAT ARB: the spread against its own recent history. A
-           reading and a verdict — nothing here places an order, and
-           a click on the ladder behaves the same whether this says
-           WAIT or SELL. -->
-      <div class="statarb" hidden title="The spread against its own recent history: a rolling mean, a standard deviation and a z-score, measured on each executable side separately. It says what it WOULD do; it does not trade.">
-        <label class="rail-label">Stat arb<button type="button" class="cog open-exits" title="Set the lookback, the entry z and the profit target — this ladder&#8217;s own settings">&#9881;</button></label>
-        <table class="exits stats">
-          <tr class="heads"><th></th><th class="col-b" title="Buying the spread">B</th><th class="col-s" title="Selling the spread">S</th></tr>
-          <tr><th>z</th><td class="z-buy">—</td><td class="z-sell">—</td></tr>
-          <tr><th>mean</th><td class="mu-buy">—</td><td class="mu-sell">—</td></tr>
-          <tr><th>sd</th><td class="sd-buy">—</td><td class="sd-sell">—</td></tr>
-          <tr><th>enter</th><td class="entry-z" colspan="2">—</td></tr>
-          <tr><th>window</th><td class="stat-window" colspan="2">—</td></tr>
-          <tr><th>says</th><td class="verdict" colspan="2">—</td></tr>
-        </table>
-        <div class="stat-note hint"></div>
-      </div>
       <!-- Where to get out: break-even, and break-even plus a target
            on the margin one spread ties up. A price on the screen —
            nothing is sent to the broker, and no leg ever carries a
@@ -352,25 +335,20 @@
             <input class="ls-roundtrip" type="number" step="0.01" placeholder="measured"></label>
         </div>
         <div class="ls-group">
-          <h4>Algo <small>one at a time, and none by default</small></h4>
+          <h4>Algo <small>none by default</small></h4>
           <!-- An algo MEASURES and says what it would do. It does not
                place, modify or cancel an order, and a click on the
                ladder behaves identically whether one is selected or
                not. Manual trading is untouched either way. -->
           <label class="lsf"><span>Algo</span>
-            <select class="ls-algo" title="FAIR SPREAD: what the basis should be on financing alone. STAT ARB: the spread against its own recent history. Neither trades — both are readings beside the market.">
+            <select class="ls-algo" title="FAIR SPREAD: what the basis should be on financing alone, with the break-even and target beside it. A reading — it does not trade.">
               <option value="NONE">None</option>
               <option value="FAIR_SPREAD">Fair spread</option>
-              <option value="STAT_ARB">Stat arb</option>
             </select></label>
           <label class="lsf check-row"
                  title="Show the selected algo in a window of its own, floating where you put it. Off, the ladder carries the price and nothing else.">
             <span>Show window</span>
             <input type="checkbox" class="ls-algo-window"></label>
-          <label class="lsf"><span>Lookback (s)</span>
-            <input class="ls-lookback" type="number" min="30" step="30" placeholder="default"></label>
-          <label class="lsf"><span>Entry z</span>
-            <input class="ls-entry-z" type="number" min="0" step="0.1" placeholder="default"></label>
           <div class="lsf-note hint">An algo reads; it does not trade.
             Clicks on the ladder are unaffected.</div>
         <div class="ls-group">

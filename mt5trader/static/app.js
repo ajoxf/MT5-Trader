@@ -937,8 +937,6 @@
     ['.ls-auto-route', 'auto_route', 'check'],
     ['.ls-algo', 'algo', 'text'],
     ['.ls-algo-window', 'algo_window', 'check'],
-    ['.ls-lookback', 'lookback_sec', 'blank'],
-    ['.ls-entry-z', 'entry_z', 'blank'],
     ['.ls-increment', 'increment', 'number'],
     ['.ls-rows', 'rows', 'number'],
     ['.ls-qty', 'default_quantity', 'number'],
@@ -1359,56 +1357,20 @@
   }
 
   function renderAlgo(node, row) {
-    /* Which algo this ladder is running, and what it says.
+    /* Which algo this ladder is running. FAIR SPREAD, or none.
      *
-     * ONE at a time, and NONE by default. An algo MEASURES: it does
-     * not place, modify or cancel an order, and a click on the ladder
-     * behaves identically whether it is saying WAIT or SELL. Nothing
-     * here is on the manual path.
+     * It MEASURES: it does not place, modify or cancel an order, and a
+     * click on the ladder behaves identically either way.
      */
     var block = row.algo_block || {};
     var selected = block.algo || row.algo || 'NONE';
-    var fair = node.querySelector('.fair');
-    var stat = node.querySelector('.statarb');
-    if (!stat) { return; }                 // a page from an older template
-    // The fair panel doubles as the "nothing selected" state: it is a
-    // reading beside the market either way, and an empty window would
-    // be a window with nothing in it.
-    fair.hidden = selected === 'STAT_ARB';
-    stat.hidden = selected !== 'STAT_ARB';
-
     var kind = node.querySelector('.fair-kind');
     if (kind) {
+      // Which arithmetic this pair gets — spot against a future, a
+      // calendar, or two instruments with no carry between them.
       kind.textContent = selected === 'FAIR_SPREAD'
         ? (block.kind_note || '') : '';
     }
-    if (selected !== 'STAT_ARB') { return; }
-
-    var s = block.stat || {};
-    var digits = digitsFor(row.increment);
-    node.querySelector('.z-buy').textContent = fmt(s.z_buy, 2);
-    node.querySelector('.z-sell').textContent = fmt(s.z_sell, 2);
-    node.querySelector('.mu-buy').textContent = fmt(s.mu_buy, digits);
-    node.querySelector('.mu-sell').textContent = fmt(s.mu_sell, digits);
-    node.querySelector('.sd-buy').textContent = fmt(s.sigma_buy, digits);
-    node.querySelector('.sd-sell').textContent = fmt(s.sigma_sell, digits);
-    node.querySelector('.entry-z').textContent =
-      s.entry_z === null || s.entry_z === undefined
-        ? DASH : '\u00b1' + fmt(s.entry_z, 1) + '\u03c3';
-    // How much history is behind the number, because a z-score off
-    // four quotes is not a z-score and the screen must not pretend
-    // otherwise.
-    node.querySelector('.stat-window').textContent = s.lookback_sec
-      ? (s.samples || 0) + ' / ' + Math.round(s.lookback_sec) + 's'
-      : DASH;
-    var verdict = node.querySelector('.verdict');
-    verdict.textContent = s.verdict || DASH;
-    verdict.className = 'verdict ' + String(s.verdict || '').toLowerCase();
-    verdict.title = s.exit_level !== null && s.exit_level !== undefined
-      ? 'it would take this and leave at ' + fmt(s.exit_level, digits)
-        + ' — you place it; nothing here does'
-      : 'a reading, not an order: nothing is sent from this window';
-    node.querySelector('.stat-note').textContent = s.note || '';
   }
 
   function renderFair(node, row) {

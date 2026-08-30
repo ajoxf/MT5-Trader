@@ -163,8 +163,6 @@ class CommandRunner:
         #: trade, and a click on the ladder is unaffected either way.
         'algo': str,
         'algo_window': bool,
-        'lookback_sec': float,
-        'entry_z': float,
         #: The name the window toggle had before there were two algos.
         'show_fair_window': bool,
     }

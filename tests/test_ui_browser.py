@@ -2120,60 +2120,19 @@ def test_the_fair_window_is_no_bigger_than_the_figures_in_it(page):
     assert clipped == 0
 
 
-def test_the_window_shows_WHICHEVER_algo_is_selected(page):
-    """One window, one algo, and NONE by default. A ladder running the
-    z-score must not also be showing a fair value it is not using — two
-    readings in one window is two things to act on."""
-    open_ladder(page)
-    page.wait_for_selector('.window.fairwin', timeout=WAIT)
-
-    # Nothing selected: the fair panel stands, as the reading it always
-    # was, and the stat block is not there.
-    assert page.locator('.window.fairwin .statarb').is_hidden()
-    assert page.locator('.window.fairwin .fair').is_visible()
-
-    page.paths['publisher'].algo = 'STAT_ARB'
-    page.paths['publisher'].algo_block = {
-        'algo': 'STAT_ARB', 'window': True,
-        'stat': {'lookback_sec': 1800, 'samples': 412, 'ready': True,
-                 'mu_buy': -4.55, 'mu_sell': -4.60,
-                 'sigma_buy': 0.021, 'sigma_sell': 0.019,
-                 'z_buy': -2.71, 'z_sell': -2.40, 'entry_z': 2.5,
-                 'verdict': 'BUY', 'exit_level': -4.10,
-                 'note': 'a reading, not an order'}}
-    page.paths['publisher'].publish()
-    page.wait_for_function(
-        "() => !document.querySelector('.window.fairwin .statarb').hidden",
-        timeout=WAIT)
-
-    assert page.locator('.window.fairwin .fair').is_hidden()
-    assert page.text_content('.window.fairwin .z-buy') == '-2.71'
-    assert page.text_content('.window.fairwin .verdict') == 'BUY'
-    # How much history is behind it, because a z off four quotes is not
-    # a z — and the exit it names is the manual take-profit.
-    assert '412' in page.text_content('.window.fairwin .stat-window')
-    assert 'nothing here does' in page.get_attribute(
-        '.window.fairwin .verdict', 'title')
-
-    page.paths['publisher'].algo = 'NONE'
-    page.paths['publisher'].algo_block = None
-    page.paths['publisher'].publish()
-
-
 def test_the_algo_is_chosen_on_the_ladder_it_belongs_to(page):
-    """Per ladder, one at a time, and none by default — and the pane
-    says in words that an algo does not trade."""
+    """Per ladder, none by default — and the pane says in words that an
+    algo does not trade."""
     open_ladder(page)
     page.click('.ladder .ladder-cog')
     page.wait_for_selector('.ladder .ls-algo', timeout=WAIT)
 
     options = page.eval_on_selector_all(
         '.ladder .ls-algo option', 'els => els.map(e => e.value)')
-    assert options == ['NONE', 'FAIR_SPREAD', 'STAT_ARB']
+    assert options == ['NONE', 'FAIR_SPREAD']
     assert page.input_value('.ladder .ls-algo') == 'NONE'
     assert 'does not trade' in page.text_content('.ladder .lsf-note')
-    for field in ('.ls-lookback', '.ls-entry-z', '.ls-algo-window'):
-        assert page.locator('.ladder ' + field).count() == 1, field
+    assert page.locator('.ladder .ls-algo-window').count() == 1
     page.click('.ladder .ls-close')
 
 
