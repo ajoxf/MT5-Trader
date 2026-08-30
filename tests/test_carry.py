@@ -422,10 +422,10 @@ def test_the_engine_publishes_the_fair_window_setting(config, pair, legs,
     runner = CommandRunner(coordinator, str(tmp_path / 'commands.jsonl'),
                            str(tmp_path / 'results.json'))
     answer = runner._do_set_pair({'pair': pair.key,
-                                  'fields': {'show_fair_window': True,
+                                  'fields': {'algo_window': True,
                                              'auto_route': True}})
 
-    assert answer['applied']['show_fair_window'] is True
+    assert answer['applied']['algo_window'] is True
     assert answer['applied']['auto_route'] is True
     coordinator.poll_once()
     assert coordinator.snapshot()['pairs'][pair.key][

@@ -32,6 +32,17 @@ from .models import OrderType, OvernightMode, TimeInForce
 BASIS_PAIR_TYPES = ('SPOT_FUTURE', 'FUTURE_FUTURE')
 
 
+def _algo_name(value):
+    """The selected algo, or NONE for anything unrecognised.
+
+    A typo must not arm something: the failure mode of a bad value is
+    the algo that does nothing, never one that does something else.
+    """
+    from .algo import ALGOS, NONE
+    name = str(value or NONE).upper()
+    return name if name in ALGOS else NONE
+
+
 def _blank_to_none(value):
     """A number from the UI, where blank means "unset" and 0 does not.
 
@@ -188,6 +199,11 @@ DEFAULT_SETTINGS = {
     #: on the screen and one wrong sign in a swap field is all it takes
     #: to display a licence to print money.
     'CARRY_RATE_PCT': None,
+    #: The stat-arb defaults, per system; each ladder may override
+    #: both. 30 minutes of quotes and 2.5 sigma is what the system this
+    #: is ported from ran on.
+    'LOOKBACK_SEC': 1800.0,
+    'ENTRY_Z': 2.5,
 
     # --- housekeeping -------------------------------------------------
     'RECONCILE_INTERVAL_SEC': 20.0,
@@ -262,7 +278,8 @@ class PairConfig:
                  commission_per_lot_b=None, slippage_allowance=None,
                  break_even_nights=None, tp_target_pct_of_margin=None,
                  bid_ask_round_trip_override=None, carry_rate_pct=None,
-                 show_fair_window=False):
+                 show_fair_window=False, algo=None, algo_window=None,
+                 lookback_sec=None, entry_z=None):
         self.key = key
         self.name = name or key
         self.leg_a = dict(leg_a or {})      # {'account': ..., 'symbol': ...}
@@ -327,11 +344,22 @@ class PairConfig:
         self.bid_ask_round_trip_override = _blank_to_none(
             bid_ask_round_trip_override)
         self.carry_rate_pct = _blank_to_none(carry_rate_pct)
-        #: Show this pair's fair value and exit in their OWN window.
-        #: Off by default: the ladder is for the price, and a panel of
-        #: derived figures beside it is a panel between the trader and
-        #: the market. On, it floats where the trader puts it.
-        self.show_fair_window = bool(show_fair_window)
+        #: Which ALGO is selected on this ladder — exactly one, and
+        #: NONE by default. An algo measures and says what it would do;
+        #: it does not trade, and it changes nothing about a click on
+        #: the ladder. Manual trading is unaffected either way.
+        self.algo = _algo_name(algo)
+        #: Show that algo's own window. Off by default: the ladder is
+        #: for the price, and a panel of derived figures beside it is a
+        #: panel between the trader and the market.
+        #: `show_fair_window` is the name this had before there were
+        #: two algos; a config written then still opens its window.
+        self.algo_window = bool(show_fair_window if algo_window is None
+                                else algo_window)
+        #: How far back the stat-arb window looks, and how many sigma
+        #: it takes to call a spread stretched.
+        self.lookback_sec = _blank_to_none(lookback_sec)
+        self.entry_z = _blank_to_none(entry_z)
         #: Cached MT5 metadata per leg, refreshed by the coordinator.
         self.meta_a = {}
         self.meta_b = {}
@@ -444,7 +472,8 @@ class PairConfig:
                    'swap_b_long_per_lot', 'swap_b_short_per_lot',
                    'order_type', 'time_in_force', 'overnight', 'increment',
                    'default_quantity', 'quoting_leg', 'rows',
-                   'show_fair_window')
+                   'algo', 'algo_window', 'show_fair_window',
+                   'lookback_sec', 'entry_z')
                   + tuple(EXIT_FIELDS))
 
     def apply_hot(self, raw):
@@ -461,8 +490,11 @@ class PairConfig:
             if field in self.EXIT_FIELDS or field == 'swap_per_day' or (
                     field.startswith('swap_') and field.endswith('_per_lot')):
                 value = _blank_to_none(value)
-            elif field in ('auto_route', 'show_fair_window'):
+            elif field in ('auto_route', 'algo_window', 'show_fair_window'):
+                field = 'algo_window' if field == 'show_fair_window' else field
                 value = bool(value)
+            elif field == 'algo':
+                value = _algo_name(value)
             elif field == 'order_type':
                 value = OrderType(value)
             elif field == 'time_in_force':
@@ -507,7 +539,8 @@ class PairConfig:
             'tp_target_pct_of_margin': self.tp_target_pct_of_margin,
             'bid_ask_round_trip_override': self.bid_ask_round_trip_override,
             'carry_rate_pct': self.carry_rate_pct,
-            'show_fair_window': self.show_fair_window,
+            'algo': self.algo, 'algo_window': self.algo_window,
+            'lookback_sec': self.lookback_sec, 'entry_z': self.entry_z,
         }
 
     @classmethod

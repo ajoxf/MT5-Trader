@@ -158,7 +158,14 @@ class CommandRunner:
         #: AutoRouting: on a fill, rest a working order to close at the
         #: take-profit. Default OFF, and it arms a target and NO STOP.
         'auto_route': bool,
-        #: This pair's fair value and exit, in their own window.
+        #: Which ALGO this ladder runs — one at a time, NONE by
+        #: default. It measures and says what it would do; it does not
+        #: trade, and a click on the ladder is unaffected either way.
+        'algo': str,
+        'algo_window': bool,
+        'lookback_sec': float,
+        'entry_z': float,
+        #: The name the window toggle had before there were two algos.
         'show_fair_window': bool,
     }
 
@@ -289,8 +296,11 @@ class CommandRunner:
             coerce = self.EDITABLE.get(name)
             if coerce is None:
                 continue          # not a per-ladder setting; ignored
-            setattr(pair, name, coerce(value))
-            applied[name] = getattr(pair, name)
+            # The old name for the window toggle still works, so a page
+            # that has not been reloaded goes on working.
+            field = 'algo_window' if name == 'show_fair_window' else name
+            setattr(pair, field, coerce(value))
+            applied[name] = getattr(pair, field)
         return {'pair': pair.key,
                 'applied': {k: getattr(v, 'value', v)
                             for k, v in applied.items()}}

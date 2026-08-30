@@ -658,13 +658,13 @@
      */
     var id = panelId('fair', key);
     if (on) { openPanel(id); } else { closePanel(id); }
-    setPair(key, {show_fair_window: !!on});
+    setPair(key, {algo_window: !!on});
     var row = (state.snapshot.pairs || {})[key];
-    if (row) { row.show_fair_window = !!on; }      // before the next poll
+    if (row) { row.algo_window = !!on; }           // before the next poll
     fetch('/api/pairs/' + encodeURIComponent(key), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({show_fair_window: !!on})
+      body: JSON.stringify({algo_window: !!on})
     }).catch(function () { /* the engine already has it */ });
   }
 
@@ -678,6 +678,8 @@
     title.textContent = name;
     title.title = key + ' — leg A ' + (row.symbol_a || '?') + ', leg B '
       + (row.symbol_b || '?');
+    // WHICH algo, first: the window shows one reading, not two.
+    renderAlgo(node, row);
     renderFair(node, row);
   }
 
@@ -933,7 +935,10 @@
     ['.ls-tif', 'time_in_force', 'text'],
     ['.ls-overnight', 'overnight', 'text'],
     ['.ls-auto-route', 'auto_route', 'check'],
-    ['.ls-fair-window', 'show_fair_window', 'check'],
+    ['.ls-algo', 'algo', 'text'],
+    ['.ls-algo-window', 'algo_window', 'check'],
+    ['.ls-lookback', 'lookback_sec', 'blank'],
+    ['.ls-entry-z', 'entry_z', 'blank'],
     ['.ls-increment', 'increment', 'number'],
     ['.ls-rows', 'rows', 'number'],
     ['.ls-qty', 'default_quantity', 'number'],
@@ -973,6 +978,10 @@
           var input = pane.querySelector(entry[0]);
           if (!input) { return; }
           var value = saved[entry[1]];
+          if (entry[1] === 'algo') { value = value || 'NONE'; }
+          if (entry[1] === 'algo_window' && value === undefined) {
+            value = saved.show_fair_window;      // the old name
+          }
           if (entry[2] === 'check') {
             input.checked = !!value;
           } else {
@@ -1074,11 +1083,14 @@
       // who has just ticked a box is looking at a screen that has not
       // changed, which reads as "it did not work".
       var row = (state.snapshot.pairs || {})[key];
-      if (row) { row.show_fair_window = !!payload.show_fair_window; }
+      if (row) {
+        row.algo_window = !!payload.algo_window;
+        row.algo = payload.algo || 'NONE';
+      }
       // One door for the window, so the pane and the window's own X
       // cannot disagree about whether it is open.
       var fairId = panelId('fair', key);
-      var wanted = !!payload.show_fair_window;
+      var wanted = !!payload.algo_window;
       if (wanted !== (state.open.indexOf(fairId) >= 0)) {
         if (wanted) { openPanel(fairId); } else { closePanel(fairId); }
       } else {
@@ -1344,6 +1356,59 @@
     if (legs.parentNode !== footer) { footer.appendChild(legs); }
     legs.innerHTML = legFeed(row, market);
 
+  }
+
+  function renderAlgo(node, row) {
+    /* Which algo this ladder is running, and what it says.
+     *
+     * ONE at a time, and NONE by default. An algo MEASURES: it does
+     * not place, modify or cancel an order, and a click on the ladder
+     * behaves identically whether it is saying WAIT or SELL. Nothing
+     * here is on the manual path.
+     */
+    var block = row.algo_block || {};
+    var selected = block.algo || row.algo || 'NONE';
+    var fair = node.querySelector('.fair');
+    var stat = node.querySelector('.statarb');
+    if (!stat) { return; }                 // a page from an older template
+    // The fair panel doubles as the "nothing selected" state: it is a
+    // reading beside the market either way, and an empty window would
+    // be a window with nothing in it.
+    fair.hidden = selected === 'STAT_ARB';
+    stat.hidden = selected !== 'STAT_ARB';
+
+    var kind = node.querySelector('.fair-kind');
+    if (kind) {
+      kind.textContent = selected === 'FAIR_SPREAD'
+        ? (block.kind_note || '') : '';
+    }
+    if (selected !== 'STAT_ARB') { return; }
+
+    var s = block.stat || {};
+    var digits = digitsFor(row.increment);
+    node.querySelector('.z-buy').textContent = fmt(s.z_buy, 2);
+    node.querySelector('.z-sell').textContent = fmt(s.z_sell, 2);
+    node.querySelector('.mu-buy').textContent = fmt(s.mu_buy, digits);
+    node.querySelector('.mu-sell').textContent = fmt(s.mu_sell, digits);
+    node.querySelector('.sd-buy').textContent = fmt(s.sigma_buy, digits);
+    node.querySelector('.sd-sell').textContent = fmt(s.sigma_sell, digits);
+    node.querySelector('.entry-z').textContent =
+      s.entry_z === null || s.entry_z === undefined
+        ? DASH : '\u00b1' + fmt(s.entry_z, 1) + '\u03c3';
+    // How much history is behind the number, because a z-score off
+    // four quotes is not a z-score and the screen must not pretend
+    // otherwise.
+    node.querySelector('.stat-window').textContent = s.lookback_sec
+      ? (s.samples || 0) + ' / ' + Math.round(s.lookback_sec) + 's'
+      : DASH;
+    var verdict = node.querySelector('.verdict');
+    verdict.textContent = s.verdict || DASH;
+    verdict.className = 'verdict ' + String(s.verdict || '').toLowerCase();
+    verdict.title = s.exit_level !== null && s.exit_level !== undefined
+      ? 'it would take this and leave at ' + fmt(s.exit_level, digits)
+        + ' — you place it; nothing here does'
+      : 'a reading, not an order: nothing is sent from this window';
+    node.querySelector('.stat-note').textContent = s.note || '';
   }
 
   function renderFair(node, row) {
@@ -2864,7 +2929,7 @@
       // says, because a window that vanishes when the engine hiccups
       // is a window the trader cannot rely on.
       var fairId = panelId('fair', key);
-      if (snapshot.pairs[key].show_fair_window && !state.closed[fairId]
+      if (snapshot.pairs[key].algo_window && !state.closed[fairId]
           && state.open.indexOf(fairId) < 0) {
         state.open.push(fairId);
       }

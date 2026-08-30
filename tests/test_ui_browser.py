@@ -66,6 +66,11 @@ class Publisher:
         #: The fair-value window is per pair and off by default; the
         #: fixture turns it on so the panels it holds can be read.
         self.show_fair_window = True
+        #: Which algo the ladder is running, and what it says. NONE by
+        #: default — the state every test that is not about an algo
+        #: must see, because an algo must change nothing else.
+        self.algo = 'NONE'
+        self.algo_block = None
         #: Working orders and their quote groups, as the engine
         #: publishes them. Poked into `state.snapshot` instead, the
         #: next poll — 200ms away — erases them, and the test passes or
@@ -93,7 +98,7 @@ class Publisher:
                            self.auto_route, self.auto_route_armed,
                            self.show_fair_window, self.orders,
                            self.quotes, self.working_buys,
-                           self.working_sells)
+                           self.working_sells, self.algo, self.algo_block)
         if at is not None:
             payload['at'] = at
         # A tmp name of its OWN. The timer thread and the test publish
@@ -140,7 +145,7 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              positions=None, unclaimed=None, fair=None,
              auto_route=False, auto_route_armed=None,
              show_fair_window=True, orders=None, quotes=None,
-             working_buys=0, working_sells=0):
+             working_buys=0, working_sells=0, algo='NONE', algo_block=None):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -186,6 +191,10 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'order_type': order_type, 'time_in_force': 'DAY',
                 'overnight': 'ALLOW', 'default_quantity': 1.0,
                 'auto_route': auto_route,
+                'algo': algo,
+                'algo_window': show_fair_window,
+                'algo_block': algo_block or {'algo': algo,
+                                             'window': show_fair_window},
                 'show_fair_window': show_fair_window,
                 'auto_route_armed': auto_route_armed or [],
                 'clip_lots_a': 0.1, 'clip_lots_b': 0.1, 'spread_units': 10.0,
@@ -2111,6 +2120,63 @@ def test_the_fair_window_is_no_bigger_than_the_figures_in_it(page):
     assert clipped == 0
 
 
+def test_the_window_shows_WHICHEVER_algo_is_selected(page):
+    """One window, one algo, and NONE by default. A ladder running the
+    z-score must not also be showing a fair value it is not using — two
+    readings in one window is two things to act on."""
+    open_ladder(page)
+    page.wait_for_selector('.window.fairwin', timeout=WAIT)
+
+    # Nothing selected: the fair panel stands, as the reading it always
+    # was, and the stat block is not there.
+    assert page.locator('.window.fairwin .statarb').is_hidden()
+    assert page.locator('.window.fairwin .fair').is_visible()
+
+    page.paths['publisher'].algo = 'STAT_ARB'
+    page.paths['publisher'].algo_block = {
+        'algo': 'STAT_ARB', 'window': True,
+        'stat': {'lookback_sec': 1800, 'samples': 412, 'ready': True,
+                 'mu_buy': -4.55, 'mu_sell': -4.60,
+                 'sigma_buy': 0.021, 'sigma_sell': 0.019,
+                 'z_buy': -2.71, 'z_sell': -2.40, 'entry_z': 2.5,
+                 'verdict': 'BUY', 'exit_level': -4.10,
+                 'note': 'a reading, not an order'}}
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => !document.querySelector('.window.fairwin .statarb').hidden",
+        timeout=WAIT)
+
+    assert page.locator('.window.fairwin .fair').is_hidden()
+    assert page.text_content('.window.fairwin .z-buy') == '-2.71'
+    assert page.text_content('.window.fairwin .verdict') == 'BUY'
+    # How much history is behind it, because a z off four quotes is not
+    # a z — and the exit it names is the manual take-profit.
+    assert '412' in page.text_content('.window.fairwin .stat-window')
+    assert 'nothing here does' in page.get_attribute(
+        '.window.fairwin .verdict', 'title')
+
+    page.paths['publisher'].algo = 'NONE'
+    page.paths['publisher'].algo_block = None
+    page.paths['publisher'].publish()
+
+
+def test_the_algo_is_chosen_on_the_ladder_it_belongs_to(page):
+    """Per ladder, one at a time, and none by default — and the pane
+    says in words that an algo does not trade."""
+    open_ladder(page)
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-algo', timeout=WAIT)
+
+    options = page.eval_on_selector_all(
+        '.ladder .ls-algo option', 'els => els.map(e => e.value)')
+    assert options == ['NONE', 'FAIR_SPREAD', 'STAT_ARB']
+    assert page.input_value('.ladder .ls-algo') == 'NONE'
+    assert 'does not trade' in page.text_content('.ladder .lsf-note')
+    for field in ('.ls-lookback', '.ls-entry-z', '.ls-algo-window'):
+        assert page.locator('.ladder ' + field).count() == 1, field
+    page.click('.ladder .ls-close')
+
+
 def test_turning_the_window_off_closes_it_and_KEEPS_it_closed(page):
     """Closing it IS turning it off. A window that comes back on the
     next poll — because the pair's setting still says so — is a window
@@ -2676,12 +2742,15 @@ def test_ticking_the_setting_OPENS_the_fair_window(page):
 
     page.evaluate(SPY_ON_PAIR_SAVE)
     page.click('.ladder .ladder-cog')
-    page.wait_for_selector('.ladder .ls-fair-window', timeout=WAIT)
-    page.check('.ladder .ls-fair-window')
+    page.wait_for_selector('.ladder .ls-algo-window', timeout=WAIT)
+    page.select_option('.ladder .ls-algo', 'FAIR_SPREAD')
+    page.check('.ladder .ls-algo-window')
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
 
-    assert page.evaluate('() => window.__sent')['show_fair_window'] is True
+    sent = page.evaluate('() => window.__sent')
+    assert sent['algo_window'] is True
+    assert sent['algo'] == 'FAIR_SPREAD'
     # ...and it is on the screen NOW, not a poll later and not only once
     # the engine has written the file back.
     page.wait_for_selector('.window.fairwin', timeout=WAIT)
