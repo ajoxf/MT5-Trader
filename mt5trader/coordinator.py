@@ -106,6 +106,11 @@ class Coordinator:
         #: still between polls so a row keeps its price; see
         #: `ladder_anchor`.
         self._ladder_anchor = {}
+        #: Pairs whose ladder the trader has LOCKED. A locked ladder
+        #: does not re-anchor and does not widen its window to follow
+        #: the touches: the price at every row stays where it is until
+        #: they press Centre. See `_anchor_for` and `ladder_rows`.
+        self._ladder_locked = {}
         #: pair key -> when a stale leg was last written to the log
         self._stale_logged = {}
         #: pair key -> when a stale pair last re-subscribed itself
@@ -1305,10 +1310,30 @@ class Coordinator:
         spread = (md or {}).get('spread')
         if not increment or spread is None:
             return self._ladder_anchor.get(key)
-        anchor = ladder_anchor(self._ladder_anchor.get(key), spread,
-                               increment, int(pair.rows))
+        held = self._ladder_anchor.get(key)
+        # LOCKED means locked. The drift rule below is what a ladder
+        # does when the trader has not said otherwise; once they have,
+        # the window stays where they put it however far the market
+        # walks, and Centre is how they get it back.
+        if held is not None and self._ladder_locked.get(key):
+            return held
+        anchor = ladder_anchor(held, spread, increment, int(pair.rows))
         self._ladder_anchor[key] = anchor
         return anchor
+
+    def lock_ladder(self, key, locked):
+        """Hold this pair's price window still, or let it follow again.
+
+        The Lock tick on the ladder. It used to stop only the BROWSER
+        scrolling, which left the two movers that actually shift a
+        price off its row — the anchor re-centring, and the window
+        widening to cover the touches — running underneath it. A
+        control named Lock that locks a third of the movement is worse
+        than no control, because the trader believes the ladder is
+        still.
+        """
+        self._ladder_locked[key] = bool(locked)
+        return bool(locked)
 
     def recentre_ladder(self, key):
         """Drop the anchor so the next poll rebuilds around the market.
@@ -1316,6 +1341,10 @@ class Coordinator:
         The manual Recentre button, and what a pair falls back to when
         its market has walked out of the window entirely.
         """
+        # Deliberately does NOT clear the lock: Centre means "show me
+        # the market again", not "and start following it". A trader who
+        # locked the ladder gets a window rebuilt around the market and
+        # then held there.
         self._ladder_anchor.pop(key, None)
 
     def broker_offset(self):
@@ -1506,10 +1535,16 @@ class Coordinator:
                 # column, the click that places an order and the price
                 # that names it cannot disagree about where a level is.
                 'rows': ladder_rows(pair, md, self.book, sizes=sizes,
-                                    anchor=self._anchor_for(key, pair, md)),
+                                    anchor=self._anchor_for(key, pair, md),
+                                    frozen=bool(self._ladder_locked
+                                                .get(key))),
                 # What the window is built around, so the screen can say
                 # how far the market has drifted from it.
                 'ladder_anchor': self._ladder_anchor.get(key),
+                # Published so a browser that reloaded, or a second one
+                # on another screen, shows the tick that matches what
+                # the engine is actually doing.
+                'ladder_locked': bool(self._ladder_locked.get(key)),
                 'depth_published': sizes['published'],
                 'orders': [o.to_dict() for o in self.book.orders(key)],
                 # Orders that STOPPED working recently, with the reason.
@@ -1881,7 +1916,8 @@ def ladder_anchor(previous, spread, increment, rows, drift=0.34):
     return previous
 
 
-def ladder_rows(pair, md, book, rows=None, sizes=None, anchor=None):
+def ladder_rows(pair, md, book, rows=None, sizes=None, anchor=None,
+                frozen=False):
     """The rows the ladder draws: the anchor +/- N increments.
 
     Generated here rather than in the browser so the ladder cannot
@@ -1908,7 +1944,18 @@ def ladder_rows(pair, md, book, rows=None, sizes=None, anchor=None):
     low = centre - rows * increment
     high = centre + rows * increment
 
-    marks = [md.get('short_spread'), md.get('long_spread')]
+    # The two touches move with every tick, so widening the window to
+    # reach them ADDS AND REMOVES ROWS AT THE ENDS as the market walks
+    # — and a row appearing above shifts every price below it down by
+    # one. That is the second way a ladder crawls, and holding the
+    # anchor still does nothing about it. A frozen ladder therefore
+    # stops following the touches.
+    #
+    # Working orders keep their claim either way: their levels are
+    # FIXED once placed, so they widen the window once and never
+    # again, and a resting order the trader cannot see is one they
+    # cannot pull.
+    marks = [] if frozen else [md.get('short_spread'), md.get('long_spread')]
     marks += [order.level for order in book.orders(pair.key)]
     marks = [m for m in marks if m is not None]
     if marks:

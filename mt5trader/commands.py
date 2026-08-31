@@ -189,6 +189,18 @@ class CommandRunner:
         self.coordinator.recentre_ladder(payload['pair'])
         return {'ok': True, 'pair': payload['pair']}
 
+    def _do_lock_ladder(self, payload):
+        """Hold this pair's price window still, or release it.
+
+        The engine has to know, not just the browser: the anchor and
+        the row window are built server-side, and a Lock the engine
+        never hears about leaves both of them following the market
+        under a ladder the trader believes is still.
+        """
+        locked = self.coordinator.lock_ladder(payload['pair'],
+                                              payload.get('locked'))
+        return {'ok': True, 'pair': payload['pair'], 'locked': locked}
+
     def _do_cancel_order(self, payload):
         return self.coordinator.cancel_order(payload['order_id'])
 
