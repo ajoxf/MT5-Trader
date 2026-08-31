@@ -347,16 +347,42 @@
     return el('desktop').getBoundingClientRect();
   }
 
+  function desktopOrigin() {
+    /* Where a floating window's `left: 0` actually SITS on the screen.
+     *
+     * The desktop scrolls sideways (`overflow-x: auto`) and is the
+     * containing block for every floating window, so `style.left` is
+     * measured from the scrolled CONTENT origin. A bounding rect is
+     * measured from the VISIBLE edge. Those two differ by exactly
+     * `scrollLeft`, and a drag that reads one and writes the other
+     * moves the window by the scroll distance in the wrong direction
+     * — which reads as a window that runs away from the cursor.
+     */
+    var node = el('desktop');
+    var rect = node.getBoundingClientRect();
+    return {left: rect.left - node.scrollLeft,
+            top: rect.top - node.scrollTop};
+  }
+
   function clampTo(node, left, top) {
-    var desktop = desktopBox();
+    var desktop = el('desktop');
     var width = node.offsetWidth || 200;
+    // The right-hand stop is the edge of what the trader can SEE right
+    // now, which is the scrolled viewport rather than the desktop's
+    // own width. Clamping to the width alone pinned every window into
+    // the first screenful: drag one past the fold and it sprang back.
+    // Deliberately NOT scrollWidth — a floating window contributes to
+    // that, so the ceiling would grow as the window approached it and
+    // the window would never stop.
+    var rightStop = desktop.scrollLeft + desktop.clientWidth
+      - KEEP_VISIBLE_PX;
+    var bottomStop = desktop.scrollTop + desktop.clientHeight - 24;
     return {
       left: Math.min(Math.max(left, KEEP_VISIBLE_PX - width),
-                     Math.max(desktop.width - KEEP_VISIBLE_PX, 0)),
+                     Math.max(rightStop, 0)),
       // Never above the desktop: a title bar under the banner cannot be
       // grabbed at all.
-      top: Math.min(Math.max(top, 0),
-                    Math.max(desktop.height - 24, 0))
+      top: Math.min(Math.max(top, 0), Math.max(bottomStop, 0))
     };
   }
 
@@ -400,6 +426,11 @@
 
   function floatByDefault(node, id) {
     var desktop = desktopBox();
+    // Sizes come from the VISIBLE desktop; positions are written in
+    // content coordinates, so they are measured from the scrolled
+    // origin. Mixing the two puts a tool window off-screen the moment
+    // the desk has been scrolled sideways.
+    var origin = desktopOrigin();
     if (!desktop.width) { return; }
     var wanted = size(node,
                       Math.min(1180, Math.max(desktop.width - 80, 320)),
@@ -415,10 +446,11 @@
       function (ladder) {
         if (ladder.classList.contains('floating')) { return; }
         var box = ladder.getBoundingClientRect();
-        free = Math.max(free, box.right - desktop.left + 8);
+        free = Math.max(free, box.right - origin.left + 8);
       });
     var left = Math.max(Math.min(free + index * 24,
-                                 desktop.width - wanted.w - 8), 8);
+                                 el('desktop').scrollLeft + desktop.width
+                                 - wanted.w - 8), 8);
     var top = Math.min(30 + index * 24,
                        Math.max(desktop.height - wanted.h - 8, 0));
     var at = place(node, left, top);
@@ -522,7 +554,7 @@
     if (e.target.closest('button, select, input, a')) { return; }
 
     var box = node.getBoundingClientRect();
-    var desktop = desktopBox();
+    var desktop = desktopOrigin();
     var grabX = e.clientX - box.left;
     var grabY = e.clientY - box.top;
     var startX = e.clientX;
@@ -547,7 +579,10 @@
         place(node, box.left - desktop.left, box.top - desktop.top);
         raise(node);
       }
-      var frame = desktopBox();
+      // Re-read every move: a drag that reaches the edge scrolls the
+      // desktop under the window, and an origin captured at grab time
+      // would then be stale by exactly that scroll.
+      var frame = desktopOrigin();
       var at = place(node, event.clientX - grabX - frame.left,
                      event.clientY - grabY - frame.top);
       layout[panelIdOf(node)].left = at.left;
@@ -725,7 +760,7 @@
       });
 
     node.querySelector('.lock-scroll').addEventListener('change', function (e) {
-      state.locked[key] = e.target.checked;
+      setLocked(key, e.target.checked);
     });
     node.querySelector('.recentre').addEventListener('click', function () {
       // Both halves: the ENGINE re-anchors the price window (the rows
@@ -1316,6 +1351,15 @@
   function renderLadder(key, row) {
     var node = ladderNode(key);
     var market = row.market || {};
+    // The ENGINE holds the lock; the browser only shows it. On the
+    // first draw of a pair — a reload, or a second screen — adopt what
+    // the engine reports rather than starting unticked over a window
+    // the engine is still holding still.
+    if (state.locked[key] === undefined) {
+      state.locked[key] = !!row.ladder_locked;
+      var first = node.querySelector('.lock-scroll');
+      if (first) { first.checked = state.locked[key]; }
+    }
     node.classList.toggle('mode-market', row.order_type === 'MARKET');
     node.classList.toggle('inactive', state.active !== panelId('ladder', key));
     node.querySelector('.title').textContent = row.name || key;
@@ -2039,6 +2083,24 @@
   //: window that re-centres between a mousedown and the mouseup is a
   //: window that moved the order.
   var BUSY_GRACE_MS = 1200;
+
+  function setLocked(key, locked) {
+    /* Lock, in one place, because it has to reach THREE things.
+     *
+     * The browser stops recentring its scroll; the engine stops
+     * re-anchoring the price window; and the engine stops widening
+     * that window to follow the touches. Only the first of those is
+     * local, and a Lock that did only the first is what left the
+     * ladder crawling with the box ticked.
+     */
+    locked = !!locked;
+    state.locked[key] = locked;
+    var node = document.querySelector('.ladder[data-pair="' +
+                                      cssEscape(key) + '"]');
+    var box = node && node.querySelector('.lock-scroll');
+    if (box) { box.checked = locked; }
+    send('lock_ladder', {pair: key, locked: locked});
+  }
 
   function ladderIsBusy(key) {
     /* The trader is working this ladder RIGHT NOW: the pointer is over
@@ -3262,7 +3324,10 @@
     if (lower === 'f') { return flatten(key); }
     if (lower === 'x') { return send('cancel_where', {pair: key}); }
     if (lower === 'l') {
-      state.locked[key] = !state.locked[key];
+      // Through the same path as the tick, so the keyboard and the
+      // checkbox cannot end up disagreeing about a ladder that is
+      // held: the key used to set the flag and leave the box unticked.
+      setLocked(key, !state.locked[key]);
       return render();
     }
     if (lower === 'm') {

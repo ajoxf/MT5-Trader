@@ -1151,6 +1151,121 @@ def test_a_window_goes_where_it_is_dragged_and_is_still_there_after_a_reload(
     tidy(page)
 
 
+def scroll_desk(page, spacer_px=400, to=100):
+    """Put the desk into the state the bug needed: SCROLLED SIDEWAYS.
+
+    A spacer before the windows makes `#desktop` (overflow-x: auto)
+    scrollable, and scrolling it moves the content origin away from the
+    visible edge. Every drag test that ran on an unscrolled desk passed
+    with the bug present, because the two origins coincide at
+    scrollLeft 0.
+    """
+    page.evaluate("""([w, to]) => {
+        const desk = document.getElementById('desktop');
+        let pad = document.getElementById('__spacer');
+        if (!pad) {
+            pad = document.createElement('div');
+            pad.id = '__spacer';
+        }
+        // AFTER the windows, so a modest scroll leaves the ladder's
+        // title bar on screen to be grabbed, and wider than the desk
+        // so there is something to scroll at all.
+        desk.appendChild(pad);
+        pad.style.cssText = 'flex:0 0 auto;height:1px;width:'
+            + (desk.clientWidth + w) + 'px';
+        desk.scrollLeft = to;
+    }""", [spacer_px, to])
+    page.wait_for_timeout(60)
+    return page.evaluate("document.getElementById('desktop').scrollLeft")
+
+
+def unscroll_desk(page):
+    page.evaluate("""() => {
+        const pad = document.getElementById('__spacer');
+        if (pad) { pad.remove(); }
+        document.getElementById('desktop').scrollLeft = 0;
+    }""")
+    page.wait_for_timeout(60)
+
+
+def test_a_window_follows_the_cursor_on_a_desk_scrolled_sideways(page):
+    """The window is positioned against the desktop's CONTENT origin,
+    and the drag used to measure from its VISIBLE edge. Those differ by
+    exactly scrollLeft, so on a scrolled desk the window jumped away
+    from the cursor — and the clamp, computed from the visible width,
+    then flung it back the other way."""
+    open_ladder(page)
+    tidy(page)
+    scrolled = scroll_desk(page)
+    assert scrolled > 0, 'the desk did not scroll, so this proves nothing'
+    try:
+        before = page.locator('.window.ladder').first.bounding_box()
+        drag(page, '.window.ladder', -150, 60)
+        after = page.locator('.window.ladder').first.bounding_box()
+        # On the SCREEN, where the hand is: dragged left 150, it moves
+        # left 150. Not right, and not by the scroll distance.
+        assert after['x'] - before['x'] == pytest.approx(-150, abs=8), (
+            f"dragged 150px left, moved {after['x'] - before['x']:+.0f}px")
+        assert after['y'] - before['y'] == pytest.approx(60, abs=8)
+    finally:
+        unscroll_desk(page)
+        tidy(page)
+
+
+def test_a_drag_on_a_scrolled_desk_moves_by_exactly_the_drag_distance(page):
+    """The other direction, and to the pixel.
+
+    The error was the scroll distance, so a loose assertion here passes
+    with the bug present. It has to be exact: drag 240, move 240.
+    """
+    open_ladder(page)
+    tidy(page)
+    scrolled = scroll_desk(page)
+    assert scrolled > 0, 'the desk did not scroll, so this proves nothing'
+    try:
+        before = page.locator('.window.ladder').first.bounding_box()
+        drag(page, '.window.ladder', 240, -40)
+        after = page.locator('.window.ladder').first.bounding_box()
+        assert after['x'] - before['x'] == pytest.approx(240, abs=8), (
+            f"dragged 240px right, moved {after['x'] - before['x']:+.0f}px "
+            f'on a desk scrolled {scrolled}px')
+    finally:
+        unscroll_desk(page)
+        tidy(page)
+
+
+def test_ticking_lock_tells_the_ENGINE_and_not_only_the_browser(page):
+    """Lock has to reach the server, or the two things that actually
+    move a price off its row — the anchor and the row window — carry on
+    following the market under a ladder the trader believes is still."""
+    open_ladder(page)
+    sent = []
+    page.expose_binding('__sawSend', lambda source, body: sent.append(body))
+    page.evaluate("""() => {
+        if (!window.__sendReal) { window.__sendReal = window.fetch; }
+        const real = window.__sendReal;
+        window.fetch = function (url, options) {
+            if (String(url).indexOf('/api/command') >= 0 && options) {
+                try { window.__sawSend(String(options.body)); } catch (e) {}
+            }
+            return real(url, options);
+        };
+    }""")
+    box = page.locator('.ladder .lock-scroll').first
+    was = box.is_checked()
+    box.set_checked(not was)
+    page.wait_for_timeout(300)
+    try:
+        assert any('lock_ladder' in body for body in sent), (
+            'ticking Lock sent no lock_ladder command: the engine never '
+            f'heard about it. Commands seen: {sent}')
+    finally:
+        box.set_checked(was)
+        page.wait_for_timeout(200)
+        page.evaluate("() => { if (window.__sendReal) "
+                      "{ window.fetch = window.__sendReal; } }")
+
+
 def test_a_window_can_never_be_dropped_where_it_cannot_be_got_back(page):
     """A window dragged off the edge with no title bar left on screen is
     a window that cannot be moved, closed or focused again — and the
