@@ -108,6 +108,28 @@
     });
     panel.addEventListener('click', onClick);
     panel.addEventListener('change', onChange);
+    // A click is mousedown AND mouseup on the SAME element. Replace
+    // that element in between — which the connection poll does every
+    // five seconds, wholesale, with `innerHTML =` — and the browser
+    // fires no click at all: the button the operator pressed no longer
+    // exists to receive it. Save pair did nothing, said nothing, and
+    // sent nothing (live 2026-08-31).
+    //
+    // So while a button is held down, nothing repaints. The redraw is
+    // not skipped, only deferred to the mouseup.
+    panel.addEventListener('mousedown', function () {
+      local.pressing = true;
+    });
+    ['mouseup', 'mouseleave', 'blur'].forEach(function (event) {
+      window.addEventListener(event, function () {
+        if (!local.pressing) { return; }
+        local.pressing = false;
+        // AFTER the click has been dispatched, not instead of it.
+        window.setTimeout(function () {
+          if (local.missed) { local.missed = false; render(); }
+        }, 0);
+      });
+    });
     document.getElementById('desktop').appendChild(panel);
     refresh();
     refreshConnection();
@@ -237,6 +259,8 @@
   function redraw(section, build) {
     if (!section) { return; }
     if (isTyping(section)) { return; }
+    // Not with a button held down: see the mousedown listener.
+    if (local.pressing) { local.missed = true; return; }
     // Nor while a window is being dragged: these three sections are
     // large tables, and rebuilding them under the pointer is most of
     // why this window moved like treacle.
@@ -730,6 +754,18 @@
   }
 
   function onClick(e) {
+    /* Every click on this page goes through here, and one that throws
+     * used to do nothing and SAY nothing — indistinguishable, from the
+     * operator's side, from a button that is not wired up. */
+    try {
+      return dispatch(e);
+    } catch (error) {
+      UI.toast('that click failed: ' + (error && error.message));
+      throw error;                      // still in the console, in full
+    }
+  }
+
+  function dispatch(e) {
     var button = e.target.closest('button');
     if (!button) { return; }
     var row = button.closest('tr');
@@ -941,6 +977,10 @@
       var input = form.querySelector(selector);
       return input ? input.value : '';
     }
+    function checked(selector, fallback) {
+      var input = form.querySelector(selector);
+      return input ? input.checked : fallback;
+    }
     local.draft = {
       key: value('.p-key') || local.draft.key,
       name: value('.p-name'),
@@ -950,7 +990,9 @@
         ? null : parseFloat(value('.p-increment')),
       default_quantity: parseFloat(value('.p-quantity')) || 1.0,
       quoting_leg: value('.p-quoting'),
-      enabled: form.querySelector('.p-enabled').checked,
+      // Never a hard read: this runs on every repaint, and one missing
+      // control must not take the whole form down with it.
+      enabled: checked('.p-enabled', local.draft.enabled !== false),
       leg_a_account: value('.p-account-a'),
       leg_a_symbol: value('.p-symbol-a'),
       leg_b_account: value('.p-account-b'),

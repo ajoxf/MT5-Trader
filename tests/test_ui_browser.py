@@ -1318,6 +1318,78 @@ def test_the_pairs_table_says_whether_each_ladder_is_actually_quoting(page):
     assert page.locator('td.pair-status.c-fail').count() >= 1
 
 
+def test_a_repaint_under_the_pointer_does_not_swallow_the_click(page):
+    """A click is mousedown AND mouseup on the SAME element. The
+    connection poll rebuilds this whole section every five seconds with
+    `innerHTML =`; landing between the two, it destroyed the button the
+    operator was pressing and the browser fired NO click — Save pair did
+    nothing, said nothing and sent nothing."""
+    seed_config(page)
+    page.click('.new-pair')
+    page.wait_for_selector('.pair-form', timeout=WAIT)
+    page.fill('.p-symbol-a', 'XAUUSD.f')
+    page.fill('.p-symbol-b', 'GCZ6.f')
+    page.select_option('.p-account-a', 'acct_a')
+    page.select_option('.p-account-b', 'acct_b')
+
+    page.evaluate("""() => {
+        window.__realFetch = window.__realFetch || window.fetch;
+        window.__sent = [];
+        window.fetch = function (url, options) {
+            window.__sent.push((options && options.method) + ' ' + String(url));
+            return Promise.resolve(new Response(
+                JSON.stringify({ok: true, pair: 'x'}),
+                {status: 200, headers: {'Content-Type': 'application/json'}}));
+        };
+    }""")
+
+    page.locator('.save-pair').scroll_into_view_if_needed()
+    box = page.locator('.save-pair').bounding_box()
+    page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    page.mouse.down()
+    # Mark the button the operator is actually pressing.
+    page.evaluate("() => { document.querySelector('.save-pair').__me = 1; }")
+    # ...and the poll fires, with the button still held down.
+    page.evaluate('() => window.MT5Settings.render()')
+    assert page.evaluate("() => !!document.querySelector('.save-pair').__me"), \
+        'the button was replaced under the pointer — the click is lost'
+    page.mouse.up()
+    page.wait_for_timeout(400)
+
+    sent = page.evaluate('() => window.__sent')
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+    assert any(u.startswith('POST /api/pairs') for u in sent), sent
+    # ...and the repaint it held off is not lost, only deferred.
+    page.wait_for_timeout(100)
+    assert page.evaluate('() => window.MT5Settings.state.pressing') is False
+
+
+def test_a_click_that_throws_says_so(page):
+    """A handler that raised did nothing and SAID nothing — from the
+    operator's side, identical to a button that is not wired up."""
+    seed_config(page)
+    page.click('.new-pair')
+    page.wait_for_selector('.pair-form', timeout=WAIT)
+    page.fill('.p-symbol-a', 'XAUUSD.f')
+    page.fill('.p-symbol-b', 'GCZ6.f')
+    page.select_option('.p-account-a', 'acct_a')
+    page.select_option('.p-account-b', 'acct_b')
+    page.evaluate("""() => {
+        window.__realFetch = window.__realFetch || window.fetch;
+        window.fetch = function () { throw new Error('boom'); };
+    }""")
+    page.click('.save-pair')
+    page.wait_for_selector('.toast', timeout=WAIT)
+    assert 'that click failed' in page.text_content('#toasts')
+    assert 'boom' in page.text_content('#toasts')
+    page.evaluate("""() => {
+        window.fetch = window.__realFetch;
+        document.getElementById('toasts').innerHTML = '';
+        window.MT5Settings.state.editing = null;
+        window.MT5Settings.render();
+    }""")
+
+
 def test_a_key_typed_with_spaces_is_saved_as_one_pair(page):
     """`XAUUSD.f | GCZ6.f` is what a person types. It is an IDENTIFIER,
     matched exactly by the snapshot and by every panel, so it is tidied
