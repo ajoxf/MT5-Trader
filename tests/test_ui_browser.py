@@ -3183,3 +3183,122 @@ def test_the_pair_type_is_declared_and_the_expiries_follow_it(page):
         "() => document.querySelector('.ladder .ls-pairtype')"
         ".textContent.indexOf('only leg B') >= 0", timeout=WAIT)
     page.click('.ladder .ls-close')
+
+
+def click_side_at(page, column, convention, index=4):
+    """Click a bids/asks cell and return (side, level) actually sent.
+
+    The convention is set immediately before the click: the 300ms poll
+    replaces state.snapshot wholesale, and the fixture's status.json
+    carries no click_convention, so a value injected earlier is gone by
+    the time the next click lands. The live engine writes it into every
+    snapshot, so this is a harness detail only.
+    """
+    set_convention(page, convention)
+    cell = page.locator(
+        '.ladder .grid tbody tr[data-level] td.' + column).nth(index)
+    level = float(cell.evaluate('n => n.closest("tr").dataset.level'))
+    before = command_count(page)
+    cell.click()
+    page.wait_for_timeout(300)
+    assert command_count(page) == before + 1, 'no order was sent'
+    sent = last_command(page)
+    return sent['payload']['side'], sent['payload']['level'], level
+
+
+def set_convention(page, value):
+    """Make EVERY poll carry the convention.
+
+    Setting it on state.snapshot alone loses the race: /api/status
+    arrives three times a second and replaces the snapshot wholesale,
+    so the value can be gone before the click lands. The live engine
+    puts it in every snapshot, so stamping it onto the response is the
+    faithful thing to simulate.
+    """
+    page.evaluate("""(v) => {
+        window.__conv = v;
+        // No one-time guard: other tests in this file swap window.fetch
+        // for stubs of their own and restore it afterwards, which can
+        // drop this patch. Reinstalling from whatever fetch is current
+        // survives that in any order.
+        if (!window.__convReal) { window.__convReal = window.fetch; }
+        const real = window.__convReal;
+        window.fetch = function (url, options) {
+            const answer = real(url, options);
+            if (String(url).indexOf('/api/status') < 0) { return answer; }
+            return answer.then(r => r.json()).then(body => {
+                body.click_convention = window.__conv;
+                return new Response(JSON.stringify(body), {
+                    status: 200,
+                    headers: {'Content-Type': 'application/json'}});
+            });
+        };
+    }""", value)
+    # One full poll, so the patched response is the one on screen.
+    page.wait_for_timeout(400)
+
+
+def test_the_tt_convention_buys_from_the_bids_column(page):
+    """TT's price ladder: clicking BIDS joins the bid, which is a
+    resting BUY. This app read the other way, so every click a trader
+    arriving from TT made was the opposite of the one they meant."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody td.bid', timeout=5000)
+    set_convention(page, 'TT')
+
+    side, sent_level, clicked = click_side_at(page, 'bid', 'TT')
+    assert side == 'BUY'
+    assert sent_level == clicked, 'the price moved between click and send'
+
+    side, sent_level, clicked = click_side_at(page, 'ask', 'TT')
+    assert side == 'SELL'
+    assert sent_level == clicked
+
+
+def test_the_touch_convention_is_the_other_way_round(page):
+    """The CONTROL. A setting that sent the same side either way would
+    be a switch that does nothing."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody td.bid', timeout=5000)
+    set_convention(page, 'TOUCH')
+
+    side, _, _ = click_side_at(page, 'bid', 'TOUCH')
+    assert side == 'SELL'
+    side, _, _ = click_side_at(page, 'ask', 'TOUCH')
+    assert side == 'BUY'
+
+
+def test_the_tooltip_says_what_the_click_will_do(page):
+    """A tooltip promising BUY while the click sends SELL is worse than
+    no tooltip at all."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody td.bid', timeout=5000)
+
+    for convention, on_bid, on_ask in (('TT', 'BUY', 'SELL'),
+                                       ('TOUCH', 'SELL', 'BUY')):
+        set_convention(page, convention)
+        bid = page.get_attribute('.ladder .grid tbody td.bid', 'title')
+        ask = page.get_attribute('.ladder .grid tbody td.ask', 'title')
+        assert bid.startswith('Click: ' + on_bid), (convention, bid)
+        assert ask.startswith('Click: ' + on_ask), (convention, ask)
+        # And the leg wording follows the side, not the column.
+        assert ('buy leg B' in bid) == (on_bid == 'BUY')
+
+
+def test_the_buy_and_sell_buttons_ignore_the_convention(page):
+    """They name their own side. If the switch moved them too, the one
+    unambiguous way to get in would become ambiguous."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .buy-touch', timeout=5000)
+
+    sides = {}
+    for convention in ('TT', 'TOUCH'):
+        set_convention(page, convention)
+        before = command_count(page)
+        set_convention(page, convention)
+        page.click('.ladder .buy-touch')
+        page.wait_for_timeout(300)
+        assert command_count(page) == before + 1
+        sides[convention] = last_command(page)['payload']['side']
+
+    assert sides == {'TT': 'BUY', 'TOUCH': 'BUY'}, sides

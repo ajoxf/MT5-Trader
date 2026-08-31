@@ -825,13 +825,9 @@
       var row = cell.closest('tr');
       var level = parseFloat(row.dataset.level);
       if (cell.classList.contains('ask')) {
-        // The ASK side is where you BUY the spread: buy leg B, sell
-        // leg A. The Bids side is the other way round. This mapping is
-        // the desk's, and every colour, tooltip and button on the
-        // window follows it.
-        clickLevel(key, 'BUY', level);
+        clickLevel(key, sideForColumn('ask'), level);
       } else if (cell.classList.contains('bid')) {
-        clickLevel(key, 'SELL', level);
+        clickLevel(key, sideForColumn('bid'), level);
       } else if (cell.classList.contains('work') && cell.dataset.orderId) {
         // Click the Work cell to pull ONE of the orders resting there.
         send('cancel_order', {order_id: cell.dataset.orderId});
@@ -850,6 +846,43 @@
   function armedFor(key, side) {
     var armed = state.armed[key] || {};
     return armed[String(side).toLowerCase()] || null;
+  }
+
+  function sideForColumn(column) {
+    /* Which SIDE a click in the bids or asks column sends.
+     *
+     * TT (default): the price-ladder convention every desk arrives
+     * with — clicking BIDS joins the bid, which is a resting BUY, and
+     * clicking ASKS joins the offer, which is a resting SELL.
+     * TOUCH: the hit/lift reading — clicking ASKS lifts the offer.
+     *
+     * This is the ONLY place the mapping exists. It changes nothing
+     * else: the level comes from the row that was clicked, and the
+     * side reaches the engine already decided, so sizing, hedging and
+     * execution are identical either way. The BUY and SELL buttons and
+     * the B/S keys name their side outright and never come through
+     * here.
+     */
+    // Absent means TOUCH, matching the engine's own default. The
+    // fallback has to be the conservative one: a snapshot from before
+    // this setting existed, or one that arrives without it, must send
+    // exactly the side it always did rather than silently inverting
+    // every click on the screen.
+    var tt = state.snapshot.click_convention === 'TT';
+    if (column === 'ask') { return tt ? 'SELL' : 'BUY'; }
+    return tt ? 'BUY' : 'SELL';
+  }
+
+  function clickHint(column, level) {
+    /* What this cell will actually DO, in the words of the convention
+     * in force. A tooltip that says BUY while the click sends SELL is
+     * worse than no tooltip at all, so it is built from the same
+     * mapping the click uses rather than written out twice. */
+    var side = sideForColumn(column);
+    var legs = side === 'BUY' ? 'buy leg B, sell leg A'
+                              : 'sell leg B, buy leg A';
+    return 'Click: ' + side + ' the spread at ' + fmt(level, 4) +
+      ' (' + legs + ')';
   }
 
   function clickLevel(key, side, level) {
@@ -1981,14 +2014,12 @@
       // implies. Nothing where the brokers publish no depth — an
       // invented size is one a trader would click on.
       cells += '<td class="bid' + (line.is_best_bid ? ' has-qty' : '') +
-        '" title="Click: SELL the spread at ' + fmt(level, 4) +
-        ' (sell leg B, buy leg A)">' +
+        '" title="' + clickHint('bid', level) + '">' +
         depthText(line.bid_size, line.is_best_bid, '▲') + '</td>';
       cells += '<td class="price' + (isLast ? ' last-trade' : '') + '">' +
         fmt(level, digitsFor(row.increment)) + '</td>';
       cells += '<td class="ask' + (line.is_best_ask ? ' has-qty' : '') +
-        '" title="Click: BUY the spread at ' + fmt(level, 4) +
-        ' (buy leg B, sell leg A)">' +
+        '" title="' + clickHint('ask', level) + '">' +
         depthText(line.ask_size, line.is_best_ask, '▼') + '</td>';
       cells += '<td class="ltq' + (isLast ? ' print' : '') + '">' +
         (isLast ? fmt(lastPrint.quantity, 2) : '') + '</td>';
@@ -2190,10 +2221,12 @@
       openPanel(panelId('ladder', key));
     } else if (cell.classList.contains('bid')) {
       // Identical semantics to a ladder click, through the identical
-      // code path — a test asserts it.
-      clickLevel(key, 'SELL', row.short_spread);
+      // code path and the identical mapping — a test asserts it. The
+      // PRICE is still the one that cell displays; only the side moves
+      // with the convention.
+      clickLevel(key, sideForColumn('bid'), row.short_spread);
     } else if (cell.classList.contains('ask')) {
-      clickLevel(key, 'BUY', row.long_spread);
+      clickLevel(key, sideForColumn('ask'), row.long_spread);
     }
   }
 

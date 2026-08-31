@@ -238,6 +238,10 @@ class CommandRunner:
     HOT_SETTINGS = {
         'CONFIRM_MARKET_CLICKS': lambda v: bool(v),
         'ROW_HEIGHT_PX': lambda v: max(12, min(40, int(v))),
+        #: Anything unrecognised falls back to TT rather than
+        #: leaving the ladder with no convention at all.
+        'CLICK_CONVENTION': lambda v: (
+            'TOUCH' if str(v).strip().upper() == 'TOUCH' else 'TT'),
         'MARKET_PROTECTION_TICKS': float,
         'CLICK_AWAY_RESTS': lambda v: bool(v),
         'REFUSE_SHARED_ACCOUNT': lambda v: bool(v),
