@@ -2128,19 +2128,25 @@ def test_the_fair_window_is_no_bigger_than_the_figures_in_it(page):
     assert clipped == 0
 
 
-def test_the_algo_is_chosen_on_the_ladder_it_belongs_to(page):
-    """Per ladder, none by default — and the pane says in words that an
-    algo does not trade."""
+def test_the_fair_window_is_ONE_tick_on_the_ladder_it_belongs_to(page):
+    """Per ladder, off by default, and one control for one decision.
+
+    There was a dropdown here (None / Fair spread) beside a Show window
+    tick, back when a second algo was being built. That algo was taken
+    out; two controls for one decision stayed, and either one alone did
+    nothing anybody could see."""
     open_ladder(page)
     page.click('.ladder .ladder-cog')
-    page.wait_for_selector('.ladder .ls-algo', timeout=WAIT)
+    page.wait_for_selector('.ladder .ls-algo-window', timeout=WAIT)
 
-    options = page.eval_on_selector_all(
-        '.ladder .ls-algo option', 'els => els.map(e => e.value)')
-    assert options == ['NONE', 'FAIR_SPREAD']
-    assert page.input_value('.ladder .ls-algo') == 'NONE'
-    assert 'does not trade' in page.text_content('.ladder .lsf-note')
+    assert page.locator('.ladder .ls-algo').count() == 0
     assert page.locator('.ladder .ls-algo-window').count() == 1
+    # It lives with the Carry fields it is a reading of, not in a group
+    # of its own.
+    assert page.locator(
+        '.ladder .ls-group:has(.ls-pair-type) .ls-algo-window').count() == 1
+    note = ' '.join(page.text_content('.ladder .lsf-note').split())
+    assert 'it does not trade' in note
     page.click('.ladder .ls-close')
 
 
@@ -2737,14 +2743,15 @@ def test_ticking_the_setting_OPENS_the_fair_window(page):
     page.evaluate(SPY_ON_PAIR_SAVE)
     page.click('.ladder .ladder-cog')
     page.wait_for_selector('.ladder .ls-algo-window', timeout=WAIT)
-    page.select_option('.ladder .ls-algo', 'FAIR_SPREAD')
     page.check('.ladder .ls-algo-window')
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
 
     sent = page.evaluate('() => window.__sent')
     assert sent['algo_window'] is True
-    assert sent['algo'] == 'FAIR_SPREAD'
+    # The tick is the whole decision: `algo` is derived on the engine,
+    # so the form does not send one.
+    assert 'algo' not in sent
     # ...and it is on the screen NOW, not a poll later and not only once
     # the engine has written the file back.
     page.wait_for_selector('.window.fairwin', timeout=WAIT)

@@ -971,7 +971,9 @@
     ['.ls-qty', 'default_quantity', 'live-number'],
     ['.ls-quoting', 'quoting_leg', 'live'],
     ['.ls-auto-route', 'auto_route', 'check'],
-    ['.ls-algo', 'algo', 'live'],
+    // The Fair Spread window. One tick, and `algo` follows it on the
+    // engine — there is one algo, and a dropdown to pick it plus a
+    // tick to see it was two controls for one decision.
     ['.ls-algo-window', 'algo_window', 'check'],
     ['.ls-comm-a', 'commission_per_lot_a', 'number', 'COMMISSION_PER_LOT_A'],
     ['.ls-comm-b', 'commission_per_lot_b', 'number', 'COMMISSION_PER_LOT_B'],
@@ -1181,7 +1183,7 @@
       var row = (state.snapshot.pairs || {})[key];
       if (row) {
         row.algo_window = !!payload.algo_window;
-        row.algo = payload.algo || 'NONE';
+        row.algo = payload.algo_window ? 'FAIR_SPREAD' : 'NONE';
       }
       (answer.notes || []).forEach(function (note) { toast(note); });
       if (!(answer.notes || []).length) { toast('applied to ' + key, 'ok'); }

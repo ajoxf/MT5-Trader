@@ -122,9 +122,9 @@ def test_selecting_an_algo_changes_NOTHING_about_a_click(config, pair, legs):
     from mt5trader.coordinator import Coordinator
     from mt5trader.models import SpreadSide
 
-    def click_once(algo_name):
+    def click_once(window_on):
         coordinator = Coordinator(config, legs, sleep=lambda s: None)
-        pair.algo = algo_name
+        pair.algo_window = window_on
         pair.order_type = pair.order_type.__class__('MARKET')
         coordinator.start()
         coordinator.poll_once()
@@ -138,8 +138,8 @@ def test_selecting_an_algo_changes_NOTHING_about_a_click(config, pair, legs):
             entry.pop('comment', None)          # carries a unique id
         return answer.get('ok'), sent
 
-    off_ok, off_sent = click_once('NONE')
-    on_ok, on_sent = click_once('FAIR_SPREAD')
+    off_ok, off_sent = click_once(False)
+    on_ok, on_sent = click_once(True)
 
     assert off_ok and on_ok
     assert off_sent == on_sent, (off_sent, on_sent)
@@ -155,12 +155,12 @@ def test_a_ladder_running_NONE_computes_nothing_at_all(config, pair, legs):
     for _ in range(5):
         coordinator.poll_once()
 
-    assert pair.algo == 'NONE'
+    assert pair.algo == 'NONE'          # derived: the window is shut
     block = coordinator.snapshot()['pairs'][pair.key]['algo_block']
     assert block == {'algo': 'NONE', 'window': False}
 
-    # The control: select it, and the reading appears.
-    pair.algo = 'FAIR_SPREAD'
+    # The control: open the window, and the reading appears.
+    pair.algo_window = True
     coordinator.poll_once()
     block = coordinator.snapshot()['pairs'][pair.key]['algo_block']
     assert block['algo'] == 'FAIR_SPREAD' and 'fair' in block

@@ -333,24 +333,23 @@
             <input class="ls-tp" type="number" min="0" step="0.1" placeholder="default"></label>
         </div>
         <div class="ls-group">
-          <h4>Algo <small>none by default</small></h4>
-          <!-- An algo MEASURES and says what it would do. It does not
-               place, modify or cancel an order, and a click on the
-               ladder behaves identically whether one is selected or
-               not. Manual trading is untouched either way. -->
-          <label class="lsf"><span>Algo</span>
-            <select class="ls-algo" title="FAIR SPREAD: what the basis should be on financing alone, with the break-even and target beside it. A reading — it does not trade.">
-              <option value="NONE">None</option>
-              <option value="FAIR_SPREAD">Fair spread</option>
-            </select></label>
-          <label class="lsf check-row"
-                 title="Show the selected algo in a window of its own, floating where you put it. Off, the ladder carries the price and nothing else.">
-            <span>Show window</span>
-            <input type="checkbox" class="ls-algo-window"></label>
-          <div class="lsf-note hint">An algo reads; it does not trade.
-            Clicks on the ladder are unaffected.</div>
-        <div class="ls-group">
           <h4>Carry <small class="ls-pairtype"></small></h4>
+          <!-- ONE control, because there is one decision. A dropdown
+               offering None or Fair spread, plus a separate Show
+               window tick, was two controls for it — and either one
+               alone did nothing anybody could see. The tick opens the
+               window and computes the reading; unticked, neither
+               happens and the ladder costs nothing extra on the wire.
+
+               It READS. It does not place, modify or cancel an order,
+               and a click on the ladder behaves identically either
+               way. Manual trading is untouched. -->
+          <label class="lsf check-row"
+                 title="A floating window for this pair: what the carry says the basis should be, with break-even and the target beside it. It is a reading — nothing here trades, and no price from it is ever sent to the broker.">
+            <span>Show Fair Spread window</span>
+            <input type="checkbox" class="ls-algo-window"></label>
+          <div class="lsf-note hint">The window reads; it does not
+            trade. Clicks on the ladder are unaffected.</div>
           <!-- DECLARED, not inferred. Two futures with two expiries are
                not a calendar: UKOILV6 against USOILV6 is Brent against
                WTI, which is two different instruments with no carry
@@ -382,7 +381,6 @@
           <label class="lsf"><span>Carry rate % a year</span>
             <input class="ls-carry-rate" type="number" step="0.1" placeholder="no cross-check"></label>
         </div>
-      </div>
       </div>
       <div class="ls-actions">
         <button type="button" class="btn ls-save">Apply</button>

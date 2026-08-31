@@ -33,17 +33,6 @@ from .models import OrderType, OvernightMode, TimeInForce
 BASIS_PAIR_TYPES = ('SPOT_FUTURE', 'FUTURE_FUTURE')
 
 
-def _algo_name(value):
-    """The selected algo, or NONE for anything unrecognised.
-
-    A typo must not arm something: the failure mode of a bad value is
-    the algo that does nothing, never one that does something else.
-    """
-    from .algo import ALGOS, NONE
-    name = str(value or NONE).upper()
-    return name if name in ALGOS else NONE
-
-
 def _blank_to_none(value):
     """A number from the UI, where blank means "unset" and 0 does not.
 
@@ -338,21 +327,38 @@ class PairConfig:
         self.break_even_nights = _blank_to_none(break_even_nights)
         self.tp_target_pct_of_margin = _blank_to_none(tp_target_pct_of_margin)
         self.carry_rate_pct = _blank_to_none(carry_rate_pct)
-        #: Which ALGO is selected on this ladder — exactly one, and
-        #: NONE by default. An algo measures and says what it would do;
-        #: it does not trade, and it changes nothing about a click on
-        #: the ladder. Manual trading is unaffected either way.
-        self.algo = _algo_name(algo)
-        #: Show that algo's own window. Off by default: the ladder is
-        #: for the price, and a panel of derived figures beside it is a
-        #: panel between the trader and the market.
-        #: `show_fair_window` is the name this had before there were
-        #: two algos; a config written then still opens its window.
+        #: Show the Fair Spread window for this pair. Off by default:
+        #: the ladder is for the price, and a panel of derived figures
+        #: beside it is a panel between the trader and the market.
+        #: `show_fair_window` is the name this had while there were two
+        #: algos to choose between; a config written then still opens
+        #: its window. `algo` is accepted and IGNORED for the same
+        #: reason — see the `algo` property.
         self.algo_window = bool(show_fair_window if algo_window is None
                                 else algo_window)
         #: Cached MT5 metadata per leg, refreshed by the coordinator.
         self.meta_a = {}
         self.meta_b = {}
+
+    @property
+    def algo(self):
+        """Which algo this ladder runs. DERIVED, not chosen.
+
+        There was a dropdown here while a second algo was being built.
+        That algo was taken back out, which left one choice presented
+        as two controls — pick Fair spread, then tick Show window —
+        either of which alone did nothing anybody could see. So the
+        tick is the whole decision now: the window is open and the
+        reading is computed, or neither.
+
+        Still NONE when the window is shut, and for the same reason it
+        always was: a ladder nobody is reading costs nothing on the
+        wire either. And still only a reading — it does not place,
+        modify or cancel an order, and a click on the ladder behaves
+        identically whichever way this reads.
+        """
+        from .algo import FAIR_SPREAD, NONE
+        return FAIR_SPREAD if self.algo_window else NONE
 
     @property
     def symbol_a(self):
@@ -461,7 +467,7 @@ class PairConfig:
                    'swap_b_long_per_lot', 'swap_b_short_per_lot',
                    'order_type', 'time_in_force', 'overnight', 'increment',
                    'default_quantity', 'quoting_leg', 'rows',
-                   'algo', 'algo_window', 'show_fair_window', 'pair_type')
+                   'algo_window', 'show_fair_window', 'pair_type')
                   + tuple(EXIT_FIELDS))
 
     def apply_hot(self, raw):
@@ -481,8 +487,6 @@ class PairConfig:
             elif field in ('auto_route', 'algo_window', 'show_fair_window'):
                 field = 'algo_window' if field == 'show_fair_window' else field
                 value = bool(value)
-            elif field == 'algo':
-                value = _algo_name(value)
             elif field == 'pair_type':
                 value = str(value or 'SPOT_FUTURE').upper()
             elif field == 'order_type':
