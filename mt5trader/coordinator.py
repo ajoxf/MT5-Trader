@@ -1547,6 +1547,9 @@ class Coordinator:
             'confirm_market_clicks': bool(
                 self.config.get('CONFIRM_MARKET_CLICKS', False)),
             'row_height_px': self.config.get('ROW_HEIGHT_PX', 17),
+            # Which column the screen should treat as a buy. UI
+            # only: the side reaches the engine already decided.
+            'click_convention': self.config.get('CLICK_CONVENTION', 'TT'),
             #: How often the ladder re-centres on the mid, and whether a
             #: click away from the touch rests. Both are read from the
             #: ENGINE, never from the screen's own idea of them.
