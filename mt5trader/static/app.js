@@ -1288,13 +1288,24 @@
     // it is visible without opening anything. Ticking the box has to
     // change the screen, or it reads as having done nothing.
     var badge = node.querySelector('.mode-badge');
+    // The EFFECTIVE state, never the ladder's box alone: with the
+    // master switch off the box is ticked and nothing arms, and a
+    // badge reading AUTO there says a fill will rest a target when no
+    // fill will.
+    var autoOn = !!row.auto_route_on;
+    var autoHeld = !!row.auto_route && !autoOn;
     badge.textContent = row.order_type + ' · ' + row.time_in_force
-      + (row.auto_route ? ' · AUTO' : '');
-    badge.title = row.auto_route
+      + (autoOn ? ' · AUTO' : (autoHeld ? ' · AUTO OFF' : ''));
+    badge.title = autoOn
       ? 'AutoRouting is ON for this ladder: a fill rests a working '
         + 'order to close at the take-profit. A target, and no stop.'
-      : 'the mode a click sends, and how long a working order lives';
-    badge.classList.toggle('auto', !!row.auto_route);
+      : (autoHeld
+          ? 'this ladder has AutoRouting ticked, but it is switched off '
+            + 'for the whole system (AUTO_ROUTE_ENABLED) — a fill arms '
+            + 'nothing'
+          : 'the mode a click sends, and how long a working order lives');
+    badge.classList.toggle('auto', autoOn);
+    badge.classList.toggle('auto-held', autoHeld);
 
     var change = market.net_change;
     var netchg = node.querySelector('.netchg');
@@ -1550,14 +1561,16 @@
       var orders = row.auto_route_armed || [];
       armed.textContent = orders.length
         ? 'out ' + fmt(orders[0].level, digitsFor(row.increment))
-        : (row.auto_route ? 'on' : 'off');
+        : (row.auto_route_on ? 'on' : 'off');
       armed.className = 'auto-route-state' + (orders.length ? ' armed' : '');
       armed.title = orders.length
         ? 'a working order is resting to close this position — a target, '
           + 'and no stop'
-        : (row.auto_route
+        : (row.auto_route_on
             ? 'on: the next fill arms a target at the take-profit'
-            : 'off');
+            : (row.auto_route
+                ? 'off: AutoRouting is switched off for the whole system'
+                : 'off'));
     }
     renderExit(node, row);
   }

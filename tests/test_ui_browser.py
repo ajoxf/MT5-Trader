@@ -63,6 +63,10 @@ class Publisher:
         #: AutoRouting: the switch, and what is ACTUALLY resting.
         self.auto_route = False
         self.auto_route_armed = None
+        #: The system-wide switch, off by default in the engine. The
+        #: fixture leaves it ON so the per-ladder tick is what is under
+        #: test; the test that turns it off is testing the master.
+        self.auto_route_master = True
         #: The fair-value window is per pair and off by default; the
         #: fixture turns it on so the panels it holds can be read.
         self.show_fair_window = True
@@ -96,6 +100,7 @@ class Publisher:
                            self.stale_leg, self.dead_orders, self.exits,
                            self.positions, self.unclaimed, self.fair,
                            self.auto_route, self.auto_route_armed,
+                           self.auto_route_master,
                            self.show_fair_window, self.orders,
                            self.quotes, self.working_buys,
                            self.working_sells, self.algo, self.algo_block)
@@ -144,7 +149,7 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              stale_leg=False, dead_orders=None, exits=None,
              positions=None, unclaimed=None, fair=None,
              auto_route=False, auto_route_armed=None,
-             show_fair_window=True, orders=None, quotes=None,
+             auto_route_master=True, show_fair_window=True, orders=None, quotes=None,
              working_buys=0, working_sells=0, algo='NONE', algo_block=None):
     rows = []
     for step in range(20, -21, -1):
@@ -192,6 +197,8 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'order_type': order_type, 'time_in_force': 'DAY',
                 'overnight': 'ALLOW', 'default_quantity': 1.0,
                 'auto_route': auto_route,
+                'auto_route_on': bool(auto_route and auto_route_master),
+                'auto_route_master': bool(auto_route_master),
                 'algo': algo,
                 'algo_window': show_fair_window,
                 'algo_block': algo_block or {'algo': algo,
@@ -2230,6 +2237,33 @@ def test_autorouting_says_what_is_armed_and_that_there_is_no_stop(page):
 
     page.paths['publisher'].auto_route = False
     page.paths['publisher'].auto_route_armed = None
+    page.paths['publisher'].publish()
+
+
+def test_a_ladder_ticked_with_the_master_off_does_not_claim_AUTO(page):
+    """The tick alone used to put AUTO in the title bar. With the
+    system switch off nothing arms on a fill, and a badge saying
+    otherwise is the screen promising an exit that will not be there."""
+    open_ladder(page)
+    page.paths['publisher'].auto_route = True
+    page.paths['publisher'].auto_route_master = False
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .mode-badge')"
+        ".textContent.indexOf('AUTO OFF') >= 0", timeout=WAIT)
+    assert 'switched off' in page.get_attribute('.ladder .mode-badge', 'title')
+    assert page.text_content('.fairwin .auto-route-state') == 'off'
+
+    # The control: the same tick with the master ON does say AUTO.
+    page.paths['publisher'].auto_route_master = True
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => { var t = document.querySelector('.ladder .mode-badge')"
+        ".textContent; return t.indexOf('AUTO') >= 0"
+        " && t.indexOf('AUTO OFF') < 0; }", timeout=WAIT)
+    assert page.text_content('.fairwin .auto-route-state') == 'on'
+
+    page.paths['publisher'].auto_route = False
     page.paths['publisher'].publish()
 
 

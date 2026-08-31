@@ -17,6 +17,7 @@ Two things in here are load-bearing beyond "read some settings":
   restart attempts with the reason scrolling past.
 """
 
+import inspect
 import json
 import logging
 import os
@@ -75,6 +76,9 @@ DEFAULT_SETTINGS = {
     #: poll would put up to a whole interval between the click and the
     #: order, on a product whose promise is that one click is one order.
     'COMMAND_POLL_SEC': 0.02,
+    #: How often the coordinator retries an account whose leg runner
+    #: is not answering. A terminal started late joins by itself.
+    'LEG_RETRY_SEC': 5.0,
     'ACCOUNT_INFO_CACHE_SEC': 5.0,     # an IPC round trip; do not poll it
 
     # --- execution ----------------------------------------------------
@@ -600,8 +604,32 @@ class PairConfig:
 
     @classmethod
     def from_dict(cls, key, raw):
+        """Build a pair, DROPPING any field this version no longer has.
+
+        A retired field must never take the terminal down.
+        `swap_per_day` lived in one release and was removed in the
+        next; a config still carrying it made `TraderConfig.from_file`
+        raise TypeError — which killed the LAUNCHER itself on start,
+        while the web process went on serving the last status file it
+        had. The screen showed the previous day's prices, ageing
+        normally, with no engine behind them.
+
+        So an unknown field is a logged line and a dropped value, not
+        an exception.
+        """
         raw = dict(raw or {})
         raw.pop('key', None)
+        accepted = set(inspect.signature(cls.__init__).parameters)
+        accepted -= {'self', 'key'}
+        unknown = sorted(set(raw) - accepted)
+        for field in unknown:
+            raw.pop(field)
+        if unknown:
+            logging.warning(
+                "pair '%s': ignoring %s — this version does not read %s. "
+                "It will disappear from the file at the next save.",
+                key, ', '.join(unknown),
+                'them' if len(unknown) > 1 else 'it')
         return cls(key, **raw)
 
 

@@ -21,11 +21,14 @@ from mt5trader.legs import RemoteLeg
 from mt5trader.shutdown import should_close
 
 
-def build_legs(config):
+def build_legs(config, retries=3, delay=1.0):
     """One RemoteLeg per account with an endpoint.
 
     An account without one has no runner: it cannot serve a leg, and
     saying so here beats a connection error three layers down.
+
+    Accounts that do not answer are simply absent. They are NOT fatal:
+    see `main`.
     """
     legs = {}
     for name, account in config.accounts.items():
@@ -35,9 +38,26 @@ def build_legs(config):
                 "127.0.0.1:9101) and start its leg runner", name)
             continue
         leg = RemoteLeg(name, account.endpoint)
-        if leg.connect():
+        if leg.connect(retries=retries, delay=delay):
             legs[name] = leg
     return legs
+
+
+def leg_factory(config):
+    """Try ONCE to bring up a leg that was not there before.
+
+    The coordinator calls this on a slow clock for every configured
+    account it has no runner for, so a terminal started late — or
+    restarted at lunchtime — is picked up without anybody restarting
+    the engine.
+    """
+    def connect(name):
+        account = config.accounts.get(name)
+        if account is None or not account.endpoint:
+            return None
+        leg = RemoteLeg(name, account.endpoint)
+        return leg if leg.connect(retries=1, delay=0.0) else None
+    return connect
 
 
 def main():
@@ -58,14 +78,28 @@ def main():
     config = TraderConfig.from_file(args.config)
     legs = build_legs(config)
     if not legs:
-        print('No leg runners reachable. Start them first:\n'
-              '    python run_leg.py --config config.json --account <name>')
-        sys.exit(1)
+        # NOT fatal, and this is the whole point of the change. Exiting
+        # here meant the launcher restarted the coordinator, it exited
+        # again, and around it went — while the web process went on
+        # serving the LAST status file it had. Live 2026-08-31 that
+        # file was 19 hours old: three ladders of yesterday's prices,
+        # ages reading 12.5s, and nothing on the screen able to say the
+        # engine had never come up.
+        #
+        # So it runs anyway. It publishes a snapshot that says which
+        # accounts are dark, the screen goes honest instead of stale,
+        # and every few seconds it tries the runners again — so a
+        # terminal started late is picked up without a restart.
+        logging.error(
+            'no leg runner answered yet — starting anyway, and retrying. '
+            'Start them with: python run_leg.py --config %s --account '
+            '<name>', args.config)
 
     # The database is what makes a restart safe: without it the book
     # comes back empty and every live position looks like an orphan.
     coordinator = Coordinator(config, legs, status_path=args.status,
-                              store=Store(args.db))
+                              store=Store(args.db),
+                              leg_factory=leg_factory(config))
     # PRIME before the first drain. Everything already in the command
     # file was written to a process that is gone; replaying it would
     # place those orders again, now, at today's prices.

@@ -1585,6 +1585,15 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
   font-weight: 700;
 }
 
+/* Ticked on the ladder, switched off for the system: stated flatly
+ * rather than dressed as live. */
+.titlebar .mode-badge.auto-held {
+  background: transparent;
+  color: var(--muted, #777);
+  font-weight: 400;
+  text-decoration: line-through;
+}
+
 /* A field for something this pair does not have: still visible, so the
  * operator can see it was considered, and plainly not for filling in. */
 .ladder-settings .lsf.not-applicable > span { opacity: .55; }

@@ -106,8 +106,26 @@ def check_config(path):
     Every one of these is also refused at SAVE time, in the UI. This is
     the backstop for a config edited by hand.
     """
-    raw = json.load(open(path, encoding='utf-8')) if path else {}
     problems = []
+    if not path:
+        return problems
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+    except OSError as e:
+        return [f'could not read {path}: {e}']
+    except ValueError as e:
+        return [f'{path} is not valid JSON: {e}. Fix the file, or delete '
+                f'it to start over — the engine waits here until it reads.']
+    try:
+        # The real load, with everything it validates. Anything it
+        # raises is a problem to PRINT and wait on, never a traceback
+        # out of the launcher: a launcher that dies here leaves the web
+        # process serving the last status file it had, and the screen
+        # shows an old market with no engine behind it.
+        TraderConfig.from_raw(raw, path)
+    except Exception as e:
+        return [f'{path} could not be loaded: {type(e).__name__}: {e}']
     for name, account in (raw.get('accounts') or {}).items():
         account = account or {}
         endpoint = (account.get('endpoint') or '').strip()
@@ -303,7 +321,17 @@ class Engine:
 
     def restart(self):
         self.stop('picking up a configuration change')
-        config = TraderConfig.from_file(self.args.config)
+        try:
+            config = TraderConfig.from_file(self.args.config)
+        except Exception as e:
+            # Belt to check_config's braces. The engine stays down, the
+            # screen stays up, and the loop tries again — an unreadable
+            # config is never an exception out of the launcher.
+            print(f'[launcher] {self.args.config} could not be loaded: '
+                  f'{type(e).__name__}: {e} — the engine stays down until '
+                  f'it reads')
+            self.children = []
+            return
         # A port still held is a runner from the last start, still
         # attached to the terminal. Two clients logging one terminal in
         # is a feed that ticks for a few seconds and then goes quiet —

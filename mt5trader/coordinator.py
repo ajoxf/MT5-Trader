@@ -47,9 +47,14 @@ HOT_SETTINGS = (
 class Coordinator:
     def __init__(self, config, legs, status_path='status.json',
                  clock=time.time, sleep=time.sleep,
-                 monotonic=time.monotonic, store=None):
+                 monotonic=time.monotonic, store=None, leg_factory=None):
         self.config = config
         self.legs = legs                    # {account name: leg}
+        #: Called with an account name to try, ONCE, to bring up a leg
+        #: that was not there at startup. None = never retry (the
+        #: tests, and anything driving the legs itself).
+        self.leg_factory = leg_factory
+        self._last_leg_try = None
         self.status_path = status_path
         self.clock = clock
         self.sleep = sleep
@@ -188,6 +193,14 @@ class Coordinator:
                     continue
                 report['unclaimed'].append(dict(position, account=name))
 
+        for name in self.dark_accounts():
+            # An account with no runner is UNKNOWN, not flat. Saying
+            # recovery is complete here would licence the reconciler to
+            # auto-close positions on the accounts it CAN read, on the
+            # strength of a book missing everything on the one it
+            # cannot.
+            report['error'] = (f"account '{name}' has no leg runner — "
+                               f"recovery is incomplete")
         report['complete'] = report['error'] is None
         # The reconciler auto-closes orphans only when the book is known
         # to be complete. It never auto-closes anything on this list.
@@ -212,7 +225,58 @@ class Coordinator:
         self.recovery = report
         return report
 
-    def sweep_pendings(self, when):
+    def dark_accounts(self):
+        """Configured accounts whose leg runner is not answering.
+
+        Published, because this is the difference between "the market
+        is quiet" and "half the engine is not there" — and the screen
+        must never have to guess which.
+        """
+        return [name for name in self.config.accounts
+                if name not in self.legs]
+
+    def retry_dark_legs(self):
+        """Try, on a slow clock, to attach the accounts that are dark.
+
+        A leg runner started late — or restarted at lunchtime — used to
+        need the whole engine restarted with it. Here it just joins:
+        its pendings are swept (magic-scoped: they are from a previous
+        life and one still resting can fill unhedged), its symbols are
+        resolved, and the book is recovered against it before the
+        reconciler is allowed to call itself complete.
+        """
+        if self.leg_factory is None:
+            return []
+        dark = self.dark_accounts()
+        if not dark:
+            return []
+        every = float(self.config.get('LEG_RETRY_SEC', 5.0))
+        now = self.clock()
+        if self._last_leg_try is not None and now - self._last_leg_try < every:
+            return []
+        self._last_leg_try = now
+        joined = []
+        for name in dark:
+            try:
+                leg = self.leg_factory(name)
+            except Exception as e:                 # a runner mid-start
+                logging.warning("account '%s': leg runner did not answer "
+                                "(%s)", name, e)
+                continue
+            if leg is None:
+                continue
+            with self.lock:
+                self.legs[name] = leg
+                self.sweep_pendings(f'join:{name}', legs={name: leg})
+                self.resolve_symbols()
+                self.recover()
+            joined.append(name)
+            logging.warning(
+                "account '%s' joined: its leg runner answered and its "
+                "symbols were resolved", name)
+        return joined
+
+    def sweep_pendings(self, when, legs=None):
         """Cancel every pending of OURS on both accounts, and verify.
 
         Magic-scoped, so the trader's own terminal orders are never
@@ -220,7 +284,7 @@ class Coordinator:
         warning — it can fill unhedged with nobody watching.
         """
         report = {'when': when, 'cancelled': [], 'failed': [], 'unknown': []}
-        for name, leg in self.legs.items():
+        for name, leg in (self.legs if legs is None else legs).items():
             pendings = leg.pending_orders()
             if pendings is None:
                 # None means the leg could not be read — NOT "no orders".
@@ -1394,6 +1458,15 @@ class Coordinator:
                 # at the take-profit, priced from the actual fill. A
                 # target and NO stop — the panel says so in words.
                 'auto_route': pair.auto_route,
+                # What the ladder's tick actually AMOUNTS to. The
+                # master switch is off by default, and a title bar
+                # reading AUTO off the pair's box alone said a fill
+                # would arm a target when nothing would.
+                'auto_route_on': bool(
+                    pair.auto_route
+                    and self.config.get('AUTO_ROUTE_ENABLED', False)),
+                'auto_route_master': bool(
+                    self.config.get('AUTO_ROUTE_ENABLED', False)),
                 # The selected algo, and what it says. NONE publishes
                 # only its own name — a ladder running nothing costs
                 # nothing on the wire either.
@@ -1486,6 +1559,9 @@ class Coordinator:
             'loop_interval_sec': self._loop_interval,
             'poll_target_sec': self.config.get('POLL_INTERVAL_SEC'),
             'accounts': {name: self.account_info(name) for name in self.legs},
+            # Named, not omitted: an absent account looked exactly like
+            # a quiet one on the screen.
+            'dark_accounts': self.dark_accounts(),
             'reconciler': self.reconciler.snapshot(),
             'broker_clock': self.broker_clock(),
             'account_health': self.account_health(),
@@ -1540,6 +1616,10 @@ class Coordinator:
         self.start()
         while not self._stop.is_set():
             began = self.clock()
+            try:
+                self.retry_dark_legs()
+            except Exception as e:               # never die on a retry
+                logging.exception("leg retry failed: %s", e)
             try:
                 if self.commands is not None:
                     # Also here, so a single-threaded run (the tests, and
