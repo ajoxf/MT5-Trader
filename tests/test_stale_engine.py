@@ -67,6 +67,45 @@ def test_an_unloadable_config_is_a_printed_problem_not_a_traceback(tmp_path):
     path = _write(tmp_path, {'pairs': {'K': {'order_type': 'NOT_AN_ORDER'}}})
     problems = start.check_config(path)
     assert problems and 'could not be loaded' in problems[0]
+    # ...and it says which pair, which field and what the choices are.
+    assert "pair 'K'" in problems[0] and 'LIMIT, MARKET' in problems[0]
+
+
+def test_a_null_where_a_default_exists_is_the_DEFAULT(tmp_path):
+    """`order_type: null` raised `OrderType(None)` inside the launcher
+    and killed it at startup. A field with a default has one for
+    exactly this case — a config written by an older UI, or a value
+    cleared by hand."""
+    path = _write(tmp_path, {'pairs': {'K': {
+        'leg_a': {}, 'leg_b': {}, 'order_type': None, 'time_in_force': None,
+        'overnight': None, 'rows': None, 'pair_type': None,
+        'enabled': None, 'default_quantity': None}}})
+    assert start.check_config(path) == []
+
+    pair = TraderConfig.from_file(path).pairs['K']
+    assert pair.order_type.value == 'LIMIT'
+    assert pair.time_in_force.value == 'DAY'
+    assert pair.overnight.value == 'ALLOW'
+    assert pair.rows == 30 and pair.pair_type == 'SPOT_FUTURE'
+    assert pair.enabled is True and pair.default_quantity == 1.0
+
+
+def test_a_value_that_is_NOT_a_choice_is_still_refused(tmp_path):
+    """The control: taking a blank as the default must not turn a
+    wrong value into a silent one."""
+    import pytest
+    with pytest.raises(ValueError) as raised:
+        PairConfig.from_dict('K', {'time_in_force': 'FOREVER'})
+    assert 'FOREVER' in str(raised.value) and 'DAY' in str(raised.value)
+
+
+def test_a_hot_apply_of_a_null_keeps_what_the_ladder_is_running(tmp_path):
+    """The same null arriving through the live path. It used to raise
+    inside the poll, where the only sign was a line in the log."""
+    pair = PairConfig.from_dict('K', {'leg_a': {}, 'leg_b': {},
+                                      'order_type': 'MARKET'})
+    pair.apply_hot({'order_type': None, 'overnight': None})
+    assert pair.order_type.value == 'MARKET'
 
 
 def test_a_config_that_is_not_json_is_reported_too(tmp_path):

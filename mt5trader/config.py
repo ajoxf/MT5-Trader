@@ -33,6 +33,41 @@ from .models import OrderType, OvernightMode, TimeInForce
 BASIS_PAIR_TYPES = ('SPOT_FUTURE', 'FUTURE_FUTURE')
 
 
+#: Warnings already said once, so a file re-read every few seconds
+#: does not scroll the interesting line off the screen.
+_WARNED = set()
+
+
+def _warn_once(template, *args):
+    line = template % args
+    if line in _WARNED:
+        return
+    _WARNED.add(line)
+    logging.warning('%s', line)
+
+
+def _choice(enum, value, default, key, field):
+    """One of an enum's values, taking the DEFAULT for a blank.
+
+    A null in the file is how this repeatedly took the terminal down:
+    `OrderType(None)` raises, that came out of `TraderConfig.from_file`
+    inside the launcher, and the launcher died before it started
+    anything. A field that has a default has one for exactly this
+    case — a config written by an older UI, or a value cleared by
+    hand — so blank means the default, and only a value that is
+    genuinely not a choice is refused, naming the pair, the field and
+    what the choices are.
+    """
+    if value is None or value == '':
+        value = default
+    try:
+        return enum(value)
+    except ValueError:
+        raise ValueError(
+            f"pair '{key}': {field} is {value!r}, which is not one of "
+            f"{', '.join(member.value for member in enum)}") from None
+
+
 def _blank_to_none(value):
     """A number from the UI, where blank means "unset" and 0 does not.
 
@@ -273,7 +308,7 @@ class PairConfig:
         self.leg_b = dict(leg_b or {})
         self.hedge_ratio = float(hedge_ratio or 1.0)
         self.hedge_ratio_for = hedge_ratio_for
-        self.pair_type = pair_type
+        self.pair_type = pair_type or 'SPOT_FUTURE'
         #: Spread ticks per ladder row. None = derive it (see
         #: `derived_increment`) rather than guess a readable-looking one.
         self.increment = increment
@@ -282,15 +317,20 @@ class PairConfig:
         self.clip_lots_a = clip_lots_a
         self.clip_lots_b = clip_lots_b
         self.default_quantity = float(default_quantity or 1.0)
-        self.order_type = OrderType(order_type)
-        self.time_in_force = TimeInForce(time_in_force)
-        self.overnight = OvernightMode(overnight)
+        # Blank is the DEFAULT, never an exception: see `_choice`.
+        self.order_type = _choice(OrderType, order_type,
+                                  OrderType.LIMIT.value, key, 'order_type')
+        self.time_in_force = _choice(TimeInForce, time_in_force,
+                                     TimeInForce.DAY.value, key,
+                                     'time_in_force')
+        self.overnight = _choice(OvernightMode, overnight,
+                                 OvernightMode.ALLOW.value, key, 'overnight')
         #: Which leg rests the real pending in LIMIT mode. None = pick
         #: the wider bid-ask (that is the spread being earned), measured
         #: not assumed (spec §4, open question 10).
         self.quoting_leg = quoting_leg
-        self.enabled = bool(enabled)
-        self.rows = int(rows)
+        self.enabled = True if enabled is None else bool(enabled)
+        self.rows = int(rows or 30)
         #: The futures leg's expiry, and what carrying one spread for
         #: one day is worth at THIS broker on THIS account, in spread
         #: points. Neither is derivable from the price feed, and both
@@ -490,11 +530,14 @@ class PairConfig:
             elif field == 'pair_type':
                 value = str(value or 'SPOT_FUTURE').upper()
             elif field == 'order_type':
-                value = OrderType(value)
+                value = _choice(OrderType, value, self.order_type.value,
+                                self.key, field)
             elif field == 'time_in_force':
-                value = TimeInForce(value)
+                value = _choice(TimeInForce, value, self.time_in_force.value,
+                                self.key, field)
             elif field == 'overnight':
-                value = OvernightMode(value)
+                value = _choice(OvernightMode, value, self.overnight.value,
+                                self.key, field)
             elif field in ('increment', 'default_quantity'):
                 value = _blank_to_none(value)
                 if field == 'default_quantity' and value is None:
@@ -558,7 +601,10 @@ class PairConfig:
         for field in unknown:
             raw.pop(field)
         if unknown:
-            logging.warning(
+            # Once per (pair, fields). The launcher re-reads the config
+            # every few seconds; the same three lines scrolling past
+            # forever is how the line that MATTERS gets missed.
+            _warn_once(
                 "pair '%s': ignoring %s — this version does not read %s. "
                 "It will disappear from the file at the next save.",
                 key, ', '.join(unknown),

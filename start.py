@@ -264,6 +264,7 @@ def main():
 
     engine = Engine(args)
     fingerprint = None
+    said = None                    # the problems already printed
     try:
         while True:
             if web is not None:
@@ -274,15 +275,24 @@ def main():
             if problems:
                 # Refuse to run the ENGINE on a clashing config, but
                 # keep the screen up: the page that fixes it is the one
-                # being served.
+                # being served. Said ONCE per distinct problem: this
+                # loop re-reads the file every three seconds, and the
+                # same paragraph scrolling forever buries whatever the
+                # operator does next.
                 engine.stop('the configuration has a clash')
-                for problem in problems:
-                    print(f'[launcher] {problem}')
-                print('[launcher] fix it on the Exchanges page; the engine '
-                      'starts itself when it is right')
+                if problems != said:
+                    for problem in problems:
+                        print(f'[launcher] {problem}')
+                    print('[launcher] fix it on the Exchanges page; the '
+                          'engine starts itself when it is right')
+                    said = problems
                 fingerprint = None
                 time.sleep(3.0)
                 continue
+            if said:
+                print('[launcher] the configuration reads — starting the '
+                      'engine')
+                said = None
 
             if current is not None and current != fingerprint:
                 if fingerprint is not None:
