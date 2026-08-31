@@ -964,7 +964,10 @@
     ['.ls-tif', 'time_in_force', 'live'],
     ['.ls-overnight', 'overnight', 'live'],
     ['.ls-increment', 'increment', 'live-number'],
-    ['.ls-rows', 'row_count', 'live-number', null, 'rows'],
+    // NOT 'rows' on the snapshot — that is the ladder's PRICE ROWS,
+    // an array of forty objects. A number input handed one shows
+    // blank, which is how this field was empty on every ladder.
+    ['.ls-rows', 'row_count', 'live-number'],
     ['.ls-qty', 'default_quantity', 'live-number'],
     ['.ls-quoting', 'quoting_leg', 'live'],
     ['.ls-auto-route', 'auto_route', 'check'],

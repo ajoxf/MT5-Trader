@@ -219,7 +219,7 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                            'session': {'open': 59.71, 'high': 59.80,
                                        'low': 58.90, 'volume': 0.0,
                                        'ours': True}},
-                'rows': rows, 'orders': orders or [],
+                'rows': rows, 'row_count': 30, 'orders': orders or [],
                 'quotes': quotes or [],
                 'positions': positions or [],
                 'dead_orders': dead_orders or [],
@@ -832,6 +832,10 @@ def test_every_setting_shows_the_value_ACTUALLY_IN_FORCE(page):
         assert page.input_value('.ladder .ls-tif') == 'DAY'
         assert page.input_value('.ladder .ls-overnight') == 'ALLOW'
         assert page.input_value('.ladder .ls-increment') == '0.01'
+        # Rows read the ROW COUNT, not the snapshot's `rows` — which is
+        # the ladder's forty price rows, and left this field blank on
+        # every ladder.
+        assert page.input_value('.ladder .ls-rows') == '30'
 
         # A cost this pair has never been given shows the built-in
         # number, plainly — there is no defaults page, so what is in
