@@ -1318,6 +1318,53 @@ def test_the_pairs_table_says_whether_each_ladder_is_actually_quoting(page):
     assert page.locator('td.pair-status.c-fail').count() >= 1
 
 
+def test_a_key_typed_with_spaces_is_saved_as_one_pair(page):
+    """`XAUUSD.f | GCZ6.f` is what a person types. It is an IDENTIFIER,
+    matched exactly by the snapshot and by every panel, so it is tidied
+    to the one spelling everything else writes rather than becoming a
+    second pair nothing can find."""
+    seed_config(page)
+    page.click('.new-pair')
+    page.wait_for_selector('.pair-form', timeout=WAIT)
+
+    page.fill('.p-key', '  XAUUSD.f | GCZ6.f ')
+    page.fill('.p-symbol-a', 'XAUUSD.f')
+    page.fill('.p-symbol-b', 'GCZ6.f')
+    page.select_option('.p-account-a', 'acct_a')
+    page.select_option('.p-account-b', 'acct_b')
+    saved = page.evaluate("""async () => {
+        window.__realFetch = window.__realFetch || window.fetch;
+        const seen = [];
+        window.fetch = function (url, options) {
+            seen.push((options && options.method) + ' ' + String(url));
+            return Promise.resolve(new Response(
+                JSON.stringify({ok: true, pair: 'x'}),
+                {status: 200, headers: {'Content-Type': 'application/json'}}));
+        };
+        document.querySelector('.save-pair').click();
+        await new Promise(function (r) { window.setTimeout(r, 400); });
+        window.fetch = window.__realFetch;
+        return seen;
+    }""")
+    posts = [u for u in saved if u.startswith('POST')]
+    assert posts, saved
+    assert 'XAUUSD.f%7CGCZ6.f' in posts[0], posts
+    assert '%20' not in posts[0], posts
+
+
+def test_the_pair_type_is_the_one_the_ladder_also_shows(page):
+    """The Exchanges page offered DIFFERENT and the ladder offers
+    RELATED. A pair saved under the first left the ladder's Pair type
+    box showing nothing selected — and saving that box wrote back
+    whatever it happened to be showing."""
+    seed_config(page)
+    page.click('.new-pair')
+    page.wait_for_selector('.pair-form', timeout=WAIT)
+    options = page.eval_on_selector_all(
+        '.p-type option', 'els => els.map(e => e.value)')
+    assert options == ['SPOT_FUTURE', 'FUTURE_FUTURE', 'RELATED'], options
+
+
 def test_a_new_pairs_key_is_built_from_its_two_symbols(page):
     """Typing `XAUUSD|GCZ6` by hand is not something a trading screen
     should ask for — and a key typed wrong is a pair that never loads."""

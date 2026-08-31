@@ -21,6 +21,7 @@ Two rules from the spec shape the endpoints here:
 import json
 import logging
 import os
+import re
 import time
 from datetime import date
 
@@ -878,7 +879,15 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
     @app.post('/api/pairs/<path:key>')
     def api_save_pair(key):
         """Create or edit a pair. Routed on `<path:key>` because the pair
-        that most needs deleting has a slash in its key."""
+        that most needs deleting has a slash in its key.
+
+        The key is TIDIED before it is used: it is an identifier, matched
+        exactly by the snapshot and by every panel, and one typed by hand
+        arrives with the spaces a person puts round a separator.
+        `XAUUSD.f | GCZ6.f` and `XAUUSD.f|GCZ6.f` are the same pair to
+        the operator and two different ones to everything else.
+        """
+        key = _tidy_key(key)
         payload = request.get_json(silent=True) or {}
         raw = cfg.load_raw(config_path)
         raw.setdefault('pairs', {})
@@ -952,6 +961,12 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return jsonify({'ok': True, 'deleted': key})
 
     return app
+
+
+def _tidy_key(key):
+    """A pair key as everything else writes it: no stray whitespace, and
+    one spelling of the separator."""
+    return re.sub(r'\s*\|\s*', '|', str(key or '').strip())
 
 
 def _mid(report):

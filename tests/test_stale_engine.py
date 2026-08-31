@@ -124,6 +124,31 @@ def test_a_good_config_has_no_problems(tmp_path):
     assert start.check_config(path) == []
 
 
+# -- a pair key, and what kind of pair it is -------------------------------
+
+def test_a_key_typed_with_spaces_saves_as_the_tidy_one(tmp_path):
+    """The server tidies it too, so a pair created from an older page —
+    or by hand — lands under the key the ladder looks for."""
+    from mt5trader.webapp import _tidy_key
+    assert _tidy_key(' XAUUSD.f | GCZ6.f ') == 'XAUUSD.f|GCZ6.f'
+    assert _tidy_key('XAUUSD.f|GCZ6.f') == 'XAUUSD.f|GCZ6.f'
+
+
+def test_the_pair_type_DIFFERENT_reads_as_RELATED(tmp_path):
+    """The Exchanges page wrote DIFFERENT; the ladder offers RELATED.
+    They are the same statement — two instruments with no carry between
+    them — and a pair must not fall between the two names."""
+    assert PairConfig.from_dict('K', {'pair_type': 'DIFFERENT'}) \
+        .pair_type == 'RELATED'
+    # The control: a type that IS one of the three is kept.
+    assert PairConfig.from_dict('K', {'pair_type': 'FUTURE_FUTURE'}) \
+        .pair_type == 'FUTURE_FUTURE'
+    # ...and an unrecognised one reads as RELATED: no fair value is the
+    # safe way to be wrong.
+    assert PairConfig.from_dict('K', {'pair_type': 'wat'}) \
+        .pair_type == 'RELATED'
+
+
 # -- an account with no leg runner ----------------------------------------
 
 def _with_accounts(config, *names):

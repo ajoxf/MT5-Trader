@@ -32,6 +32,22 @@ from .models import OrderType, OvernightMode, TimeInForce
 #: prompted for an expiry they do not have.
 BASIS_PAIR_TYPES = ('SPOT_FUTURE', 'FUTURE_FUTURE')
 
+#: The three a pair can be, and the one name that was written by an
+#: older Exchanges page. A pair saved as DIFFERENT behaved as RELATED
+#: everywhere it MATTERED, but the ladder's Pair type box showed
+#: nothing selected for it — and saving that box then wrote back
+#: whatever it happened to be showing.
+PAIR_TYPES = ('SPOT_FUTURE', 'FUTURE_FUTURE', 'RELATED')
+PAIR_TYPE_ALIASES = {'DIFFERENT': 'RELATED'}
+
+
+def pair_type_name(value):
+    """One of PAIR_TYPES. Anything unrecognised is RELATED — the
+    reading with NO fair value, which is the safe way to be wrong."""
+    name = str(value or 'SPOT_FUTURE').strip().upper()
+    name = PAIR_TYPE_ALIASES.get(name, name)
+    return name if name in PAIR_TYPES else 'RELATED'
+
 
 #: Warnings already said once, so a file re-read every few seconds
 #: does not scroll the interesting line off the screen.
@@ -308,7 +324,7 @@ class PairConfig:
         self.leg_b = dict(leg_b or {})
         self.hedge_ratio = float(hedge_ratio or 1.0)
         self.hedge_ratio_for = hedge_ratio_for
-        self.pair_type = pair_type or 'SPOT_FUTURE'
+        self.pair_type = pair_type_name(pair_type)
         #: Spread ticks per ladder row. None = derive it (see
         #: `derived_increment`) rather than guess a readable-looking one.
         self.increment = increment
@@ -528,7 +544,7 @@ class PairConfig:
                 field = 'algo_window' if field == 'show_fair_window' else field
                 value = bool(value)
             elif field == 'pair_type':
-                value = str(value or 'SPOT_FUTURE').upper()
+                value = pair_type_name(value)
             elif field == 'order_type':
                 value = _choice(OrderType, value, self.order_type.value,
                                 self.key, field)

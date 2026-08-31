@@ -595,7 +595,7 @@
                   '<select class="p-type">' +
                   option('SPOT_FUTURE', draft.pair_type) +
                   option('FUTURE_FUTURE', draft.pair_type) +
-                  option('DIFFERENT', draft.pair_type) + '</select>' +
+                  option('RELATED', draft.pair_type) + '</select>' +
                   '<div class="hint">Same underlying → β is 1 and the ' +
                   'spread IS the basis. Different instruments on the same ' +
                   'price scale → β 1 and the spread is the differential. ' +
@@ -792,7 +792,8 @@
       return UI.ask('Delete pair ' + doomed + '?',
         'A pair with an open position refuses this — flatten it first.',
         'Delete', function () {
-          api('/api/pairs/' + doomed, {method: 'DELETE'}).then(afterWrite);
+          api('/api/pairs/' + encodeURIComponent(doomed),
+              {method: 'DELETE'}).then(afterWrite);
         });
     }
     if (button.classList.contains('cancel-pair')) {
@@ -995,9 +996,13 @@
 
   function derive() {
     readDraft();
-    var key = local.editing || local.draft.key;
-    if (!key) { UI.toast('the pair needs a key first'); return; }
-    return api('/api/pairs/' + key + '/derive',
+    var key = local.editing || cleanKey(local.draft.key) || autoKey();
+    if (!key) {
+      UI.toast('give leg A and leg B a symbol first — the key is built '
+               + 'from them');
+      return;
+    }
+    return api('/api/pairs/' + encodeURIComponent(key) + '/derive',
                {method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(draftPayload())})
       .then(function (result) {
@@ -1005,6 +1010,18 @@
         local.derived = result.body;
         render();
       });
+  }
+
+  function cleanKey(key) {
+    /* A pair's key is an IDENTIFIER, and it is matched exactly — by the
+     * snapshot, by every panel, and in the URL of every call about this
+     * pair. Typed by hand it arrives with the spaces a person puts
+     * round a separator, and `XAUUSD.f | GCZ6.f` is then a different
+     * pair from the `XAUUSD.f|GCZ6.f` everything else writes.
+     *
+     * So it is tidied here rather than refused: same two symbols, one
+     * spelling. */
+    return String(key || '').trim().replace(/\s*\|\s*/g, '|');
   }
 
   function autoKey() {
@@ -1029,7 +1046,7 @@
                + 'actually offers');
       return;
     }
-    var key = local.editing || local.draft.key || autoKey();
+    var key = local.editing || cleanKey(local.draft.key) || autoKey();
     // The symbols were changed on an existing pair: the key names the
     // instruments, so it moves with them rather than being left
     // pointing at something that is no longer traded here.
