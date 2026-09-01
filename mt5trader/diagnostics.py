@@ -112,7 +112,25 @@ def check_account(checklist, name, terminal, account=None, offset=None,
                        'Check the login and server on this row'])
         return checklist
     live = terminal.get('login')
-    if expect_login and live and str(live) != str(expect_login):
+    if not expect_login:
+        # An account that names no login cannot be checked against
+        # anything, so it used to PASS on whatever login it found. That
+        # is the one reading that must never be green: it is exactly
+        # the state in which a leg trades an account nobody chose.
+        checklist.add(
+            scope, 'Account login', FAIL,
+            f'no login is configured for this account — it is attached '
+            f'to {live}, but nothing says that is the right one',
+            ['Set this account\'s login on the Exchanges page',
+             'Put its password in .env under the matching key',
+             'A leg that cannot name its login cannot be checked '
+             'against anything, and will trade whatever it attaches to'])
+        # Deliberately NOT an early return, unlike the mismatch below.
+        # There the terminal belongs to somebody else and the rest of
+        # the list would describe the wrong account; here the terminal
+        # is real and every other check still tells the operator
+        # something true.
+    elif expect_login and live and str(live) != str(expect_login):
         # This reported whatever login it FOUND as a pass, so a leg
         # attached to the other leg's terminal read "PASS — CONNECTED"
         # while trading the wrong account. The question is not "is a
@@ -126,8 +144,9 @@ def check_account(checklist, name, terminal, account=None, offset=None,
              'Two accounts need two MT5 installations, each with its own '
              'terminal_path — one terminal holds one login'])
         return checklist
-    checklist.add(scope, 'Account login', PASS,
-                  f"{live} on {terminal.get('server')}")
+    else:
+        checklist.add(scope, 'Account login', PASS,
+                      f"{live} on {terminal.get('server')}")
 
     # Algo Trading is a BUTTON in that terminal, and MT5 answers every
     # order with 10027 until it is on. Nothing else on the screen says
