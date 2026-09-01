@@ -350,6 +350,103 @@ def css_var_rgb(locator, name):
         }""", name)
 
 
+def test_both_columns_are_painted_on_EVERY_row_not_just_at_the_market(page):
+    """A TT ladder's Bids column is solid blue top to bottom and its
+    Asks column solid red, always.
+
+    Ours painted blue only from the best bid DOWN and red only from the
+    best offer UP, so both edges were touch prices and the blocks grew
+    and shrank with every tick. That is movement the row freeze cannot
+    reach, because the rows were never what was moving.
+    """
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr')
+    rows = page.locator('.ladder .grid tbody tr')
+    assert rows.count() >= 6, 'not enough rows to prove anything'
+
+    # Rows the OLD rule left bare: neither in-bid nor in-ask — the ones
+    # between the two touches.
+    bare = page.locator(
+        '.ladder .grid tbody tr:not(.in-bid):not(.in-ask)')
+    assert bare.count() > 0, (
+        'no row sits between the touches, so this cannot show the '
+        'difference — widen the spread in the fixture')
+
+    for index in range(min(bare.count(), 4)):
+        row = bare.nth(index)
+        bid = row.locator('td.bid')
+        ask = row.locator('td.ask')
+        assert is_blue(bid.evaluate('n => getComputedStyle(n).backgroundColor')), (
+            'a row between the touches has an unpainted Bids cell')
+        assert is_red(ask.evaluate('n => getComputedStyle(n).backgroundColor')), (
+            'a row between the touches has an unpainted Asks cell')
+
+
+def test_the_columns_do_not_change_size_when_the_market_moves(page):
+    """The band edges were the touches, so they walked. Count the
+    painted cells before and after moving the market: the number must
+    not change, because every row is painted either way."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr')
+
+    def painted():
+        return page.evaluate("""() => {
+            const rows = document.querySelectorAll(
+                '.ladder .grid tbody tr');
+            let blue = 0, red = 0;
+            rows.forEach(tr => {
+                const b = tr.querySelector('td.bid');
+                const a = tr.querySelector('td.ask');
+                if (b && getComputedStyle(b).backgroundColor !==
+                    'rgba(0, 0, 0, 0)') { blue += 1; }
+                if (a && getComputedStyle(a).backgroundColor !==
+                    'rgba(0, 0, 0, 0)') { red += 1; }
+            });
+            return [blue, red, rows.length];
+        }""")
+
+    rows_in_bid = page.locator('.ladder .grid tbody tr.in-bid').count()
+    before = painted()
+    assert before[0] == before[2] and before[1] == before[2], (
+        f'not every row is painted: {before[0]} blue and {before[1]} red '
+        f'of {before[2]} rows')
+
+    # Walk the market a long way, on every poll, so the touches land
+    # well away from where they were.
+    page.evaluate("""() => {
+        if (!window.__mkReal) { window.__mkReal = window.fetch; }
+        const real = window.__mkReal;
+        window.fetch = function (url, options) {
+            const answer = real(url, options);
+            if (String(url).indexOf('/api/status') < 0) { return answer; }
+            return answer.then(r => r.json()).then(body => {
+                Object.keys(body.pairs || {}).forEach(k => {
+                    const m = body.pairs[k].market;
+                    if (!m) { return; }
+                    if (m.short_spread != null) { m.short_spread += 0.40; }
+                    if (m.long_spread != null) { m.long_spread += 0.40; }
+                });
+                return new Response(JSON.stringify(body), {
+                    status: 200,
+                    headers: {'Content-Type': 'application/json'}});
+            });
+        };
+    }""")
+    page.wait_for_timeout(700)
+    try:
+        moved = page.locator('.ladder .grid tbody tr.in-bid').count()
+        assert moved != rows_in_bid, (
+            'the touches did not actually move, so this proves nothing')
+        after = painted()
+        assert after[0] == after[2] and after[1] == after[2], (
+            f'the painted region changed size when the market moved: '
+            f'{after[0]} blue and {after[1]} red of {after[2]} rows')
+    finally:
+        page.evaluate("() => { if (window.__mkReal) "
+                      "{ window.fetch = window.__mkReal; } }")
+        page.wait_for_timeout(400)
+
+
 def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
     # The ladder repaints three times a second; wait for a painted row
     # rather than racing one.

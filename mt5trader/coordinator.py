@@ -1987,6 +1987,13 @@ def ladder_rows(pair, md, book, rows=None, sizes=None, anchor=None,
             # touches can be many rows apart, and "where the market is"
             # is then a question the inside rule alone cannot answer.
             'is_mid': _at(level, md.get('spread'), increment),
+            # The row the WINDOW is built around, which on a locked
+            # ladder does not move at all. The heavy rule sits here
+            # rather than on the live mid when the trader has asked for
+            # a still ladder: a rule that hops a row every few ticks is
+            # the last thing left moving once the prices and the bands
+            # have stopped.
+            'is_anchor': _at(level, centre, increment),
             # What the two ORDER BOOKS can actually do here, in
             # spreads. None where a broker publishes no depth — which
             # is not the same as none available, and must not look it.

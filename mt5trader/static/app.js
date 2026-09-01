@@ -2025,7 +2025,14 @@
       if (inBid) { classes.push('in-bid'); }
       if (inAsk) { classes.push('in-ask'); }
       if (line.is_best_bid) { classes.push('market-line'); }
-      if (line.is_mid) { classes.push('mid-line'); }
+      // The heavy rule marks where the market is; on a LOCKED ladder
+      // it marks the anchor instead, because the anchor is the one
+      // price on a locked ladder that is guaranteed not to move. With
+      // the rows frozen and the bands solid, a rule chasing the mid
+      // was the only thing left hopping about.
+      if (state.locked[key] ? line.is_anchor : line.is_mid) {
+        classes.push('mid-line');
+      }
       if (line.is_best_ask) { classes.push('best-ask'); }
       var isLast = lastPrint.level !== undefined &&
         Math.abs(lastPrint.level - level) < (row.increment || 1) / 2;
