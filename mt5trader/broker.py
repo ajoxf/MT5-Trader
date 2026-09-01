@@ -75,6 +75,31 @@ class BrokerSession:
                 "Install it on the trading machine.")
             return False
 
+        # NO LOGIN IS NOT "ANY LOGIN".
+        #
+        # Every guard below — the wrong-login refusal, the diagnostics
+        # login check — is written `if self.account.login and ...`, so
+        # an account row saved with the Login box empty skipped all of
+        # them and attached to whatever terminal happened to be open.
+        # It then traded THAT account, and both the runner and the
+        # startup checklist reported it as healthy, because there was
+        # nothing configured to disagree with.
+        #
+        # This used to be deliberate ("an account may legitimately
+        # attach to whatever terminal is open"). It is not defensible
+        # on a live account: a leg that cannot name the login it is
+        # for cannot be checked against anything, and the failure is
+        # silent and total. An account states its login or it does not
+        # trade.
+        if not self.account.login:
+            logging.error(
+                "[%s] refusing to run: no login is configured for this "
+                "account, so it would attach to whichever terminal is "
+                "open and trade that account. Set the login on the "
+                "Exchanges page (and its password in .env).",
+                self.account.name)
+            return False
+
         credentials = {}
         if self.account.login:
             credentials = {'login': self.account.login,
