@@ -148,3 +148,37 @@ def test_the_anchor_helper_itself_still_holds_inside_the_band():
     """`ladder_anchor` is unchanged, and the lock sits above it."""
     assert ladder_anchor(50.0, 50.20, 0.05, 30) == pytest.approx(50.0)
     assert ladder_anchor(50.0, 52.00, 0.05, 30) == pytest.approx(52.0)
+
+
+def test_every_row_says_whether_it_is_the_anchor():
+    """The heavy rule needs the anchor row NAMED, not inferred.
+
+    On a locked ladder the rule sits on the anchor rather than the live
+    mid: with the rows frozen and the bands solid, a rule that hops a
+    row every few ticks is the only thing left moving.
+    """
+    pair, book = Pair(), Book()
+    rows = ladder_rows(pair, market(50.13), book, anchor=50.00, frozen=True)
+    flagged = [row for row in rows if row['is_anchor']]
+    assert len(flagged) == 1, 'exactly one row is the anchor'
+    assert flagged[0]['level'] == pytest.approx(50.00)
+
+
+def test_the_anchor_row_does_not_move_while_the_mid_does():
+    """The CONTROL that matters: the mid row moves, the anchor does not.
+
+    Without this the test above passes on a ladder where the two are
+    always the same row, which is exactly the case being fixed.
+    """
+    pair, book = Pair(), Book()
+    seen_mid, seen_anchor = set(), set()
+    for spread in (50.00, 50.12, 50.24, 49.88, 50.31):
+        rows = ladder_rows(pair, market(spread), book, anchor=50.00,
+                           frozen=True)
+        mid = [r['level'] for r in rows if r['is_mid']]
+        anchor = [r['level'] for r in rows if r['is_anchor']]
+        seen_mid.update(mid)
+        seen_anchor.update(anchor)
+    assert len(seen_mid) > 1, 'the mid never moved, so this proves nothing'
+    assert len(seen_anchor) == 1, 'the anchor row moved'
+    assert seen_anchor.pop() == pytest.approx(50.00)
