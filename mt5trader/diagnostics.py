@@ -149,6 +149,33 @@ def check_account(checklist, name, terminal, account=None, offset=None,
     elif terminal.get('trade_allowed'):
         checklist.add(scope, 'Trading permission', PASS, 'allowed')
 
+    # The SERVER's own algo switch, which is a different thing from the
+    # button above and fails with a different code. The button is the
+    # trader's (10027, "disabled by client"); this is the broker's
+    # (10026, "disabled by server"), set per account on their side and
+    # not fixable from this machine at all.
+    #
+    # It is checked because it was read and not checked: a freshly
+    # opened account connects, reports its balance and quotes happily,
+    # and then refuses the first LIVE order with 10026. Finding that
+    # out by clicking on a real ladder is the worst possible time.
+    expert = terminal.get('trade_expert')
+    if expert is False:
+        checklist.add(scope, 'Algo trading (server)', FAIL,
+                      'the BROKER has algo trading off for this account — '
+                      'every order comes back "10026 AutoTrading disabled '
+                      'by server"',
+                      ['Ask the broker to enable Expert Advisor / API '
+                       'trading on THIS account number',
+                       'It is set per account: an account that trades by '
+                       'hand can still refuse every order sent by a '
+                       'program',
+                       'Nothing on this machine can turn it on — the Algo '
+                       'Trading button is a different switch'])
+    elif expert:
+        checklist.add(scope, 'Algo trading (server)', PASS,
+                      'the broker allows it on this account')
+
     hedging = terminal.get('hedging')
     if hedging is True:
         checklist.add(scope, 'Margin mode', PASS,
