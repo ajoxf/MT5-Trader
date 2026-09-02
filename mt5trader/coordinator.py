@@ -65,6 +65,11 @@ class Coordinator:
         # Whoever closes a position — the trader, the overnight rule,
         # a flatten, the kill — pulls its resting take-profit first.
         self.executor.before_close = self.quoter.disarm
+        # ...and whatever the quoter books itself reaches the database.
+        # `quoter.work` returns its events and this module drops them, so
+        # without this a LIMIT entry was recovered as NOTHING and a close
+        # that filled on a resting order came back OPEN.
+        self.quoter.on_change = self.remember
         self.reconciler = Reconciler(config, legs, self.book, self.executor,
                                      clock=clock)
         self._last_reconcile = None
