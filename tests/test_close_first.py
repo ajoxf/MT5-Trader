@@ -256,3 +256,96 @@ def test_a_position_whose_side_is_unreadable_is_left_alone():
     odd.side = None
     book = book_with(odd)
     assert book.positions_to_reduce('P', 'SELL', 5.0) == []
+
+
+# -- the reduce must never break the FILL -----------------------------
+#
+# `close_position` is a NETWORK call. `_book_fill` used to be pure
+# bookkeeping, and the first version of this feature put the network
+# call inside it, in front of `_settle_orders`. A broker timeout there
+# leaves a synthetic that HAS filled still marked WORKING — which the
+# quoter re-places. A duplicate position, bought with real money, caused
+# by the failure of the thing meant to REDUCE one.
+
+def test_the_reduce_happens_AFTER_the_synthetics_are_settled():
+    import inspect
+    from mt5trader.quoter import Quoter
+
+    source = inspect.getsource(Quoter._on_fill)
+    settle = source.index('_settle_orders')
+    reduce_at = source.index('_reduce_after_fill')
+    assert settle < reduce_at, (
+        'the reduce runs before the fill is settled — a broker timeout '
+        'would leave a filled order marked working')
+
+
+def test_book_fill_itself_never_touches_the_broker():
+    """It is bookkeeping. Keeping it that way is what makes the
+    ordering above safe."""
+    import inspect
+    from mt5trader.quoter import Quoter
+
+    source = inspect.getsource(Quoter._book_fill)
+    assert 'reduce_first' not in source
+    assert 'close_position' not in source
+
+
+def test_a_reduce_that_RAISES_never_escapes_into_the_fill_path():
+    """A failed reduce leaves the old position OPEN — visible and
+    closable by hand. That is the safe direction to fail in. What must
+    never happen is the exception reaching the fill."""
+    from mt5trader.quoter import Quoter
+
+    class Boom:
+        def close_position(self, *a, **k):
+            raise ConnectionError('the broker went away mid-close')
+
+    quoter = Quoter.__new__(Quoter)
+    quoter.config = {'CLOSE_FIRST': True}
+    quoter.book = book_with(Position('old', SELL, 1.0, 100))
+    quoter.executor = Boom()
+    quoter._markets = {}
+    quoter.on_position_closed = lambda position: None
+
+    class Group:
+        side = BUY
+    mine = Position('mine', BUY, 1.0, 200)
+
+    # Must return, not raise.
+    assert quoter._reduce_after_fill(Pair(), Group(), mine) == []
+    # And the position it could not close is still open, not silently
+    # marked shut.
+    assert quoter.book.position('old').is_open is True
+
+
+def test_a_closed_position_is_WRITTEN_THROUGH_on_a_reduce():
+    """`remember` exists because the window between a close and the
+    state being safe is the window a crash turns into an unrecoverable
+    position. The fill path used to skip it, so a position shut at the
+    broker still read as OPEN after a restart."""
+    from mt5trader.quoter import Quoter
+
+    remembered = []
+    quoter = Quoter.__new__(Quoter)
+    quoter.config = {'CLOSE_FIRST': True}
+    quoter.book = book_with(Position('old', SELL, 1.0, 100))
+    quoter.executor = Executor()
+    quoter._markets = {}
+    quoter.on_position_closed = remembered.append
+
+    class Group:
+        side = BUY
+    quoter._reduce_after_fill(Pair(), Group(), Position('mine', BUY, 1.0, 200))
+
+    assert [p.position_id for p in remembered] == ['old'], (
+        'the close was never written through to the database')
+
+
+def test_the_coordinator_wires_that_hook_up():
+    """The default is a no-op, so a hook nobody connects is a silent
+    data-loss bug rather than a crash."""
+    import inspect
+    from mt5trader.coordinator import Coordinator
+
+    source = inspect.getsource(Coordinator.__init__)
+    assert 'on_position_closed' in source and 'self.remember' in source

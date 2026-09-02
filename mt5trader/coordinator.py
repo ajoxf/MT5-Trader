@@ -65,6 +65,11 @@ class Coordinator:
         # Whoever closes a position — the trader, the overnight rule,
         # a flatten, the kill — pulls its resting take-profit first.
         self.executor.before_close = self.quoter.disarm
+        # A position closed by a reduce-on-fill is written through to
+        # the database on the spot, exactly like one closed any other
+        # way. The window between a close and the state being safe is
+        # the window a crash turns into an unrecoverable position.
+        self.quoter.on_position_closed = self.remember
         self.reconciler = Reconciler(config, legs, self.book, self.executor,
                                      clock=clock)
         self._last_reconcile = None
