@@ -364,14 +364,19 @@ class Quoter:
         if leg is None or group.ticket is None:
             return None
         state = leg.cancel_order(group.ticket)
-        group.ticket = None
         group.reason = reason
         if state.get('filled_volume'):
             # A cancel that did not prevent a fill is a distinct event
             # and must stay visible, not be smoothed into a clean pull.
+            #
+            # `_on_fill` takes the ticket off the group itself. Clearing
+            # it here FIRST handed it None, so the fill was booked
+            # against no ticket at all and the exit price had nothing to
+            # anchor on.
             logging.critical("%s: pending at %s FILLED as it was cancelled — "
                              "hedging it", pair.key, group.level)
             return self._on_fill(pair, group, state)
+        group.ticket = None
         return state
 
     def _check_fill(self, pair, md, group):
@@ -396,25 +401,16 @@ class Quoter:
         filled = float(state.get('filled_volume') or 0.0)
         started = self.executor.clock()
         ticket, group.ticket = group.ticket, None
+        # A PARTIAL fill leaves the rest of the pending resting, and it
+        # is pulled on BOTH paths. A closing order used to skip this:
+        # its residual stayed at the broker carrying a position ticket
+        # that the fill had just closed, nobody tracked it any more, and
+        # every further click rested another one beside it — pendings
+        # piling up on the quoting account while the other account got
+        # nothing. That is the state the desk reported.
+        state, filled = self._pull_residual(pair, group, state, filled, ticket)
         if group.closing:
             return self._on_closing_fill(pair, group, state, filled, ticket)
-        if state.get('still_open') and ticket is not None:
-            # A PARTIAL fill leaves the rest of the pending resting.
-            # Pull it before hedging: the residual is re-rested at the
-            # next pass at the size that is actually still working, and
-            # leaving it would put a second pending on the same level.
-            leg = self.legs.get(pair.account_a if group.leg == 'a'
-                                else pair.account_b)
-            if leg is not None:
-                rest = leg.cancel_order(ticket)
-                extra = float(rest.get('filled_volume') or 0.0) - filled
-                if extra > 0:
-                    # It filled further while we were cancelling it.
-                    filled += extra
-                    state = dict(state, price=rest.get('price') or
-                                 state.get('price'),
-                                 position_tickets=rest.get('position_tickets')
-                                 or state.get('position_tickets'))
 
         meta_a, meta_b = pair.meta_a or {}, pair.meta_b or {}
         beta = float(pair.hedge_ratio or 1.0)
@@ -490,17 +486,48 @@ class Quoter:
                 'action': 'filled', 'position': position.position_id,
                 'hedge_ms': elapsed_ms}
 
-    def _on_closing_fill(self, pair, group, state, filled, ticket):
-        """An AutoRouting take-profit filled on the quoting leg.
+    def _pull_residual(self, pair, group, state, filled, ticket):
+        """Pull what is left of a partially filled pending.
 
-        That leg is already flat — the pending carried
-        `position=<ticket>`, so executing it CLOSED it. The other leg is
-        still on, and until it is closed this is an outright position:
-        it goes now, by ticket, at market.
+        The residual is re-rested at the next pass at the size that is
+        actually still working; leaving it would put a second pending on
+        the same level. Returns the (state, filled) to act on, because
+        it can fill FURTHER while being cancelled.
+        """
+        if not state.get('still_open') or ticket is None:
+            return state, filled
+        leg = self.legs.get(pair.account_a if group.leg == 'a'
+                            else pair.account_b)
+        if leg is None:
+            return state, filled
+        rest = leg.cancel_order(ticket)
+        extra = float(rest.get('filled_volume') or 0.0) - filled
+        if extra > 0:
+            # It filled further while we were cancelling it.
+            filled += extra
+            state = dict(state, price=rest.get('price') or state.get('price'),
+                         position_tickets=rest.get('position_tickets')
+                         or state.get('position_tickets'))
+        return state, filled
+
+    def _on_closing_fill(self, pair, group, state, filled, ticket):
+        """A CLOSING order filled on the quoting leg.
+
+        That leg is closed by the pending itself — it carried
+        `position=<ticket>`, so executing it CLOSED it rather than
+        opening a second one. The other leg is still on, and until it is
+        closed this is an outright position: it goes now, by ticket, at
+        market.
+
+        A PARTIAL fill closes only PART of the quoting leg. The other
+        leg comes down by the SAME fraction and the position stays open
+        for the rest — closing it in full against half a close took the
+        whole hedge off and left the quoting leg naked, with the book
+        reporting the position flat.
         """
         position = self.book.position(group.position_id)
-        self.groups.pop(self.key_for_group(group), None)
         if position is None:
+            self.groups.pop(self.key_for_group(group), None)
             # The position went while the order was resting. That is the
             # orphan-pending case with a guaranteed fill, and it has now
             # happened: say so loudly rather than booking a close of
@@ -511,6 +538,13 @@ class Quoter:
                 pair.key, group.position_id)
             return {'group': self.key_for_group(group),
                     'action': 'tp_orphaned', 'position': group.position_id}
+        quote_fill = position.leg_a if group.leg == 'a' else position.leg_b
+        whole = float((quote_fill.volume if quote_fill else 0.0) or 0.0)
+        # How much of the position this fill actually took off. Sized
+        # from the leg's CURRENT volume, which an earlier partial has
+        # already reduced.
+        fraction = 1.0 if whole <= 0 else min(1.0, filled / whole)
+        quantity = position.quantity
         # Shaped exactly like `close_tickets`' answer, so the exit
         # price is volume-weighted off the SAME structure however the
         # close was sent.
@@ -518,13 +552,38 @@ class Quoter:
             {'ticket': ticket, 'volume': filled, 'price': state.get('price')}]}
         answer = self.executor.close_other_leg(
             pair, position, group.leg, quote_result,
-            md=self.market_for(pair), reason='auto take-profit')
+            md=self.market_for(pair), reason=self._close_reason(group),
+            fraction=fraction)
+        if answer.get('partial'):
+            # PART of it went. The synthetics settle for what ACTUALLY
+            # closed — the executor books what the other leg achieved,
+            # not what was asked of it — and the rest keep working, so
+            # the remainder re-rests at the trader's own level on this
+            # same pass, at the size that is genuinely still on.
+            self._settle_orders(group, quantity * answer.get('fraction', 0.0))
+            return {'group': self.key_for_group(group),
+                    'action': 'tp_part_filled',
+                    'position': position.position_id,
+                    'imbalanced': answer.get('imbalanced', False),
+                    'remaining': answer.get('remaining'), 'ok': True}
+        self.groups.pop(self.key_for_group(group), None)
         for order in group.orders:
             if order.is_working:
                 order.filled_quantity = order.quantity
                 order.state = OrderState.FILLED
         return {'group': self.key_for_group(group), 'action': 'tp_filled',
                 'position': position.position_id, 'ok': answer.get('ok')}
+
+    def _close_reason(self, group):
+        """Whose close this was, in the words the trader reads.
+
+        A close the trader clicked is not automation (spec 5.4), and
+        reporting their own click as a take-profit is the same mistake
+        the AutoRouting switch made when it swept their order away.
+        """
+        if any(getattr(o, 'auto_armed', False) for o in group.orders):
+            return 'auto take-profit'
+        return 'closed by the trader'
 
     def key_for_group(self, group):
         return (group.pair_key, group.side.value, round(group.level, 10),
