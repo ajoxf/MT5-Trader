@@ -40,13 +40,23 @@ class Book:
     # -- working orders ---------------------------------------------------
 
     def add_order(self, pair, side, level, quantity, order_type=None,
-                  time_in_force=None, position_id=None):
+                  time_in_force=None, position_id=None, auto_armed=False):
         order = SyntheticOrder(
             pair.key, side, level, quantity,
             order_type or pair.order_type, time_in_force or pair.time_in_force,
-            position_id=position_id)
+            position_id=position_id, auto_armed=auto_armed)
         self._orders[order.order_id] = order
         return order
+
+    def auto_armed_for(self, position_id):
+        """Only the closing orders AUTOMATION armed against a position.
+
+        What the AutoRouting switch is allowed to pull. A close the
+        trader placed by hand is not automation and does not stand
+        down with it.
+        """
+        return [o for o in self.orders_for_position(position_id)
+                if getattr(o, 'auto_armed', False)]
 
     def orders_for_position(self, position_id, working_only=True):
         """The closing orders armed against one position.
