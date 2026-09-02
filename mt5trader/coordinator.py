@@ -65,11 +65,6 @@ class Coordinator:
         # Whoever closes a position — the trader, the overnight rule,
         # a flatten, the kill — pulls its resting take-profit first.
         self.executor.before_close = self.quoter.disarm
-        # A position closed by a reduce-on-fill is written through to
-        # the database on the spot, exactly like one closed any other
-        # way. The window between a close and the state being safe is
-        # the window a crash turns into an unrecoverable position.
-        self.quoter.on_position_closed = self.remember
         self.reconciler = Reconciler(config, legs, self.book, self.executor,
                                      clock=clock)
         self._last_reconcile = None
@@ -1017,6 +1012,14 @@ class Coordinator:
             # "rest it here" or "do nothing". TT rests it, and so does
             # this; the toast says which it did, because a market click
             # that quietly became a working order is a surprise.
+            armed, quantity = self._rest_reducing_orders(
+                pair, side, level, quantity)
+            if armed and quantity <= 1e-9:
+                return {'ok': True, 'order': armed[0].to_dict(),
+                        'rested': True, 'reducing': True,
+                        'reason': f'{level:g} is away from the market — '
+                                  f'resting there to CLOSE '
+                                  f'{len(armed)} position(s)'}
             order = self.book.add_order(pair, side, level, quantity)
             self.quoter.group_for(pair, order)
             return {'ok': True, 'order': order.to_dict(), 'rested': True,
@@ -1064,6 +1067,13 @@ class Coordinator:
             # NOT: a resting order simply waits for a quote it can rest
             # on (spec §8), which is what the quoter does.
             return {'ok': False, 'refused': True, 'reason': refusal}
+        armed, quantity = self._rest_reducing_orders(pair, side, level,
+                                                     quantity)
+        if armed and quantity <= 1e-9:
+            return {'ok': True, 'order': armed[0].to_dict(),
+                    'reducing': True,
+                    'reason': f'resting at {level:g} to CLOSE '
+                              f'{len(armed)} position(s)'}
         order = self.book.add_order(pair, side, level, quantity)
         self.quoter.group_for(pair, order)
         return {'ok': True, 'order': order.to_dict()}
@@ -1085,6 +1095,66 @@ class Coordinator:
         return book_module.reduce_first(
             self.book, self.executor, pair, side, quantity, md,
             exclude=exclude, on_closed=self.remember)
+
+    def _rest_reducing_orders(self, pair, side, level, quantity):
+        """Rest CLOSING orders for what this click covers.
+
+        THE FIX FOR THE BUG THE DESK FOUND. The first version opened a
+        position on the fill and closed the old one afterwards, so a
+        click meant to flatten left a BRAND NEW position on: SELL 1
+        became BUY 1 instead of flat, with two fresh tickets.
+
+        A resting order that reduces must be a CLOSING order from the
+        moment it is placed, not an opening one with a close bolted on
+        after. `quoter.arm` already builds exactly that — it is what
+        AutoRouting rests — and it carries `position=<ticket>`, so
+        executing it CLOSES the ticket at the broker instead of opening
+        a second one. The fill then lands in `_on_closing_fill`, which
+        closes the other leg by ticket too. The result is FLAT.
+
+        Returns (orders armed, quantity still to open).
+        """
+        if not self.config.get('CLOSE_FIRST', True):
+            return [], quantity
+        try:
+            left = float(quantity)
+        except (TypeError, ValueError):
+            return [], quantity
+        armed = []
+        for position in self.book.positions_to_reduce(pair.key, side, left):
+            # A target may already be armed here by AutoRouting, at ITS
+            # level. The trader has just named a different one, and a
+            # click that silently rested at somebody else's price is a
+            # click that did not do what it said. Theirs wins, and the
+            # old one is pulled rather than left to race it.
+            existing = self.book.orders_for_position(position.position_id)
+            # ALREADY RESTING AT THIS LEVEL? LEAVE IT ALONE.
+            #
+            # Pulling a live pending and putting an identical one back
+            # loses its place in the broker's QUEUE — the trader gives
+            # up their position in the line for no change at all. This
+            # is the ordinary case where AutoRouting's target and the
+            # click agree, and it must be a no-op.
+            if any(abs(o.level - level) < 1e-9 for o in existing):
+                armed.append(existing[0])
+                left -= float(position.quantity or 0.0)
+                continue
+            if existing:
+                # A DIFFERENT level: the trader has just named their
+                # own, and a click that silently rested at somebody
+                # else's price is a click that did not do what it said.
+                # Theirs wins, and the old one is pulled rather than
+                # left to race it.
+                self.quoter.disarm(
+                    position.position_id,
+                    f'the trader clicked {level:g} to close this instead')
+            order = self.quoter.arm(pair, position, level,
+                                    position.quantity)
+            if order is None:
+                break
+            armed.append(order)
+            left -= float(position.quantity or 0.0)
+        return armed, max(left, 0.0)
 
     def _away_from_the_market(self, pair, side, md, level):
         """Is this click at a price the market cannot fill right now?

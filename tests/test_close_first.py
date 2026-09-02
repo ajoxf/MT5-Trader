@@ -160,47 +160,6 @@ def test_nothing_open_means_nothing_closed_and_the_click_opens_whole():
     assert closed == []
     assert left == pytest.approx(2.0)
     assert ex.closed == []
-
-
-def test_the_setting_off_restores_the_old_behaviour_exactly():
-    """CLOSE_FIRST off must open every click, as before."""
-    from mt5trader.config import DEFAULT_SETTINGS
-    assert DEFAULT_SETTINGS['CLOSE_FIRST'] is True
-
-    from mt5trader.commands import CommandRunner
-    coerce = CommandRunner.HOT_SETTINGS['CLOSE_FIRST']
-    assert coerce('false') is False and coerce('off') is False
-    assert coerce('true') is True and coerce(1) is True
-
-
-# -- wiring -----------------------------------------------------------
-#
-# The tests above exercise `reduce_first` directly. That is not enough
-# on its own: an earlier draft of this change called it from the quoter
-# WITHOUT importing it, which every test above still passed and which
-# would have raised NameError on the first live fill. These check the
-# two call sites actually reach it.
-
-def test_the_quoter_can_reach_reduce_first_at_all():
-    from mt5trader import quoter
-    assert hasattr(quoter, 'book_module'), (
-        'quoter does not import the book module — the fill path would '
-        'raise NameError on the first fill')
-    assert hasattr(quoter.book_module, 'reduce_first')
-
-
-def test_the_fill_path_reduces_and_excludes_the_position_it_just_opened():
-    import inspect
-    from mt5trader.quoter import Quoter
-
-    source = inspect.getsource(Quoter)
-    assert 'reduce_first' in source, 'a resting fill never reduces'
-    assert 'CLOSE_FIRST' in source, 'the fill path ignores the setting'
-    # Without the exclude the position just opened is its own oldest
-    # opposite ticket on the next click, and a fill would close itself.
-    assert 'exclude=position.position_id' in source
-
-
 def test_the_market_click_reduces_before_it_opens():
     import inspect
     from mt5trader.coordinator import Coordinator
@@ -265,99 +224,6 @@ def test_a_position_whose_side_is_unreadable_is_left_alone():
     assert book.positions_to_reduce('P', 'SELL', 5.0) == []
 
 
-# -- the reduce must never break the FILL -----------------------------
-#
-# `close_position` is a NETWORK call. `_book_fill` used to be pure
-# bookkeeping, and the first version of this feature put the network
-# call inside it, in front of `_settle_orders`. A broker timeout there
-# leaves a synthetic that HAS filled still marked WORKING — which the
-# quoter re-places. A duplicate position, bought with real money, caused
-# by the failure of the thing meant to REDUCE one.
-
-def test_the_reduce_happens_AFTER_the_synthetics_are_settled():
-    import inspect
-    from mt5trader.quoter import Quoter
-
-    source = inspect.getsource(Quoter._on_fill)
-    settle = source.index('_settle_orders')
-    reduce_at = source.index('_reduce_after_fill')
-    assert settle < reduce_at, (
-        'the reduce runs before the fill is settled — a broker timeout '
-        'would leave a filled order marked working')
-
-
-def test_book_fill_itself_never_touches_the_broker():
-    """It is bookkeeping. Keeping it that way is what makes the
-    ordering above safe."""
-    import inspect
-    from mt5trader.quoter import Quoter
-
-    source = inspect.getsource(Quoter._book_fill)
-    assert 'reduce_first' not in source
-    assert 'close_position' not in source
-
-
-def test_a_reduce_that_RAISES_never_escapes_into_the_fill_path():
-    """A failed reduce leaves the old position OPEN — visible and
-    closable by hand. That is the safe direction to fail in. What must
-    never happen is the exception reaching the fill."""
-    from mt5trader.quoter import Quoter
-
-    class Boom:
-        def close_position(self, *a, **k):
-            raise ConnectionError('the broker went away mid-close')
-
-    quoter = Quoter.__new__(Quoter)
-    quoter.config = {'CLOSE_FIRST': True}
-    quoter.book = book_with(Position('old', SELL, 1.0, 100))
-    quoter.executor = Boom()
-    quoter._markets = {}
-    quoter.on_position_closed = lambda position: None
-
-    class Group:
-        side = BUY
-    mine = Position('mine', BUY, 1.0, 200)
-
-    # Must return, not raise.
-    assert quoter._reduce_after_fill(Pair(), Group(), mine) == []
-    # And the position it could not close is still open, not silently
-    # marked shut.
-    assert quoter.book.position('old').is_open is True
-
-
-def test_a_closed_position_is_WRITTEN_THROUGH_on_a_reduce():
-    """`remember` exists because the window between a close and the
-    state being safe is the window a crash turns into an unrecoverable
-    position. The fill path used to skip it, so a position shut at the
-    broker still read as OPEN after a restart."""
-    from mt5trader.quoter import Quoter
-
-    remembered = []
-    quoter = Quoter.__new__(Quoter)
-    quoter.config = {'CLOSE_FIRST': True}
-    quoter.book = book_with(Position('old', SELL, 1.0, 100))
-    quoter.executor = Executor()
-    quoter._markets = {}
-    quoter.on_position_closed = remembered.append
-
-    class Group:
-        side = BUY
-    quoter._reduce_after_fill(Pair(), Group(), Position('mine', BUY, 1.0, 200))
-
-    assert [p.position_id for p in remembered] == ['old'], (
-        'the close was never written through to the database')
-
-
-def test_the_coordinator_wires_that_hook_up():
-    """The default is a no-op, so a hook nobody connects is a silent
-    data-loss bug rather than a crash."""
-    import inspect
-    from mt5trader.coordinator import Coordinator
-
-    source = inspect.getsource(Coordinator.__init__)
-    assert 'on_position_closed' in source and 'self.remember' in source
-
-
 # -- a failed close must not become a new position --------------------
 #
 # `reduce_first` used to return ([], quantity) both when there was
@@ -413,12 +279,101 @@ def test_the_market_click_REFUSES_to_open_after_a_failed_close():
     assert "'refused': True" in source
 
 
-def test_the_fill_path_does_not_refuse_because_it_cannot():
-    """By the time a resting order fills, the position is already on.
-    There is nothing left to refuse — so it must say so loudly instead
-    of silently swallowing the failure."""
+# -- A REDUCING CLICK MUST LEAVE YOU FLAT -----------------------------
+#
+# The bug the desk found, from the fills themselves:
+#
+#   12:38:38  B sell open  2006 | A buy  open  2007   first click
+#   12:39:24  B buy  close 2006 | A sell close 2007   the reduce fired
+#   12:39:24  B buy  open  2008 | A sell open  2009   ...and a NEW one
+#
+# The old position WAS closed. But the fill had already opened a fresh
+# one, so SELL 1 became BUY 1 with two new tickets instead of flat.
+#
+# Closing after the fact cannot fix that, because by then the broker
+# has already opened the position. A resting order that reduces has to
+# be a CLOSING order from the moment it is placed: `quoter.arm` builds
+# one carrying position=<ticket>, so executing it CLOSES that ticket
+# rather than opening a second, and the fill lands in
+# `_on_closing_fill`, which closes the other leg by ticket too.
+
+def test_the_fill_path_no_longer_opens_and_then_closes():
+    """The mechanism that produced the reported fills is GONE. Two ways
+    to reduce one position is a double close."""
     import inspect
     from mt5trader.quoter import Quoter
 
-    source = inspect.getsource(Quoter._reduce_after_fill)
-    assert 'failure' in source and 'logging.error' in source
+    assert not hasattr(Quoter, '_reduce_after_fill'), (
+        'the open-then-close mechanism is still there')
+    # Code only. The comment in `_on_fill` explains at length why it
+    # does NOT reduce, and matching prose would fail on the very
+    # comment that documents the fix.
+    code = '\n'.join(line.split('#')[0]
+                     for line in inspect.getsource(Quoter._on_fill).splitlines())
+    assert '_reduce_after_fill' not in code
+    assert 'reduce_first' not in code
+    assert 'close_position' not in code, (
+        '_on_fill still reaches the broker to close after a fill')
+
+
+def test_a_reducing_click_rests_a_CLOSING_order_not_an_opening_one():
+    import inspect
+    from mt5trader.coordinator import Coordinator
+
+    source = inspect.getsource(Coordinator._rest_reducing_orders)
+    # arm() is the only thing that sets position_id, which is what
+    # makes the group `closing` and sends position=<ticket>.
+    assert 'self.quoter.arm(' in source
+    assert 'add_order' not in source, (
+        'it builds an OPENING order, which is the bug')
+
+
+def test_both_resting_paths_reduce_before_they_open():
+    """A LIMIT click and a MARKET click away from the touch both rest.
+    Both must reduce; only one used to."""
+    import inspect
+    from mt5trader.coordinator import Coordinator
+
+    source = inspect.getsource(Coordinator._click)
+    assert source.count('_rest_reducing_orders') == 2, (
+        'one of the two resting paths still opens unconditionally')
+    for chunk in source.split('_rest_reducing_orders')[1:]:
+        opening = chunk.find('self.book.add_order')
+        assert opening > 0, 'the remainder is never opened'
+
+
+def test_a_click_that_fully_covers_opens_NOTHING():
+    """SELL 1 then BUY 1 must leave the book with no new opening order
+    at all — that is the difference between flat and flipped."""
+    import inspect
+    from mt5trader.coordinator import Coordinator
+
+    source = inspect.getsource(Coordinator._click)
+    # The early return on a fully-covered click, on both paths.
+    assert source.count('quantity <= 1e-9') >= 2
+    assert source.count("'reducing': True") == 2
+
+
+def test_the_trader_s_level_beats_an_armed_target():
+    """AutoRouting may already hold a closing order for this position
+    at ITS level. `arm` returns the EXISTING order rather than moving
+    it, so a click would silently rest at somebody else's price."""
+    import inspect
+    from mt5trader.coordinator import Coordinator
+
+    source = inspect.getsource(Coordinator._rest_reducing_orders)
+    assert 'orders_for_position' in source and 'disarm' in source
+    assert source.index('disarm') < source.index('self.quoter.arm(')
+
+
+def test_arm_really_marks_the_order_as_CLOSING():
+    """The whole fix rests on this: an order carrying a position_id is
+    a closing order, and its fill goes to _on_closing_fill."""
+    import inspect
+    from mt5trader.quoter import Quoter, QuoteGroup
+
+    assert 'position_id=position.position_id' in inspect.getsource(Quoter.arm)
+    assert 'self.position_id is not None' in inspect.getsource(
+        QuoteGroup.closing.fget)
+    on_fill = inspect.getsource(Quoter._on_fill)
+    assert on_fill.index('group.closing') < on_fill.index('_book_fill')

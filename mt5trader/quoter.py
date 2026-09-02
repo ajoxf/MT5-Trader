@@ -37,7 +37,7 @@ Three more rules, each of which has a test:
 
 import logging
 
-from . import book as book_module, sizing
+from . import sizing
 from .executor import slippage
 from .models import (LegFill, OrderState, OrderType, SpreadPosition,
                      SpreadSide, new_id)
@@ -149,13 +149,6 @@ class Quoter:
         #: The last market seen per pair, so an auto-close can be marked
         #: at the touch it was decided on rather than at nothing.
         self._markets = {}
-        #: Called with every position a reduce closes, so the close is
-        #: WRITTEN THROUGH to the database. Without it a position shut
-        #: at the broker still reads as open after a restart, and the
-        #: reconciler meets a position that is not there. The
-        #: coordinator wires this to its own `remember`; the default is
-        #: a no-op so the quoter still stands up on its own.
-        self.on_position_closed = lambda position: None
 
     # -- the ladder's side of it -------------------------------------------
 
@@ -479,16 +472,23 @@ class Quoter:
         position = self._book_fill(pair, group, fills, contract_a, contract_b,
                                    elapsed_ms)
         self._settle_orders(group, position.quantity)
-        # Only now, with the fill booked and the synthetics settled, is
-        # it safe to touch the broker again. See `_reduce_after_fill`.
-        reduced = self._reduce_after_fill(pair, group, position)
-        event = {'group': (group.pair_key, group.side.value, group.level,
-                           group.position_id),
-                 'action': 'filled', 'position': position.position_id,
-                 'hedge_ms': elapsed_ms}
-        if reduced:
-            event['reduced'] = reduced
-        return event
+        # NOTHING IS REDUCED HERE, deliberately.
+        #
+        # An earlier version closed the opposite position at this
+        # point, after the fill had already opened a new one. The
+        # arithmetic looked right and the result was not: a click meant
+        # to flatten left a BRAND NEW position on — SELL 1 became BUY 1
+        # instead of flat, with two fresh tickets, which is what the
+        # desk reported.
+        #
+        # A resting order that reduces is now a CLOSING order from the
+        # moment it is placed (coordinator._rest_reducing_orders), so
+        # its fill lands in `_on_closing_fill` and never reaches here
+        # at all. Two mechanisms for one job would double-close.
+        return {'group': (group.pair_key, group.side.value, group.level,
+                          group.position_id),
+                'action': 'filled', 'position': position.position_id,
+                'hedge_ms': elapsed_ms}
 
     def _on_closing_fill(self, pair, group, state, filled, ticket):
         """An AutoRouting take-profit filled on the quoting leg.
@@ -626,51 +626,6 @@ class Quoter:
         position.entry_slippage = slippage(group.level, entry_spread,
                                            group.side)
         return self.book.add_position(position)
-
-    def _reduce_after_fill(self, pair, group, position):
-        """Close what this fill covers — AFTER the books are straight.
-
-        Deliberately not inside `_book_fill`. `close_position` is a
-        NETWORK call, and `_book_fill` used to be pure bookkeeping: put
-        a network call in front of `_settle_orders` and a broker
-        timeout leaves a synthetic that HAS filled still marked
-        WORKING, which the quoter will re-place. That is a duplicate
-        position bought with real money, caused by a failure in the
-        thing meant to reduce one.
-
-        So the order is: book the fill, settle the synthetics, emit the
-        event — and only then reduce, inside a try. A reduce that fails
-        leaves the old position OPEN: visible on the screen, closable
-        by hand, and obvious. That is the safe direction to fail in.
-
-        The position just opened is excluded from its own reduction.
-        """
-        if not self.config.get('CLOSE_FIRST', True):
-            return []
-        try:
-            closed, _left, failure = book_module.reduce_first(
-                self.book, self.executor, pair, group.side,
-                position.quantity, self._markets.get(pair.key),
-                exclude=position.position_id,
-                on_closed=self.on_position_closed)
-        except Exception as e:
-            # Never re-raise into the fill path.
-            logging.error(
-                '[%s] the reduce after a fill failed: %s. The position it '
-                'would have closed is still OPEN — close it by hand.',
-                pair.key, e)
-            return []
-        if failure is not None:
-            # Nothing to refuse here — the fill has already happened
-            # and the position is already on. Say it loudly instead:
-            # the trader now holds both, and may hold a naked leg.
-            logging.error('[%s] the reduce after a fill did not go '
-                          'through: %s', pair.key, failure)
-        if closed:
-            logging.info(
-                '[%s] fill reduced %d position(s), oldest first: %s',
-                pair.key, len(closed), ', '.join(str(c) for c in closed))
-        return closed
 
     def _settle_orders(self, group, filled_spreads):
         """Mark the synthetics behind a fill, OLDEST first.
