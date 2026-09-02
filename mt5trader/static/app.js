@@ -102,10 +102,20 @@
     box.className = 'toast' + (kind === 'ok' ? ' ok' : '');
     box.innerHTML = '<span class="dismiss">&times;</span>';
     box.appendChild(document.createTextNode(message));
-    // Errors stay until dismissed, on purpose.
+    // Errors used to stay until dismissed, on purpose — so that a
+    // refusal could not scroll past unread. But a refusal that REPEATS
+    // (a broker refusing every order, a leg that will not quote) built
+    // a wall of identical boxes over the ladder, each needing its own
+    // click. That buries the market behind the message about it.
+    //
+    // So errors clear too, just slower: long enough to read twice,
+    // and still dismissable on click. Anything that must not be missed
+    // belongs in the checklist or the banner, which persist properly,
+    // rather than in a box that was always going to disappear.
     box.addEventListener('click', function () { box.remove(); });
     el('toasts').appendChild(box);
-    if (kind === 'ok') { window.setTimeout(function () { box.remove(); }, 4000); }
+    window.setTimeout(function () { box.remove(); },
+                      kind === 'ok' ? 4000 : 10000);
   }
 
   function ask(title, body, confirmLabel, onConfirm) {

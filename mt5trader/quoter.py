@@ -37,7 +37,7 @@ Three more rules, each of which has a test:
 
 import logging
 
-from . import sizing
+from . import book as book_module, sizing
 from .executor import slippage
 from .models import (LegFill, OrderState, OrderType, SpreadPosition,
                      SpreadSide, new_id)
@@ -612,7 +612,26 @@ class Quoter:
         # benchmark is the clicked level, not the touch it crossed.
         position.entry_slippage = slippage(group.level, entry_spread,
                                            group.side)
-        return self.book.add_position(position)
+        opened = self.book.add_position(position)
+        # REDUCE ON FILL. A resting order the opposite way is a cover
+        # that the trader parked at a price, so when it fills it has to
+        # close what it covers — otherwise clicking the bid to get out
+        # of a short leaves BOTH on, which is what the desk reported.
+        #
+        # Closing here rather than at click time is the only correct
+        # order for a resting click: the trader named a PRICE, and
+        # until that price trades there is nothing to close against.
+        # The new position is excluded from its own reduction.
+        if self.config.get('CLOSE_FIRST', True):
+            closed, _left = book_module.reduce_first(
+                self.book, self.executor, pair, group.side,
+                position.quantity, self._markets.get(pair.key),
+                exclude=position.position_id)
+            if closed:
+                logging.info(
+                    '[%s] fill reduced %d position(s), oldest first: %s',
+                    pair.key, len(closed), ', '.join(str(c) for c in closed))
+        return opened
 
     def _settle_orders(self, group, filled_spreads):
         """Mark the synthetics behind a fill, OLDEST first.

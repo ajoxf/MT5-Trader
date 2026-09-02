@@ -788,7 +788,7 @@ def test_the_settings_page_edits_accounts_and_pairs(page):
     # And a second one that tries to take the same port.
     add_account(page, 'CFI Futures', '127.0.0.1:9101')
     # An ERROR toast, which is a different thing from the success one
-    # above: it has no timer on it and waits to be dismissed by hand.
+    # above: it lasts far longer, and can still be dismissed by hand.
     page.wait_for_selector('.toast:not(.ok)')
     toast = page.text_content('.toast:not(.ok)')
     # The refusal names the account holding the port AND the one to use.
@@ -1361,6 +1361,63 @@ def test_ticking_lock_tells_the_ENGINE_and_not_only_the_browser(page):
         page.wait_for_timeout(200)
         page.evaluate("() => { if (window.__sendReal) "
                       "{ window.fetch = window.__sendReal; } }")
+
+
+def test_an_error_toast_is_given_a_timer_so_refusals_stop_stacking(page):
+    """Errors used to stay until dismissed, on purpose — so a refusal
+    could not scroll past unread. But a refusal that REPEATS (a broker
+    refusing every order) built a wall of identical boxes over the
+    ladder, each needing its own click, burying the market behind the
+    message about it.
+
+    Driven through a REAL refusal rather than a test-only hook, so it
+    also proves the toast that a live rejection produces is the one
+    that clears.
+    """
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+
+    # Capture what setTimeout is asked for, and never let it fire, so
+    # the assertion does not cost ten seconds of real time.
+    page.evaluate("""() => {
+        window.__delays = [];
+        window.__realTimeout = window.setTimeout;
+        window.setTimeout = function (fn, ms) {
+            window.__delays.push(ms);
+            return window.__realTimeout(fn, 999999);
+        };
+    }""")
+    try:
+        add_account(page, 'Toast A', '127.0.0.1:9401', login='7001')
+        page.wait_for_selector('tr[data-account="Toast A"]')
+        # The same port twice: a real, engine-worded refusal.
+        add_account(page, 'Toast B', '127.0.0.1:9401')
+        page.wait_for_selector('.toast:not(.ok)')
+
+        delays = page.evaluate('() => window.__delays')
+        assert delays, 'the error toast was given no timer at all'
+        longest = max(delays)
+        assert 5000 <= longest <= 20000, (
+            f'{longest}ms is not "readable, then gone": {delays}')
+    finally:
+        page.evaluate("""() => {
+            if (window.__realTimeout) { window.setTimeout = window.__realTimeout; }
+            document.getElementById('toasts').innerHTML = '';
+        }""")
+
+
+def test_a_success_toast_still_clears_sooner_than_an_error(page):
+    """The control. An error must OUTLAST a success — otherwise the fix
+    is just "everything vanishes fast", which is the opposite problem.
+    """
+    source = page.evaluate("""async () => {
+        const r = await fetch('/static/app.js');
+        return await r.text();
+    }""")
+    assert "kind === 'ok' ? 4000 : 10000" in source, (
+        'the two durations are no longer the success-then-error pair '
+        'this test was written against')
 
 
 def test_a_window_can_never_be_dropped_where_it_cannot_be_got_back(page):

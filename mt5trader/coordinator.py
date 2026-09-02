@@ -23,6 +23,7 @@ from datetime import datetime
 from . import algo as algo_module, atomicfile, carry, \
     config as config_module, depth as depth_book, fairvalue, hedgeratio, \
     sizing, takeprofit
+from . import book as book_module
 from .book import Book
 from .database import Store
 from .executor import PairExecutor, mark_position
@@ -1018,6 +1019,16 @@ class Coordinator:
                               f'resting here as a working order'}
 
         if pair.order_type is OrderType.MARKET:
+            # REDUCE BEFORE OPENING. A market click the opposite way is
+            # a cover, not a second position. Closing first (rather
+            # than opening and closing after) is deliberate: it never
+            # holds both sides at once, so it cannot be caught halfway
+            # by a disconnect with double the exposure on.
+            closed, quantity = self._reduce_first(pair, side, quantity, md)
+            if closed and quantity <= 1e-9:
+                return {'ok': True, 'closed': closed, 'reduced': True,
+                        'reason': f'closed {len(closed)} position(s) '
+                                  f'oldest first'}
             result = self.executor.market_entry(pair, side, md, quantity,
                                                 level)
             if result.ok and result.position:
@@ -1037,6 +1048,24 @@ class Coordinator:
         order = self.book.add_order(pair, side, level, quantity)
         self.quoter.group_for(pair, order)
         return {'ok': True, 'order': order.to_dict()}
+
+    def _reduce_first(self, pair, side, quantity, md, exclude=None):
+        """Close what this click covers, and say what is left to open.
+
+        Returns (closed position ids, quantity still to open). One
+        implementation for both paths — a MARKET click closes before it
+        opens, a resting order closes when it fills — because two
+        implementations of "which tickets does this cover" is two
+        answers to reconcile the day they disagree.
+
+        A close is never withheld: `close_position` consults no guard,
+        and neither does this.
+        """
+        if not self.config.get('CLOSE_FIRST', True):
+            return [], quantity
+        return book_module.reduce_first(
+            self.book, self.executor, pair, side, quantity, md,
+            exclude=exclude, on_closed=self.remember)
 
     def _away_from_the_market(self, pair, side, md, level):
         """Is this click at a price the market cannot fill right now?

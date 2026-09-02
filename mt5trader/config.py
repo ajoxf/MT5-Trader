@@ -178,6 +178,24 @@ DEFAULT_SETTINGS = {
     #: TT sets it deliberately. Flipping the DEFAULT is a
     #: separate decision from having the switch.
     'CLICK_CONVENTION': 'TOUCH',
+
+    #: Does a click the OPPOSITE way close what is open, or stack a
+    #: second position beside it?
+    #:
+    #: These accounts are HEDGING, so MT5 never nets: an opposite order
+    #: always opens a SECOND position, and the trader who clicked the
+    #: offer to cover a short ends up with a short and a long, both
+    #: live, both paying carry, and a ticket count nobody expected.
+    #: Every price ladder on every exchange reduces first, so this
+    #: does too — by closing tickets OLDEST FIRST, which is what the
+    #: broker cannot do for us.
+    #:
+    #: A position is only closed when it fits entirely inside the click
+    #: being made. Anything left over opens normally, so a reduce can
+    #: never over-close and flip the net the other way.
+    #:
+    #: OFF restores the old behaviour exactly: every click opens.
+    'CLOSE_FIRST': True,
     #: Ladder row height in pixels. 17 is the reference screen's; a
     #: bigger target is a faster, safer click on a large monitor.
     'ROW_HEIGHT_PX': 17,
