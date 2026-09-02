@@ -110,7 +110,11 @@ def test_a_take_profit_is_NEVER_merged_into_an_entry_at_the_same_level(
     level = coordinator.book.orders_for_position(
         position.position_id)[0].level
 
-    # The trader clicks a plain SELL at exactly the same level.
+    # The trader clicks SELL at exactly the same level. With
+    # CLOSE_FIRST OFF that is a plain opening order, and it must NOT be
+    # merged into the take-profit sitting at the same price — which is
+    # what this test was written for.
+    coordinator.config.settings['CLOSE_FIRST'] = False
     pair.order_type = pair.order_type.__class__('LIMIT')
     coordinator.click(pair.key, SpreadSide.SELL, level)
     coordinator.poll_once()
@@ -119,6 +123,44 @@ def test_a_take_profit_is_NEVER_merged_into_an_entry_at_the_same_level(
     assert len(groups) == 2, groups
     intents = sorted(g['intent'] for g in groups)
     assert intents == ['CLOSE', 'OPEN']
+
+
+def test_with_CLOSE_FIRST_that_same_click_REDUCES_and_keeps_its_queue_place(
+        engine, pair, legs):
+    """The other half of the same click.
+
+    With CLOSE_FIRST on, a SELL click while LONG means "close my long",
+    so it rests a CLOSE and no entry is created at all. And when a
+    target is ALREADY resting at that level, the click must leave it
+    exactly where it is: pulling a live pending and putting an
+    identical one back loses its place in the broker's queue, which
+    costs the trader a fill for no change whatsoever.
+    """
+    coordinator = engine
+    pair.auto_route = True
+    coordinator.config.settings['AUTO_ROUTE_ENABLED'] = True
+    coordinator.config.settings['CLOSE_FIRST'] = True
+    legs['acct_a'].broker.margin_per_lot = 3000.0
+    legs['acct_b'].broker.margin_per_lot = 2000.0
+    position = market_entry(coordinator, pair)
+    coordinator.poll_once()
+    armed = coordinator.book.orders_for_position(position.position_id)[0]
+    level = armed.level
+
+    pair.order_type = pair.order_type.__class__('LIMIT')
+    answer = coordinator.click(pair.key, SpreadSide.SELL, level)
+    coordinator.poll_once()
+
+    assert answer.get('reducing') is True, answer
+    groups = coordinator.quoter.snapshot(pair.key)
+    assert [g['intent'] for g in groups] == ['CLOSE'], (
+        'the click opened something instead of reducing')
+    # THE SAME order, not a replacement: its id is its place in the
+    # queue.
+    still = coordinator.book.orders_for_position(position.position_id)
+    assert [o.order_id for o in still] == [armed.order_id], (
+        'the resting order was pulled and re-placed, losing its queue '
+        'position for nothing')
 
 
 def test_the_take_profit_filling_closes_the_position_both_legs(engine, pair,
