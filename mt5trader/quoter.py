@@ -534,7 +534,7 @@ class Quoter:
         """The pair's last market, for marking a close. Set by `work`."""
         return self._markets.get(pair.key)
 
-    def arm(self, pair, position, level, quantity=None):
+    def arm(self, pair, position, level, quantity=None, auto=True):
         """Rest a working order to CLOSE `position` at `level`.
 
         This is what AutoRouting does on a fill, and it is not a
@@ -554,10 +554,11 @@ class Quoter:
             pair, position.side.opposite, level,
             quantity if quantity is not None else position.quantity,
             order_type=OrderType.LIMIT,
-            position_id=position.position_id)
+            position_id=position.position_id, auto_armed=auto)
         self.group_for(pair, order)
-        logging.info('%s: AutoRouting armed a %s to close %s at %s',
-                     pair.key, position.side.opposite.value,
+        logging.info('%s: %s armed a %s to close %s at %s', pair.key,
+                     'AutoRouting' if auto else 'the trader',
+                     position.side.opposite.value,
                      position.position_id, level)
         return order
 
@@ -580,6 +581,31 @@ class Quoter:
             if pair is not None:
                 self._pull(pair, group, reason)
             self.groups.pop(key, None)
+        return pulled
+
+    def disarm_auto(self, position_id, reason):
+        """Pull only what AUTOMATION armed against a position.
+
+        `disarm` pulls everything, which is right when the position is
+        GONE — any closing order left behind would fill and open a
+        naked one. It is wrong for the AutoRouting switch, which stands
+        automation down and has no business touching a close the trader
+        placed by hand.
+        """
+        pulled = []
+        for order in self.book.auto_armed_for(position_id):
+            self.book.cancel(order.order_id, reason)
+            pulled.append(order)
+            for key, group in list(self.groups.items()):
+                if group.position_id != position_id:
+                    continue
+                if not any(o.order_id == order.order_id
+                           for o in group.orders):
+                    continue
+                pair = self.config.pairs.get(group.pair_key)
+                if pair is not None:
+                    self._pull(pair, group, reason)
+                self.groups.pop(key, None)
         return pulled
 
     def _pull_pair(self, pair, reason):

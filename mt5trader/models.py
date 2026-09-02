@@ -102,8 +102,19 @@ class SyntheticOrder:
     """
 
     def __init__(self, pair_key, side, level, quantity, order_type,
-                 time_in_force, clock=time.time, position_id=None):
+                 time_in_force, clock=time.time, position_id=None,
+                 auto_armed=False):
         self.order_id = new_id('SO')
+        #: Did AUTOMATION arm this, or the trader?
+        #:
+        #: Both are closing orders and both carry a position_id, so
+        #: nothing else can tell them apart. It matters because
+        #: standing AutoRouting down pulls what AutoRouting armed —
+        #: and it must NOT pull a close the trader placed by hand. A
+        #: trader who clicks to get out and finds their order swept by
+        #: a switch they did not touch is a trader who believes they
+        #: are covered and is not.
+        self.auto_armed = bool(auto_armed)
         #: The position this order CLOSES, when it is a closing order.
         #: None on an ordinary click. It is what makes an AutoRouting
         #: take-profit a different order from an entry at the same
@@ -149,6 +160,7 @@ class SyntheticOrder:
             'pending_ticket': self.pending_ticket,
             'position_id': self.position_id,
             'intent': 'CLOSE' if self.position_id else 'OPEN',
+            'auto_armed': self.auto_armed,
             'reason': self.reason,
         }
 

@@ -724,9 +724,14 @@ class Coordinator:
               and pair.auto_route)
         if not on:
             for position in self.book.positions(pair.key):
-                if self.book.orders_for_position(position.position_id):
-                    self.quoter.disarm(position.position_id,
-                                       'AutoRouting was turned off')
+                # ONLY what AutoRouting armed. A close the trader
+                # clicked is not automation: sweeping it here left them
+                # believing they had an order working to get out, with
+                # nothing at the broker, because of a switch they never
+                # touched.
+                if self.book.auto_armed_for(position.position_id):
+                    self.quoter.disarm_auto(position.position_id,
+                                            'AutoRouting was turned off')
                     position.tp_armed = False
                     events.append({'pair': pair.key,
                                    'action': 'auto_route_pulled',
@@ -1149,7 +1154,7 @@ class Coordinator:
                     position.position_id,
                     f'the trader clicked {level:g} to close this instead')
             order = self.quoter.arm(pair, position, level,
-                                    position.quantity)
+                                    position.quantity, auto=False)
             if order is None:
                 break
             armed.append(order)

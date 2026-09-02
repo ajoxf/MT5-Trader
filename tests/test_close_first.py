@@ -377,3 +377,91 @@ def test_arm_really_marks_the_order_as_CLOSING():
         QuoteGroup.closing.fget)
     on_fill = inspect.getsource(Quoter._on_fill)
     assert on_fill.index('group.closing') < on_fill.index('_book_fill')
+
+
+# -- a trader's close is NOT automation -------------------------------
+#
+# Seen live: click blue to cover a short, watch the order rest, and
+# 300ms later —
+#
+#   XAUUSD | GCZ6: BUY 1 at 46.8500 — cancelled. AutoRouting was
+#   turned off
+#
+# `work_auto_route` runs every poll, and with AutoRouting OFF it swept
+# every order carrying a position_id. A reducing click rests exactly
+# such an order, so with AutoRouting off — the desk's own setting — a
+# closing click could never survive one poll. The trader believes they
+# have an order working to get out, and there is nothing at the broker.
+
+def test_a_closing_order_records_WHO_armed_it():
+    from mt5trader.models import SyntheticOrder, OrderType, TimeInForce
+
+    auto = SyntheticOrder('P', 'BUY', 1.0, 1.0, OrderType.LIMIT,
+                          TimeInForce.DAY, position_id='POS1',
+                          auto_armed=True)
+    hand = SyntheticOrder('P', 'BUY', 1.0, 1.0, OrderType.LIMIT,
+                          TimeInForce.DAY, position_id='POS1')
+    assert auto.auto_armed is True
+    assert hand.auto_armed is False, (
+        'an unmarked closing order must not read as automation')
+    assert hand.to_dict()['auto_armed'] is False
+
+
+def test_the_switch_pulls_ONLY_what_automation_armed():
+    from mt5trader.book import Book
+    from mt5trader.models import OrderType, TimeInForce
+
+    class P:
+        key = 'P'
+        order_type = OrderType.LIMIT
+        time_in_force = TimeInForce.DAY
+
+    book = Book()
+    auto = book.add_order(P(), 'BUY', 46.85, 1.0, position_id='POS1',
+                          auto_armed=True)
+    hand = book.add_order(P(), 'BUY', 46.85, 1.0, position_id='POS1')
+
+    swept = [o.order_id for o in book.auto_armed_for('POS1')]
+    assert swept == [auto.order_id], (
+        "the trader's own close is in the sweep")
+    # The CONTROL: both are still closing orders for the position, so
+    # the orphan sweep — which must take everything — still sees both.
+    both = [o.order_id for o in book.orders_for_position('POS1')]
+    assert sorted(both) == sorted([auto.order_id, hand.order_id])
+
+
+def test_the_reducing_click_arms_as_the_TRADER_not_automation():
+    import inspect
+    from mt5trader.coordinator import Coordinator
+
+    source = inspect.getsource(Coordinator._rest_reducing_orders)
+    assert 'auto=False' in source, (
+        'the click arms as automation, so the switch will sweep it')
+
+
+def test_autorouting_arms_as_AUTOMATION():
+    """The control. If `arm` defaulted the other way, standing
+    AutoRouting down would leave its own targets resting — and the
+    comment in work_auto_route is right that this has stood nothing
+    down."""
+    import inspect
+    from mt5trader.quoter import Quoter
+    from mt5trader.coordinator import Coordinator
+
+    assert 'auto=True' in inspect.signature(Quoter.arm).__str__()
+    armed = inspect.getsource(Coordinator.work_auto_route)
+    assert 'auto=False' not in armed
+
+
+def test_the_switch_uses_disarm_auto_and_the_orphan_sweep_does_not():
+    """A position that is GONE must have EVERY closing order pulled —
+    trader's included — because one left behind fills and opens a naked
+    position. Only the AutoRouting switch is selective."""
+    import inspect
+    from mt5trader.coordinator import Coordinator
+
+    source = inspect.getsource(Coordinator.work_auto_route)
+    orphan, switch = source.split('AutoRouting was turned off')[0], source
+    assert "disarm(order.position_id" in orphan, (
+        'the orphan sweep no longer pulls everything')
+    assert 'disarm_auto(' in switch
