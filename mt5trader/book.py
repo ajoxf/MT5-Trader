@@ -224,7 +224,15 @@ def reduce_first(book, executor, pair, side, quantity, md,
     does this click cover" is two answers to reconcile the day they
     disagree, on a live book.
 
-    Returns (closed position ids, quantity still to open).
+    Returns (closed position ids, quantity still to open, failure).
+
+    `failure` is None when every close asked for went through, and the
+    BROKER'S OWN WORDS when one did not. It has to be told apart from
+    "there was nothing to close": both used to return an empty list, so
+    a caller could not tell a refusal from a quiet no-op, and the
+    MARKET path opened a new position on top of one that had just
+    failed to close — which is the exact mess this feature exists to
+    prevent, and worse if the close half-executed and left a leg naked.
 
     A close is never withheld: `close_position` consults no guard, and
     neither does this.
@@ -232,7 +240,7 @@ def reduce_first(book, executor, pair, side, quantity, md,
     try:
         left = float(quantity)
     except (TypeError, ValueError):
-        return [], quantity
+        return [], quantity, None
     closed = []
     for position in book.positions_to_reduce(pair.key, side, left,
                                              exclude=exclude):
@@ -244,9 +252,34 @@ def reduce_first(book, executor, pair, side, quantity, md,
             # would have closed, and opening the remainder on top of a
             # position that would NOT close is how a reduce quietly
             # becomes a bigger position.
-            break
+            return closed, max(left, 0.0), _close_failure(result, position)
         if on_closed is not None:
             on_closed(position)
         closed.append(position.position_id)
         left -= float(position.quantity or 0.0)
-    return closed, max(left, 0.0)
+    return closed, max(left, 0.0), None
+
+
+def _close_failure(result, position):
+    """Why a close did not go through, in the BROKER's own words.
+
+    "check the log" is not an answer on a live account. Each leg
+    reports its own error, and a close that went through on one leg and
+    not the other has left a NAKED LEG — which is the sentence the
+    trader has to see first.
+    """
+    legs = (result or {}).get('legs') or {}
+    said = []
+    done = []
+    for leg, answer in sorted(legs.items()):
+        if (answer or {}).get('ok'):
+            done.append(leg.upper())
+        else:
+            reason = ((answer or {}).get('error')
+                      or (answer or {}).get('reason') or 'refused')
+            said.append(f'leg {leg.upper()}: {reason}')
+    head = f'could not close position {position.position_id}'
+    if done and said:
+        head = (f'NAKED LEG — position {position.position_id} closed on '
+                f'leg {done[0]} but NOT on the other')
+    return f"{head} ({'; '.join(said) if said else 'no reason reported'})"
