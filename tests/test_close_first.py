@@ -368,15 +368,18 @@ def test_the_trader_s_level_beats_an_armed_target():
 
 def test_arm_really_marks_the_order_as_CLOSING():
     """The whole fix rests on this: an order carrying a position_id is
-    a closing order, and its fill goes to _on_closing_fill."""
+    a closing order, and a closing group rests NOTHING at the broker —
+    it is a level this system watches and closes by ticket at."""
     import inspect
     from mt5trader.quoter import Quoter, QuoteGroup
 
     assert 'position_id=position.position_id' in inspect.getsource(Quoter.arm)
     assert 'self.position_id is not None' in inspect.getsource(
         QuoteGroup.closing.fget)
-    on_fill = inspect.getsource(Quoter._on_fill)
-    assert on_fill.index('group.closing') < on_fill.index('_book_fill')
+    work = inspect.getsource(Quoter.work)
+    assert work.index('group.closing') < work.index('_check_fill')
+    # A closing group must never reach the pending machinery.
+    assert 'closing' not in inspect.getsource(Quoter._rest_or_repeg)
 
 
 # -- a trader's close is NOT automation -------------------------------

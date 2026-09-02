@@ -347,6 +347,11 @@ class PairExecutor:
             return {'ok': False, 'error': f'{symbol}: the broker could not '
                                           f'be read; nothing was closed'}
         by_ticket = {str(p['ticket']): p for p in live}
+        # What the broker actually holds of OUR tickets right now. A
+        # ticket it no longer lists is already gone, and that leg is
+        # done — which is not the same as having closed nothing.
+        found = sum(float(by_ticket[str(t)]['volume'])
+                    for t in tickets if str(t) in by_ticket)
         remaining = None if volume is None else float(volume)
         closed, errors = [], []
         # Newest first, so a partial unwind takes off the piece that was
@@ -363,30 +368,49 @@ class PairExecutor:
             result = runner.close_ticket(symbol, int(ticket), want,
                                          entry_side.value, comment=comment)
             if result.get('ok'):
-                closed.append({'ticket': ticket, 'volume': want,
+                # WHAT FILLED, not what was asked. A market close can
+                # come back short, and booking the request as the fill
+                # takes lots off our record that are still at the
+                # broker.
+                got = result.get('filled_volume')
+                got = want if got is None else float(got)
+                closed.append({'ticket': ticket, 'volume': got,
                                'price': result.get('price')})
                 if remaining is not None:
-                    remaining -= want
+                    remaining -= got
             else:
                 errors.append(f"{ticket}: {result.get('error')}")
+        done = sum(float(c['volume'] or 0.0) for c in closed)
         if errors:
             return {'ok': False, 'closed': closed,
+                    'left': max(0.0, found - done),
                     'error': '; '.join(errors)}
-        return {'ok': True, 'closed': closed}
+        return {'ok': True, 'closed': closed,
+                #: Of OUR tickets, what is still open at the broker
+                #: after this. Zero means the leg is done, however
+                #: little was closed to get there.
+                'left': max(0.0, found - done)}
 
     # -- exit -------------------------------------------------------------
 
-    def close_position(self, pair, position, md=None, reason='manual'):
+    def close_position(self, pair, position, md=None, reason='manual',
+                       disarm=True):
         """Flatten one spread position, both legs, by ticket.
 
         A guard NEVER prevents a close (spec §8): a trade must always be
         closable, so nothing in here consults the staleness or jump
         state.
+
+        `disarm=False` is for the one caller that OWNS the closing
+        orders — the quoter, firing its own resting close. Disarming
+        there would mark a close that WORKED as 'cancelled', and would
+        delete the level a close that FAILED still has to be watched at.
         """
-        if self.before_close is not None:
-            # Pull any resting take-profit BEFORE closing. Afterwards is
-            # too late: the position it was armed against no longer
-            # exists, and the order would open a naked one.
+        if disarm and self.before_close is not None:
+            # Disarm any resting close BEFORE closing. Afterwards is
+            # too late: the level it was armed against no longer has a
+            # position, and it would fire on the next tick that reaches
+            # it.
             try:
                 self.before_close(position.position_id, f'position closed '
                                                         f'({reason})')
@@ -429,85 +453,33 @@ class PairExecutor:
                 total += float(found.get('volume') or 0.0)
         return total
 
-    def close_other_leg(self, pair, position, quote_leg, quote_result,
-                        md=None, reason='auto take-profit', fraction=1.0):
-        """A closing order filled: close the OTHER leg now.
+    def _closed_fraction(self, position, results):
+        """How much of the position the broker ACTUALLY closed.
 
-        The quoting leg is already flat — its pending carried
-        `position=<ticket>`, so executing it closed that leg rather
-        than opening a second one. What is left is the leg nobody has
-        touched, and it is closed BY TICKET, at market, immediately:
-        between the two, this is a naked outright position in gold or
-        oil, not a basis trade.
+        Measured from what is LEFT of our tickets at the broker, not
+        from what was asked for and not from what came back as filled:
+        a ticket the broker no longer lists is already gone, and that
+        leg is done however little was closed to get there.
 
-        `fraction` is how much of the position the quoting leg actually
-        closed. A pending fills PARTIALLY like any other, and closing
-        the other leg IN FULL against half a close — which is what a
-        `volume=None` close does — takes the whole hedge off and leaves
-        the quoting leg naked, with the book reporting the position
-        flat. The other leg comes down by the SAME fraction, or the
-        spread stops being a spread.
+        The hedged part is the SMALLER of the two legs. A close that
+        took more off one leg than the other has not closed a spread —
+        it has left an imbalance — and booking the larger of them would
+        take lots off our record that are still at the broker.
         """
-        other = 'a' if quote_leg == 'b' else 'b'
-        leg_a_side, leg_b_side = position.side.leg_sides()
-        entry_side = leg_a_side if other == 'a' else leg_b_side
-        fill = position.leg_a if other == 'a' else position.leg_b
-        runner = self._leg(pair, other)
-        symbol = self._symbol(pair, other)
-        if runner is None:
-            results = {other: {'ok': False,
-                               'error': f'no leg runner for {symbol}'}}
-        else:
-            results = {other: self.close_tickets(
-                runner, symbol, (fill.position_tickets if fill else []),
-                entry_side, volume=self._other_leg_volume(pair, other, fill,
-                                                          fraction),
-                comment='TP')}
-        results[quote_leg] = quote_result
-        # BOOK WHAT THE OTHER LEG ACHIEVED, never what was asked of it.
-        return self._settle_close(
-            pair, position, results, md, reason,
-            fraction=self._achieved_fraction(fill, results.get(other),
-                                             fraction))
-
-    def _achieved_fraction(self, fill, result, wanted):
-        """How much of the position the OTHER leg actually came down by.
-
-        That leg is the constraint. Its volume step can be ten times the
-        quoting leg's — a spot 0.01 against a future's 0.10 — so the
-        matching half of a partial close can round to NOTHING there.
-        Reducing our own books by what was ASKED would then take lots
-        off the record that are still sitting at the broker, which is
-        the failure this whole path exists to prevent.
-        """
-        if wanted is None or wanted >= 1.0 - 1e-9:
-            return 1.0
-        booked = float((fill.volume if fill else 0.0) or 0.0)
-        if booked <= 0:
-            return wanted
-        closed = sum(float(done.get('volume') or 0.0)
-                     for done in (result or {}).get('closed') or ())
-        return max(0.0, min(1.0, closed / booked))
-
-    def _other_leg_volume(self, pair, other, fill, fraction):
-        """Lots of the untouched leg that match a PARTIAL close.
-
-        None for a whole close — `close_tickets` then takes each
-        ticket's size from the BROKER's book, which is the right answer
-        when everything goes.
-        """
-        if fraction is None or fraction >= 1.0 - 1e-9 or fill is None:
-            return None
-        meta = (pair.meta_a if other == 'a' else pair.meta_b) or {}
-        # DOWN, like every other hedge size: overshooting here closes
-        # more of the remaining leg than was actually closed on the
-        # quoting one, which is the naked leg the other way round.
-        return sizing.round_step(fraction * float(fill.volume or 0.0),
-                                 meta.get('volume_step'),
-                                 meta.get('volume_min'), down=True)
+        achieved = []
+        for leg, fill in (('a', position.leg_a), ('b', position.leg_b)):
+            booked = float((fill.volume if fill else 0.0) or 0.0)
+            if booked <= 0:
+                continue
+            result = results.get(leg) or {}
+            if 'left' not in result:
+                continue          # nothing measured: no opinion
+            left = float(result.get('left') or 0.0)
+            achieved.append(max(0.0, min(1.0, (booked - left) / booked)))
+        return 1.0 if not achieved else min(achieved)
 
     def _settle_close(self, pair, position, results, md=None,
-                      reason='manual', fraction=1.0):
+                      reason='manual'):
         """Book a close that has already been sent, however it was sent.
 
         One place, so a manual close, a flatten, the overnight rule and
@@ -519,11 +491,11 @@ class PairExecutor:
         the broker off our own books.
         """
         ok = all(r.get('ok') for r in results.values())
-        partial = ok and fraction is not None and fraction < 1.0 - 1e-9
-        if partial:
-            return self._settle_partial_close(pair, position, results, md,
-                                              reason, fraction)
         if ok:
+            fraction = self._closed_fraction(position, results)
+            if fraction < 1.0 - 1e-9:
+                return self._settle_partial_close(pair, position, results, md,
+                                                  reason, fraction)
             position.closed_at = self.clock()
             position.close_reason = reason
             # The price the exit was DECIDED at: the touch this position

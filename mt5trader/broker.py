@@ -960,10 +960,23 @@ class BrokerSession:
                        f"{symbol} requires {gap:.5f} above the "
                        f"{bid:.5f} bid")
 
-    def place_pending_limit(self, symbol, side, volume, price, comment="",
-                            position_ticket=None):
-        """Rest a limit order. With position_ticket, the limit CLOSES
-        that position when it executes (hedging-mode limit exits).
+    def place_pending_limit(self, symbol, side, volume, price, comment=""):
+        """Rest a limit order. It OPENS a position when it executes.
+
+        THERE IS NO SUCH THING AS A CLOSING PENDING, and this used to
+        take a `position_ticket` and put it on the request as if there
+        were. MT5 honours `position` on TRADE_ACTION_DEAL; on
+        TRADE_ACTION_PENDING it is ignored, so the order rests as an
+        ordinary limit and, on a hedging account, OPENS a second
+        position facing the other way.
+
+        Live 2026-09-02: ticket 2092 was rested to close ticket 2090 and
+        filled as a BUY 0.01 beside the SELL 0.01 it was meant to close.
+        The engine believed that leg was flat, closed the other leg, and
+        the reconciler swept both futures as orphans a minute later.
+
+        A resting CLOSE is synthetic — this system holds the level and
+        sends a close by ticket when the market reaches it (quoter).
 
         Price must be rounded to trade_tick_size and far enough from the
         book (see legal_limit_price) or brokers reject with Invalid
@@ -985,8 +998,6 @@ class BrokerSession:
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self._pending_filling_mode(symbol),
             }
-            if position_ticket:
-                request["position"] = int(position_ticket)
             result = mt5.order_send(request)
             if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
                 error = (mt5.last_error() if result is None

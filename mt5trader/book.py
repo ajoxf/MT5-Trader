@@ -61,9 +61,9 @@ class Book:
     def orders_for_position(self, position_id, working_only=True):
         """The closing orders armed against one position.
 
-        An auto-TP left resting after its position is gone is the
-        orphan-pending incident with a GUARANTEED fill: it executes,
-        and with nothing to close it opens a naked position instead.
+        A closing order left armed after its position is gone would
+        fire at the next tick that reaches its level and close
+        something that is not there.
         """
         return [o for o in self._orders.values()
                 if o.position_id == position_id
@@ -262,7 +262,7 @@ def reduce_first(book, executor, pair, side, quantity, md,
             # would have closed, and opening the remainder on top of a
             # position that would NOT close is how a reduce quietly
             # becomes a bigger position.
-            return closed, max(left, 0.0), _close_failure(result, position)
+            return closed, max(left, 0.0), close_failure(result, position)
         if on_closed is not None:
             on_closed(position)
         closed.append(position.position_id)
@@ -270,7 +270,7 @@ def reduce_first(book, executor, pair, side, quantity, md,
     return closed, max(left, 0.0), None
 
 
-def _close_failure(result, position):
+def close_failure(result, position):
     """Why a close did not go through, in the BROKER's own words.
 
     "check the log" is not an answer on a live account. Each leg

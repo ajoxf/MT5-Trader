@@ -67,6 +67,28 @@ def fill(legs, volume=None, account='acct_b'):
     return legs[account].broker.part_fill_pending(ticket, volume)
 
 
+def watched_level(coordinator, pair):
+    return [g for g in coordinator.quoter.snapshot(pair.key)
+            if g['intent'] == 'CLOSE'][0]['level']
+
+
+def walk_to_the_level(coordinator, pair, gold_symbols, level):
+    """Move leg B until a BUY close reads its level as reached."""
+    _spot, future = gold_symbols
+    move = (level - coordinator.market[pair.key]['long_spread']) - 0.01
+    future.bid += move
+    future.ask += move
+
+
+def half_close(broker):
+    real = broker.close_position_ticket
+
+    def stingy(symbol, ticket, volume, entry_side, **kw):
+        return real(symbol, ticket, volume / 2.0, entry_side, **kw)
+
+    broker.close_position_ticket = stingy
+
+
 # -- entries --------------------------------------------------------------
 
 def test_a_LIMIT_entry_that_fills_is_written_through(engine, pair, legs,
@@ -100,9 +122,9 @@ def test_the_CONTROL_a_MARKET_entry_was_always_written_through(engine, pair,
 
 # -- closes ---------------------------------------------------------------
 
-def test_a_close_that_fills_on_a_RESTING_order_is_written_through(engine,
-                                                                   pair, legs,
-                                                                   store):
+def test_a_close_that_fires_at_its_LEVEL_is_written_through(engine, pair,
+                                                             legs, store,
+                                                             gold_symbols):
     """It came back OPEN: the book had it closed, the broker was flat,
     and a restart put an exposure on the screen that was not there."""
     coordinator = engine
@@ -111,7 +133,8 @@ def test_a_close_that_fills_on_a_RESTING_order_is_written_through(engine,
     assert rest_a_close(coordinator, pair).get('ok')
     coordinator.poll_once()
 
-    fill(legs)
+    walk_to_the_level(coordinator, pair, gold_symbols,
+                      watched_level(coordinator, pair))
     coordinator.poll_once()
 
     assert position.is_open is False
@@ -121,7 +144,8 @@ def test_a_close_that_fills_on_a_RESTING_order_is_written_through(engine,
 
 def test_a_PARTLY_filled_close_is_written_through_at_its_NEW_size(engine,
                                                                    pair, legs,
-                                                                   store):
+                                                                   store,
+                                                                   gold_symbols):
     """Half closed in the book, whole in the database: a restart would
     have put the other half back on the screen."""
     coordinator = engine
@@ -129,8 +153,10 @@ def test_a_PARTLY_filled_close_is_written_through_at_its_NEW_size(engine,
     assert rest_a_close(coordinator, pair).get('ok')
     coordinator.poll_once()
 
-    ticket = list(legs['acct_b'].broker.pendings)[0]
-    fill(legs, legs['acct_b'].broker.pendings[ticket]['volume'] / 2.0)
+    half_close(legs['acct_a'].broker)
+    half_close(legs['acct_b'].broker)
+    walk_to_the_level(coordinator, pair, gold_symbols,
+                      watched_level(coordinator, pair))
     coordinator.poll_once()
 
     assert position.quantity == pytest.approx(0.5)
@@ -140,7 +166,8 @@ def test_a_PARTLY_filled_close_is_written_through_at_its_NEW_size(engine,
 def test_a_close_whose_OTHER_leg_refused_is_written_through_as_OPEN(engine,
                                                                     pair,
                                                                     legs,
-                                                                    store):
+                                                                    store,
+                                                                    gold_symbols):
     """A close that did not go through leaves the position OPEN, and that
     is exactly the state a restart must come back to rather than guess
     at."""
@@ -150,7 +177,8 @@ def test_a_close_whose_OTHER_leg_refused_is_written_through_as_OPEN(engine,
     coordinator.poll_once()
 
     legs['acct_a'].broker.fail_closes.add('XAUUSD_')
-    fill(legs)
+    walk_to_the_level(coordinator, pair, gold_symbols,
+                      watched_level(coordinator, pair))
     coordinator.poll_once()
 
     assert position.is_open is True
@@ -160,7 +188,8 @@ def test_a_close_whose_OTHER_leg_refused_is_written_through_as_OPEN(engine,
 # -- and back again -------------------------------------------------------
 
 def test_a_reduced_position_RECOVERS_at_its_reduced_size(engine, pair, legs,
-                                                          store, tmp_path):
+                                                          store, tmp_path,
+                                                          gold_symbols):
     """The round trip that matters: half close, restart, and the book
     must come back agreeing with the broker rather than with what was
     first written."""
@@ -168,8 +197,10 @@ def test_a_reduced_position_RECOVERS_at_its_reduced_size(engine, pair, legs,
     position = sell_one(coordinator, pair)
     assert rest_a_close(coordinator, pair).get('ok')
     coordinator.poll_once()
-    ticket = list(legs['acct_b'].broker.pendings)[0]
-    fill(legs, legs['acct_b'].broker.pendings[ticket]['volume'] / 2.0)
+    half_close(legs['acct_a'].broker)
+    half_close(legs['acct_b'].broker)
+    walk_to_the_level(coordinator, pair, gold_symbols,
+                      watched_level(coordinator, pair))
     coordinator.poll_once()
 
     fresh = Coordinator(coordinator.config, legs, store=store,
@@ -186,7 +217,8 @@ def test_a_reduced_position_RECOVERS_at_its_reduced_size(engine, pair, legs,
 
 # -- the reconciler, pinned -----------------------------------------------
 
-def test_a_PARTLY_closed_position_is_not_a_GHOST(engine, pair, legs, store):
+def test_a_PARTLY_closed_position_is_not_a_GHOST(engine, pair, legs, store,
+                                                 gold_symbols):
     """A PIN, not a fix. The reconciler keys on TICKETS and never on
     volumes, and `reduce_by` does not touch tickets — so a position that
     is half closed must raise no ghost and no orphan. If anyone ever
@@ -195,8 +227,10 @@ def test_a_PARTLY_closed_position_is_not_a_GHOST(engine, pair, legs, store):
     position = sell_one(coordinator, pair)
     assert rest_a_close(coordinator, pair).get('ok')
     coordinator.poll_once()
-    ticket = list(legs['acct_b'].broker.pendings)[0]
-    fill(legs, legs['acct_b'].broker.pendings[ticket]['volume'] / 2.0)
+    half_close(legs['acct_a'].broker)
+    half_close(legs['acct_b'].broker)
+    walk_to_the_level(coordinator, pair, gold_symbols,
+                      watched_level(coordinator, pair))
     coordinator.poll_once()
     assert position.quantity == pytest.approx(0.5)
 
