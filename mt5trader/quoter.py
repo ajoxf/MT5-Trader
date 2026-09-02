@@ -149,6 +149,15 @@ class Quoter:
         #: The last market seen per pair, so an auto-close can be marked
         #: at the touch it was decided on rather than at nothing.
         self._markets = {}
+        #: Called with a position whenever THIS module changes it, so it
+        #: reaches the database. Set by the coordinator, like
+        #: `executor.before_close`.
+        #:
+        #: `work()` returns its events and the coordinator drops them, so
+        #: without this hook nothing the quoter did was ever written: a
+        #: LIMIT entry was recovered as NOTHING after a restart, and a
+        #: close that filled on a resting order came back OPEN.
+        self.on_change = None
 
     # -- the ladder's side of it -------------------------------------------
 
@@ -561,6 +570,7 @@ class Quoter:
             # the remainder re-rests at the trader's own level on this
             # same pass, at the size that is genuinely still on.
             self._settle_orders(group, quantity * answer.get('fraction', 0.0))
+            self._remember(position)
             return {'group': self.key_for_group(group),
                     'action': 'tp_part_filled',
                     'position': position.position_id,
@@ -571,6 +581,10 @@ class Quoter:
             if order.is_working:
                 order.filled_quantity = order.quantity
                 order.state = OrderState.FILLED
+        # Persisted whether or not the other leg went: a close that
+        # FAILED leaves the position open, and that is exactly the state
+        # a restart must come back to rather than guess at.
+        self._remember(position)
         return {'group': self.key_for_group(group), 'action': 'tp_filled',
                 'position': position.position_id, 'ok': answer.get('ok')}
 
@@ -710,7 +724,22 @@ class Quoter:
         # benchmark is the clicked level, not the touch it crossed.
         position.entry_slippage = slippage(group.level, entry_spread,
                                            group.side)
-        return self.book.add_position(position)
+        return self._remember(self.book.add_position(position))
+
+    def _remember(self, position):
+        """Write a position the quoter changed through to the database.
+
+        On the change, not on a timer: the window between an order
+        filling and the state being safe is the window a crash turns
+        into a position nobody can recover.
+        """
+        if self.on_change is not None and position is not None:
+            try:
+                self.on_change(position)
+            except Exception as e:            # never lose the trade
+                logging.critical('could not persist %s: %s',
+                                 position.position_id, e)
+        return position
 
     def _settle_orders(self, group, filled_spreads):
         """Mark the synthetics behind a fill, OLDEST first.
