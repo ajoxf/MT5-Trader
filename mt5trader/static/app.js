@@ -1512,12 +1512,17 @@
       ? DASH : money(row.open_pnl);
     pnl.classList.toggle('up', row.open_pnl > 0);
     pnl.classList.toggle('down', row.open_pnl < 0);
-    // The unit and the derivation, always (a number with no unit is not
-    // checkable).
-    node.querySelector('.clip').textContent =
-      '1 spread = ' + fmt(row.clip_lots_a, 2) + ' A / ' +
-      fmt(row.clip_lots_b, 2) + ' B, ' + money(row.spread_units) +
-      ' per 1.00';
+    // HIDDEN ON REQUEST, not removed. The numbers are correct — Qty is
+    // in SPREADS and 0.01 lots is what one spread IS, from
+    // L_B = L_A x C_A / (beta x C_B) — but reading "Qty 1" and
+    // "0.01 lots" side by side reads as a contradiction on the desk.
+    // The derivation still lives in the element's tooltip. To put it
+    // back, restore this line.
+    node.querySelector('.clip').textContent = '';
+    // node.querySelector('.clip').textContent =
+    //   '1 spread = ' + fmt(row.clip_lots_a, 2) + ' A / ' +
+    //   fmt(row.clip_lots_b, 2) + ' B, ' + money(row.spread_units) +
+    //   ' per 1.00';
     node.querySelector('.errors').textContent = (row.errors || []).join(' ');
     renderLegBook(node, row, market);
     // After the books are in: the floor includes them, and they are the
