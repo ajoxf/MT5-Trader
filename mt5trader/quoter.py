@@ -648,7 +648,7 @@ class Quoter:
         if not self.config.get('CLOSE_FIRST', True):
             return []
         try:
-            closed, _left = book_module.reduce_first(
+            closed, _left, failure = book_module.reduce_first(
                 self.book, self.executor, pair, group.side,
                 position.quantity, self._markets.get(pair.key),
                 exclude=position.position_id,
@@ -660,6 +660,12 @@ class Quoter:
                 'would have closed is still OPEN — close it by hand.',
                 pair.key, e)
             return []
+        if failure is not None:
+            # Nothing to refuse here — the fill has already happened
+            # and the position is already on. Say it loudly instead:
+            # the trader now holds both, and may hold a naked leg.
+            logging.error('[%s] the reduce after a fill did not go '
+                          'through: %s', pair.key, failure)
         if closed:
             logging.info(
                 '[%s] fill reduced %d position(s), oldest first: %s',

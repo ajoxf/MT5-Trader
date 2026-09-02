@@ -1029,7 +1029,21 @@ class Coordinator:
             # than opening and closing after) is deliberate: it never
             # holds both sides at once, so it cannot be caught halfway
             # by a disconnect with double the exposure on.
-            closed, quantity = self._reduce_first(pair, side, quantity, md)
+            closed, quantity, failure = self._reduce_first(
+                pair, side, quantity, md)
+            if failure is not None:
+                # DO NOT OPEN ON TOP OF A CLOSE THAT FAILED. The trader
+                # clicked to cover; the cover did not happen. Opening
+                # anyway leaves them with the position they wanted gone
+                # AND a new one — and if the close half-executed, a
+                # naked leg under both. Refuse, in the broker's own
+                # words, and let them decide.
+                if self.store is not None:
+                    self.store.event('refused', pair_key, reason=failure,
+                                     side=getattr(side, 'value', side),
+                                     level=level)
+                return {'ok': False, 'refused': True, 'closed': closed,
+                        'reason': failure}
             if closed and quantity <= 1e-9:
                 return {'ok': True, 'closed': closed, 'reduced': True,
                         'reason': f'closed {len(closed)} position(s) '
@@ -1067,7 +1081,7 @@ class Coordinator:
         and neither does this.
         """
         if not self.config.get('CLOSE_FIRST', True):
-            return [], quantity
+            return [], quantity, None
         return book_module.reduce_first(
             self.book, self.executor, pair, side, quantity, md,
             exclude=exclude, on_closed=self.remember)

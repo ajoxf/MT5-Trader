@@ -46,7 +46,11 @@ class Executor:
 
     def close_position(self, pair, position, md=None, reason=None):
         if position.position_id in self.refuse:
-            return {'ok': False, 'reason': 'broker said no'}
+            # Shaped like the real `_settle_close`: an 'ok' and the
+            # per-leg answers, which is where the broker's words are.
+            return {'ok': False, 'legs': {
+                'a': {'ok': False, 'error': '10027 AutoTrading disabled'},
+                'b': {'ok': False, 'error': '10027 AutoTrading disabled'}}}
         self.closed.append(position.position_id)
         position.is_open = False
         return {'ok': True}
@@ -118,7 +122,7 @@ def test_a_position_can_be_excluded_from_its_own_reduction():
 def test_a_click_that_exactly_covers_leaves_nothing_to_open():
     book = book_with(Position('old', SELL, 1.0, 100))
     ex = Executor()
-    closed, left = reduce_first(book, ex, Pair(), BUY, 1.0, None)
+    closed, left, failure = reduce_first(book, ex, Pair(), BUY, 1.0, None)
     assert closed == ['old']
     assert left == pytest.approx(0.0)
     assert ex.closed == ['old']
@@ -127,7 +131,7 @@ def test_a_click_that_exactly_covers_leaves_nothing_to_open():
 def test_a_bigger_click_closes_what_it_covers_and_opens_the_rest():
     book = book_with(Position('old', SELL, 1.0, 100))
     ex = Executor()
-    closed, left = reduce_first(book, ex, Pair(), BUY, 3.0, None)
+    closed, left, failure = reduce_first(book, ex, Pair(), BUY, 3.0, None)
     assert closed == ['old']
     assert left == pytest.approx(2.0), 'the remainder must still open'
 
@@ -139,17 +143,20 @@ def test_a_refused_close_STOPS_the_queue():
     book = book_with(Position('a', SELL, 1.0, 100),
                      Position('b', SELL, 1.0, 200))
     ex = Executor(refuse=['a'])
-    closed, left = reduce_first(book, ex, Pair(), BUY, 2.0, None)
+    closed, left, failure = reduce_first(book, ex, Pair(), BUY, 2.0, None)
     assert closed == []
     assert ex.closed == []
     assert left == pytest.approx(2.0)
+    # And the caller can TELL a refusal from "nothing to close".
+    assert failure is not None
+    assert '10027' in failure, failure
 
 
 def test_nothing_open_means_nothing_closed_and_the_click_opens_whole():
     """The CONTROL. Without it every test above passes on a reduce that
     fires unconditionally."""
     ex = Executor()
-    closed, left = reduce_first(book_with(), ex, Pair(), BUY, 2.0, None)
+    closed, left, failure = reduce_first(book_with(), ex, Pair(), BUY, 2.0, None)
     assert closed == []
     assert left == pytest.approx(2.0)
     assert ex.closed == []
@@ -349,3 +356,69 @@ def test_the_coordinator_wires_that_hook_up():
 
     source = inspect.getsource(Coordinator.__init__)
     assert 'on_position_closed' in source and 'self.remember' in source
+
+
+# -- a failed close must not become a new position --------------------
+#
+# `reduce_first` used to return ([], quantity) both when there was
+# nothing to close AND when the broker refused the close. A caller
+# could not tell them apart, so the MARKET path opened a new position
+# on top of one that had just failed to close — the trader keeps the
+# position they wanted gone AND gets another, and if the close
+# half-executed there is a NAKED LEG under both.
+
+def test_nothing_to_close_is_not_reported_as_a_failure():
+    """The control. If every empty result were a failure, the MARKET
+    path would refuse every ordinary opening click."""
+    ex = Executor()
+    closed, left, failure = reduce_first(book_with(), ex, Pair(), BUY, 1.0,
+                                         None)
+    assert closed == [] and failure is None
+    assert left == pytest.approx(1.0)
+
+
+def test_a_refused_close_carries_the_BROKERS_OWN_WORDS():
+    book = book_with(Position('a', SELL, 1.0, 100))
+    ex = Executor(refuse=['a'])
+    _closed, _left, failure = reduce_first(book, ex, Pair(), BUY, 1.0, None)
+    assert failure and '10027' in failure
+    assert 'a' in failure, 'the failure does not name the position'
+
+
+def test_a_HALF_closed_position_says_NAKED_LEG_first():
+    """One leg closed and the other not is the worst outcome of a
+    close, and the sentence the trader has to see first."""
+    class HalfClosed:
+        closed = []
+
+        def close_position(self, pair, position, md=None, reason=None):
+            return {'ok': False, 'legs': {
+                'a': {'ok': True},
+                'b': {'ok': False, 'error': '10018 market closed'}}}
+
+    book = book_with(Position('a', SELL, 1.0, 100))
+    _c, _l, failure = reduce_first(book, HalfClosed(), Pair(), BUY, 1.0, None)
+    assert failure.startswith('NAKED LEG'), failure
+    assert '10018' in failure
+
+
+def test_the_market_click_REFUSES_to_open_after_a_failed_close():
+    import inspect
+    from mt5trader.coordinator import Coordinator
+
+    source = inspect.getsource(Coordinator._click)
+    assert 'failure' in source
+    # The refusal must come BEFORE market_entry, or it is not a refusal.
+    assert source.index('if failure is not None') < source.index('market_entry')
+    assert "'refused': True" in source
+
+
+def test_the_fill_path_does_not_refuse_because_it_cannot():
+    """By the time a resting order fills, the position is already on.
+    There is nothing left to refuse — so it must say so loudly instead
+    of silently swallowing the failure."""
+    import inspect
+    from mt5trader.quoter import Quoter
+
+    source = inspect.getsource(Quoter._reduce_after_fill)
+    assert 'failure' in source and 'logging.error' in source
