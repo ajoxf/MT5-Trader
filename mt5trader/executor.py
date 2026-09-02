@@ -408,9 +408,30 @@ class PairExecutor:
 
         return self._settle_close(pair, position, results, md, reason)
 
+    def leg_open_volume(self, pair, leg, fill):
+        """How much of one leg's tickets is STILL OPEN at the broker.
+
+        None means the leg could not be READ, which is NOT zero (spec
+        §7). A caller that reads "unknown" as "flat" acts on a position
+        that is still on — and the money is at the broker either way.
+        """
+        runner = self._leg(pair, leg)
+        if runner is None:
+            return None
+        live = runner.positions(self._symbol(pair, leg))
+        if live is None:
+            return None
+        by_ticket = {str(p['ticket']): p for p in live}
+        total = 0.0
+        for ticket in ((fill.position_tickets if fill else []) or []):
+            found = by_ticket.get(str(ticket))
+            if found is not None:
+                total += float(found.get('volume') or 0.0)
+        return total
+
     def close_other_leg(self, pair, position, quote_leg, quote_result,
-                        md=None, reason='auto take-profit'):
-        """An AutoRouting take-profit filled: close the OTHER leg now.
+                        md=None, reason='auto take-profit', fraction=1.0):
+        """A closing order filled: close the OTHER leg now.
 
         The quoting leg is already flat — its pending carried
         `position=<ticket>`, so executing it closed that leg rather
@@ -418,6 +439,14 @@ class PairExecutor:
         touched, and it is closed BY TICKET, at market, immediately:
         between the two, this is a naked outright position in gold or
         oil, not a basis trade.
+
+        `fraction` is how much of the position the quoting leg actually
+        closed. A pending fills PARTIALLY like any other, and closing
+        the other leg IN FULL against half a close — which is what a
+        `volume=None` close does — takes the whole hedge off and leaves
+        the quoting leg naked, with the book reporting the position
+        flat. The other leg comes down by the SAME fraction, or the
+        spread stops being a spread.
         """
         other = 'a' if quote_leg == 'b' else 'b'
         leg_a_side, leg_b_side = position.side.leg_sides()
@@ -431,19 +460,69 @@ class PairExecutor:
         else:
             results = {other: self.close_tickets(
                 runner, symbol, (fill.position_tickets if fill else []),
-                entry_side, comment='TP')}
+                entry_side, volume=self._other_leg_volume(pair, other, fill,
+                                                          fraction),
+                comment='TP')}
         results[quote_leg] = quote_result
-        return self._settle_close(pair, position, results, md, reason)
+        # BOOK WHAT THE OTHER LEG ACHIEVED, never what was asked of it.
+        return self._settle_close(
+            pair, position, results, md, reason,
+            fraction=self._achieved_fraction(fill, results.get(other),
+                                             fraction))
+
+    def _achieved_fraction(self, fill, result, wanted):
+        """How much of the position the OTHER leg actually came down by.
+
+        That leg is the constraint. Its volume step can be ten times the
+        quoting leg's — a spot 0.01 against a future's 0.10 — so the
+        matching half of a partial close can round to NOTHING there.
+        Reducing our own books by what was ASKED would then take lots
+        off the record that are still sitting at the broker, which is
+        the failure this whole path exists to prevent.
+        """
+        if wanted is None or wanted >= 1.0 - 1e-9:
+            return 1.0
+        booked = float((fill.volume if fill else 0.0) or 0.0)
+        if booked <= 0:
+            return wanted
+        closed = sum(float(done.get('volume') or 0.0)
+                     for done in (result or {}).get('closed') or ())
+        return max(0.0, min(1.0, closed / booked))
+
+    def _other_leg_volume(self, pair, other, fill, fraction):
+        """Lots of the untouched leg that match a PARTIAL close.
+
+        None for a whole close — `close_tickets` then takes each
+        ticket's size from the BROKER's book, which is the right answer
+        when everything goes.
+        """
+        if fraction is None or fraction >= 1.0 - 1e-9 or fill is None:
+            return None
+        meta = (pair.meta_a if other == 'a' else pair.meta_b) or {}
+        # DOWN, like every other hedge size: overshooting here closes
+        # more of the remaining leg than was actually closed on the
+        # quoting one, which is the naked leg the other way round.
+        return sizing.round_step(fraction * float(fill.volume or 0.0),
+                                 meta.get('volume_step'),
+                                 meta.get('volume_min'), down=True)
 
     def _settle_close(self, pair, position, results, md=None,
-                      reason='manual'):
+                      reason='manual', fraction=1.0):
         """Book a close that has already been sent, however it was sent.
 
         One place, so a manual close, a flatten, the overnight rule and
         an AutoRouting take-profit all mark the position the same way —
         and all leave it ACTIVE when the close did not go through.
+
+        `fraction` under 1.0 is a PART of the position closing. It stays
+        OPEN for the rest: marking it closed would take the leg still at
+        the broker off our own books.
         """
         ok = all(r.get('ok') for r in results.values())
+        partial = ok and fraction is not None and fraction < 1.0 - 1e-9
+        if partial:
+            return self._settle_partial_close(pair, position, results, md,
+                                              reason, fraction)
         if ok:
             position.closed_at = self.clock()
             position.close_reason = reason
@@ -469,7 +548,14 @@ class PairExecutor:
                 position.leg_a.volume if position.leg_a else 0.0,
                 position.leg_b.volume if position.leg_b else 0.0,
                 self.config.settings)
-            position.realized_pnl = (None if gross is None else gross - fees)
+            earned = None if gross is None else gross - fees
+            # ACCUMULATED. A position closed in pieces earned its P&L in
+            # pieces, and the earlier pieces are already booked — this
+            # is the last of them, not the whole trade.
+            position.realized_pnl = (
+                earned if position.realized_pnl is None
+                else (position.realized_pnl if earned is None
+                      else position.realized_pnl + earned))
         else:
             # A close that did not go through leaves the position OPEN
             # and ACTIVE. Marking it ERROR/CLOSING would remove it from
@@ -479,6 +565,47 @@ class PairExecutor:
             logging.error("%s: close failed, position stays ACTIVE: %s",
                           pair.key, results)
         return {'ok': ok, 'legs': results,
+                'position': position.to_dict()}
+
+    def _settle_partial_close(self, pair, position, results, md, reason,
+                              fraction):
+        """Book PART of a position closing. It stays OPEN for the rest.
+
+        The exit price and slippage are deliberately NOT set here: they
+        describe the exit of a position, and this one has not exited.
+        Recording the first piece's price as "the" exit would make the
+        number wrong for the trade the moment the rest goes.
+        """
+        filled_spread = closed_spread(results, pair.hedge_ratio)
+        gross = position.mark(filled_spread)
+        # Fees on the volume that actually came off, which is what
+        # `reduce_by` is about to take out of the leg volumes.
+        fees = costs.mark_fees(
+            (position.leg_a.volume if position.leg_a else 0.0) * fraction,
+            (position.leg_b.volume if position.leg_b else 0.0) * fraction,
+            self.config.settings)
+        realized = (None if gross is None else gross * fraction - fees)
+        if fraction <= 1e-9:
+            # The quoting leg came down and the other leg could not
+            # follow it — its step is bigger than the piece that closed.
+            # NOTHING is booked: the record keeps both legs whole, which
+            # errs towards believing more is on than there is, and the
+            # reconciler is told the truth loudly.
+            logging.critical(
+                '%s: position %s closed on the quoting leg only — the other '
+                'leg could not match a piece that small (step). The legs are '
+                'IMBALANCED at the broker; check it by hand.',
+                pair.key, position.position_id)
+            return {'ok': True, 'partial': True, 'fraction': 0.0,
+                    'imbalanced': True, 'remaining': position.quantity,
+                    'legs': results, 'position': position.to_dict()}
+        left = position.reduce_by(fraction, realized=realized)
+        logging.warning(
+            '%s: position %s closed %.1f%% (%s) and is STILL ON for %s '
+            'spreads — both legs reduced together, so it is not naked.',
+            pair.key, position.position_id, fraction * 100.0, reason, left)
+        return {'ok': True, 'partial': True, 'fraction': fraction,
+                'remaining': left, 'legs': results,
                 'position': position.to_dict()}
 
     # -- bookkeeping ------------------------------------------------------

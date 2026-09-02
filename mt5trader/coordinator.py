@@ -29,7 +29,7 @@ from .database import Store
 from .executor import PairExecutor, mark_position
 from .models import (MAGIC_NUMBER, LegFill, OrderType, SpreadPosition,
                      SpreadSide)
-from .quoter import Quoter
+from .quoter import Quoter, quoting_leg
 from .reconcile import Reconciler
 from .session import SessionClock, day_orders, overnight_action
 from .spread import (LevelSigma, QuoteAgeTracker, SpreadJumpTracker,
@@ -1017,11 +1017,15 @@ class Coordinator:
             # "rest it here" or "do nothing". TT rests it, and so does
             # this; the toast says which it did, because a market click
             # that quietly became a working order is a surprise.
-            armed, quantity = self._rest_reducing_orders(
+            armed, quantity, closed, failure = self._rest_reducing_orders(
                 pair, side, level, quantity)
+            if failure is not None:
+                return self._refuse(pair_key, side, level, failure, closed)
+            if closed and quantity <= 1e-9:
+                return self._closed_at_market(closed, armed)
             if armed and quantity <= 1e-9:
                 return {'ok': True, 'order': armed[0].to_dict(),
-                        'rested': True, 'reducing': True,
+                        'rested': True, 'reducing': True, 'closed': closed,
                         'reason': f'{level:g} is away from the market — '
                                   f'resting there to CLOSE '
                                   f'{len(armed)} position(s)'}
@@ -1072,16 +1076,47 @@ class Coordinator:
             # NOT: a resting order simply waits for a quote it can rest
             # on (spec §8), which is what the quoter does.
             return {'ok': False, 'refused': True, 'reason': refusal}
-        armed, quantity = self._rest_reducing_orders(pair, side, level,
-                                                     quantity)
+        armed, quantity, closed, failure = self._rest_reducing_orders(
+            pair, side, level, quantity)
+        if failure is not None:
+            return self._refuse(pair_key, side, level, failure, closed)
+        if closed and quantity <= 1e-9:
+            return self._closed_at_market(closed, armed)
         if armed and quantity <= 1e-9:
             return {'ok': True, 'order': armed[0].to_dict(),
-                    'reducing': True,
+                    'reducing': True, 'closed': closed,
                     'reason': f'resting at {level:g} to CLOSE '
                               f'{len(armed)} position(s)'}
         order = self.book.add_order(pair, side, level, quantity)
         self.quoter.group_for(pair, order)
-        return {'ok': True, 'order': order.to_dict()}
+        return {'ok': True, 'order': order.to_dict(), 'closed': closed}
+
+    def _refuse(self, pair_key, side, level, reason, closed=()):
+        if self.store is not None:
+            self.store.event('refused', pair_key, reason=reason,
+                             side=getattr(side, 'value', side), level=level)
+        return {'ok': False, 'refused': True, 'closed': list(closed),
+                'reason': reason}
+
+    def _closed_at_market(self, closed, armed):
+        """A click that RESTED nothing because there was nothing to rest
+        against — said out loud.
+
+        A resting click that quietly went to market is exactly the
+        surprise the other direction already guards against, and the
+        trader has to be told which of the two happened.
+        """
+        reason = (f'closed {len(closed)} NAKED position(s) at market — the '
+                  f'other leg was already gone, so there was nothing left '
+                  f'to rest against')
+        if armed:
+            # Both happened: say so, or the toast reports half the click.
+            reason += f', and rested a close for {len(armed)} more'
+        answer = {'ok': True, 'closed': closed, 'reduced': True,
+                  'at_market': True, 'reason': reason}
+        if armed:
+            answer['order'] = armed[0].to_dict()
+        return answer
 
     def _reduce_first(self, pair, side, quantity, md, exclude=None):
         """Close what this click covers, and say what is left to open.
@@ -1117,16 +1152,42 @@ class Coordinator:
         a second one. The fill then lands in `_on_closing_fill`, which
         closes the other leg by ticket too. The result is FLAT.
 
-        Returns (orders armed, quantity still to open).
+        Returns (orders armed, quantity still to open, positions closed at
+        market, failure).
         """
         if not self.config.get('CLOSE_FIRST', True):
-            return [], quantity
+            return [], quantity, [], None
         try:
             left = float(quantity)
         except (TypeError, ValueError):
-            return [], quantity
+            return [], quantity, [], None
         armed = []
+        closed = []
         for position in self.book.positions_to_reduce(pair.key, side, left):
+            # THE LEG THIS WOULD REST ON MAY ALREADY BE FLAT.
+            #
+            # A closing pending carries `position=<ticket>`. Once the
+            # broker no longer has that ticket the pending cannot close
+            # anything — it rests, it is refused when it executes, and
+            # the next click rests another one beside it. The desk saw
+            # exactly that: orders piling up on the quoting account
+            # while the account still holding the leg got nothing, and
+            # clicking again never got them out.
+            #
+            # What is left is not a spread any more, it is one naked
+            # leg, and a naked leg cannot wait at a price. It is closed
+            # BY TICKET, at market, now — and a close is never withheld.
+            if self._quoting_leg_is_gone(pair, position):
+                answer = self.executor.close_position(
+                    pair, position, self.market.get(pair.key),
+                    reason='the other leg was already gone')
+                if not answer.get('ok'):
+                    return (armed, max(left, 0.0), closed,
+                            book_module._close_failure(answer, position))
+                self.remember(position)
+                closed.append(position.position_id)
+                left -= float(position.quantity or 0.0)
+                continue
             # A target may already be armed here by AutoRouting, at ITS
             # level. The trader has just named a different one, and a
             # click that silently rested at somebody else's price is a
@@ -1140,8 +1201,13 @@ class Coordinator:
             # up their position in the line for no change at all. This
             # is the ordinary case where AutoRouting's target and the
             # click agree, and it must be a no-op.
-            if any(abs(o.level - level) < 1e-9 for o in existing):
-                armed.append(existing[0])
+            at_this_level = [o for o in existing
+                             if abs(o.level - level) < 1e-9]
+            if at_this_level:
+                # The one AT THIS LEVEL, not merely the first of them:
+                # `existing[0]` reported an order resting somewhere else
+                # as the one the click had just placed.
+                armed.append(at_this_level[0])
                 left -= float(position.quantity or 0.0)
                 continue
             if existing:
@@ -1159,7 +1225,24 @@ class Coordinator:
                 break
             armed.append(order)
             left -= float(position.quantity or 0.0)
-        return armed, max(left, 0.0)
+        return armed, max(left, 0.0), closed, None
+
+    def _quoting_leg_is_gone(self, pair, position):
+        """Is the leg a closing order would REST on already flat?
+
+        False when it is still there, and false when the leg could not
+        be READ: None is "unknown", never "flat" (spec §7). Acting on an
+        unreadable leg would market-close a position on no evidence,
+        which is the opposite mistake and a worse one.
+        """
+        leg = quoting_leg(pair)
+        fill = position.leg_a if leg == 'a' else position.leg_b
+        if fill is None or not fill.position_tickets:
+            return False
+        volume = self.executor.leg_open_volume(pair, leg, fill)
+        if volume is None:
+            return False
+        return volume <= 1e-9
 
     def _away_from_the_market(self, pair, side, md, level):
         """Is this click at a price the market cannot fill right now?

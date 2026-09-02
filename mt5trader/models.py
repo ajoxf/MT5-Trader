@@ -243,6 +243,43 @@ class SpreadPosition:
     def is_open(self):
         return self.closed_at is None
 
+    def reduce_by(self, closed_fraction, realized=None):
+        """Book PART of this position closing, and stay open for the rest.
+
+        A closing order fills partially like any other, and both
+        half-measures are wrong. Marking the whole position closed
+        loses the leg still on at the broker — the book reads flat
+        while the money is there, which is the one failure this system
+        must never have. Leaving it at full size claims an exposure
+        that is no longer on, and every close sized from it then asks
+        the broker for more than it has.
+
+        The leg volumes come down with the quantity because the
+        reconciler and the P&L both read them. The TICKETS do not
+        change: MT5 keeps the same ticket at a reduced volume, and a
+        later close still has to name it.
+
+        Returns the quantity still open.
+        """
+        try:
+            fraction = float(closed_fraction)
+        except (TypeError, ValueError):
+            return self.quantity
+        fraction = max(0.0, min(1.0, fraction))
+        if fraction <= 0.0:
+            return self.quantity
+        left = 1.0 - fraction
+        self.quantity *= left
+        for fill in (self.leg_a, self.leg_b):
+            if fill is not None:
+                fill.volume *= left
+        if realized is not None:
+            # ACCUMULATED, not replaced: a position closed in three
+            # pieces earned its P&L in three pieces.
+            self.realized_pnl = (realized if self.realized_pnl is None
+                                 else self.realized_pnl + realized)
+        return self.quantity
+
     def mark(self, closing_spread):
         """Open P&L in dollars at the spread it would close at.
 
