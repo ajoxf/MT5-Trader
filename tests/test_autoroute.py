@@ -76,10 +76,16 @@ def test_a_fill_arms_a_closing_order_at_the_take_profit(engine, pair, legs):
     assert order.position_id == position.position_id
 
 
-def test_the_closing_pending_carries_the_POSITION_it_closes(engine, pair,
-                                                             legs):
-    """On a hedging account a plain opposite pending opens a SECOND
-    position. `position=<ticket>` is what makes it a close."""
+def test_a_take_profit_rests_NOTHING_at_the_broker(engine, pair, legs):
+    """A closing order CANNOT be a broker pending. MT5 honours
+    `position` on TRADE_ACTION_DEAL and ignores it on
+    TRADE_ACTION_PENDING, so a "closing" limit rests as an ordinary one
+    and OPENS a second position on a hedging account — live 2026-09-02,
+    ticket 2092 filled as a BUY beside the SELL it was meant to close.
+
+    Attaching a broker take-profit to the leg instead is not the answer
+    either: one leg closing alone converts the hedge into a naked
+    outright. So the level is held HERE."""
     coordinator = engine
     pair.auto_route = True
     # The desk's master switch, which every ladder's own box sits under.
@@ -89,9 +95,14 @@ def test_the_closing_pending_carries_the_POSITION_it_closes(engine, pair,
     position = market_entry(coordinator, pair)
     coordinator.poll_once()
 
-    rested = [p for p in legs['acct_b'].broker.pendings.values()]
-    assert len(rested) == 1
-    assert rested[0]['position_ticket'] == position.leg_b.position_tickets[0]
+    assert not legs['acct_a'].broker.pendings
+    assert not legs['acct_b'].broker.pendings, (
+        'a closing pending is at the broker, and it OPENS')
+    watching = [g for g in coordinator.quoter.snapshot(pair.key)
+                if g['intent'] == 'CLOSE']
+    assert len(watching) == 1
+    assert watching[0]['position_id'] == position.position_id
+    assert watching[0]['ticket'] is None
 
 
 def test_a_take_profit_is_NEVER_merged_into_an_entry_at_the_same_level(
@@ -164,7 +175,8 @@ def test_with_CLOSE_FIRST_that_same_click_REDUCES_and_keeps_its_queue_place(
 
 
 def test_the_take_profit_filling_closes_the_position_both_legs(engine, pair,
-                                                               legs):
+                                                               legs,
+                                                               gold_symbols):
     """The quoting leg is closed by the pending itself; the other leg is
     closed BY TICKET, at market, immediately — between the two it is an
     outright position in gold, not a basis trade."""
@@ -176,10 +188,10 @@ def test_the_take_profit_filling_closes_the_position_both_legs(engine, pair,
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
     coordinator.poll_once()
-    ticket = [g for g in coordinator.quoter.snapshot(pair.key)
-              if g['intent'] == 'CLOSE'][0]['ticket']
+    level = [g for g in coordinator.quoter.snapshot(pair.key)
+             if g['intent'] == 'CLOSE'][0]['level']
 
-    legs['acct_b'].broker.fill_pending(ticket)
+    reach_level(coordinator, pair, gold_symbols, level, SpreadSide.SELL)
     coordinator.poll_once()
 
     assert position.is_open is False
@@ -195,9 +207,8 @@ def test_the_take_profit_filling_closes_the_position_both_legs(engine, pair,
 
 def test_closing_the_position_by_hand_PULLS_the_take_profit_first(engine,
                                                                    pair, legs):
-    """An auto-TP left resting after its position is gone is the
-    orphan-pending incident with a GUARANTEED fill: it executes, and
-    with nothing to close it opens a naked position instead."""
+    """A target left armed after its position is gone would fire at the
+    next tick that reaches it and close something that is not there."""
     coordinator = engine
     pair.auto_route = True
     # The desk's master switch, which every ladder's own box sits under.
@@ -206,16 +217,31 @@ def test_closing_the_position_by_hand_PULLS_the_take_profit_first(engine,
     legs['acct_b'].broker.margin_per_lot = 2000.0
     position = market_entry(coordinator, pair)
     coordinator.poll_once()
-    assert legs['acct_b'].broker.pendings
+    assert coordinator.book.orders_for_position(position.position_id)
 
     coordinator.executor.close_position(
         pair, position, coordinator.market[pair.key], reason='by hand')
 
-    # Pulled at the broker, and marked in the book.
-    assert not legs['acct_b'].broker.pendings
+    # The watch is gone, and the order says so.
+    assert not [g for g in coordinator.quoter.snapshot(pair.key)
+                if g['intent'] == 'CLOSE']
     order = coordinator.book.orders_for_position(position.position_id,
                                                  working_only=False)[0]
     assert order.state is OrderState.CANCELLED
+
+
+def reach_level(coordinator, pair, gold_symbols, level, side):
+    """Walk leg B until the spread reaches `level` on `side`.
+
+    The spread is B - beta*A, so moving leg B moves it one-for-one.
+    """
+    _spot, future = gold_symbols
+    md = coordinator.market[pair.key]
+    have = md['short_spread'] if side is SpreadSide.SELL else md['long_spread']
+    move = (level - have) + (0.01 if side is SpreadSide.SELL else -0.01)
+    future.bid += move
+    future.ask += move
+    coordinator.poll_once()
 
 
 def test_a_position_that_vanished_takes_its_take_profit_with_it(engine, pair,
@@ -240,10 +266,11 @@ def test_a_position_that_vanished_takes_its_take_profit_with_it(engine, pair,
     assert coordinator.book.orders_for_position(position.position_id) == []
 
 
-def test_a_partially_filled_entry_gets_a_partially_sized_target(engine, pair,
+def test_a_target_closes_the_POSITION_however_much_of_it_filled(engine, pair,
                                                                 legs):
-    """Sized to what ACTUALLY filled. Anything else either leaves a
-    remainder on or asks the broker to close more than is there."""
+    """A close targets TICKETS and takes their size from the broker, so
+    a partially filled entry needs no separately sized target — the one
+    thing the old sized pending got right, now free."""
     coordinator = engine
     pair.auto_route = True
     # The desk's master switch, which every ladder's own box sits under.
@@ -253,8 +280,9 @@ def test_a_partially_filled_entry_gets_a_partially_sized_target(engine, pair,
     position = market_entry(coordinator, pair)
     coordinator.poll_once()
 
-    rested = list(legs['acct_b'].broker.pendings.values())[0]
-    assert rested['volume'] == pytest.approx(position.leg_b.volume)
+    armed = coordinator.book.orders_for_position(position.position_id)
+    assert len(armed) == 1
+    assert armed[0].quantity == pytest.approx(position.quantity)
 
 
 def test_a_restart_re_arms_from_the_frozen_levels_and_SAYS_SO(engine, pair,

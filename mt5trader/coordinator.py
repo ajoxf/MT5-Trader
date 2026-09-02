@@ -63,7 +63,7 @@ class Coordinator:
         self.executor = PairExecutor(config, legs, clock=clock, sleep=sleep)
         self.quoter = Quoter(config, legs, self.executor, self.book)
         # Whoever closes a position — the trader, the overnight rule,
-        # a flatten, the kill — pulls its resting take-profit first.
+        # a flatten, the kill — disarms its resting close first.
         self.executor.before_close = self.quoter.disarm
         # ...and whatever the quoter books itself reaches the database.
         # `quoter.work` returns its events and this module drops them, so
@@ -1152,10 +1152,11 @@ class Coordinator:
         A resting order that reduces must be a CLOSING order from the
         moment it is placed, not an opening one with a close bolted on
         after. `quoter.arm` already builds exactly that — it is what
-        AutoRouting rests — and it carries `position=<ticket>`, so
-        executing it CLOSES the ticket at the broker instead of opening
-        a second one. The fill then lands in `_on_closing_fill`, which
-        closes the other leg by ticket too. The result is FLAT.
+        AutoRouting rests. It puts NOTHING at the broker: MT5 ignores
+        `position` on a pending order, so a "closing" limit is an
+        ordinary one and opens a second position on a hedging account.
+        The level is held by the quoter, and when the market reaches it
+        BOTH legs are closed by ticket. The result is FLAT.
 
         Returns (orders armed, quantity still to open, positions closed at
         market, failure).
@@ -1171,13 +1172,10 @@ class Coordinator:
         for position in self.book.positions_to_reduce(pair.key, side, left):
             # THE LEG THIS WOULD REST ON MAY ALREADY BE FLAT.
             #
-            # A closing pending carries `position=<ticket>`. Once the
-            # broker no longer has that ticket the pending cannot close
-            # anything — it rests, it is refused when it executes, and
-            # the next click rests another one beside it. The desk saw
-            # exactly that: orders piling up on the quoting account
-            # while the account still holding the leg got nothing, and
-            # clicking again never got them out.
+            # A resting close fires by TICKET. Once the broker no
+            # longer has that ticket there is nothing for the level to
+            # close, and arming one would leave the trader watching a
+            # price that can never get them out.
             #
             # What is left is not a spread any more, it is one naked
             # leg, and a naked leg cannot wait at a price. It is closed
@@ -1188,7 +1186,7 @@ class Coordinator:
                     reason='the other leg was already gone')
                 if not answer.get('ok'):
                     return (armed, max(left, 0.0), closed,
-                            book_module._close_failure(answer, position))
+                            book_module.close_failure(answer, position))
                 self.remember(position)
                 closed.append(position.position_id)
                 left -= float(position.quantity or 0.0)

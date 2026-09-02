@@ -132,11 +132,9 @@ class LocalLeg:
             'error': result.error,
         }
 
-    def place_limit(self, symbol, side, volume, price, comment="",
-                    position_ticket=None):
+    def place_limit(self, symbol, side, volume, price, comment=""):
         return self.broker.place_pending_limit(
-            symbol, OrderSide(side), volume, price, comment=comment,
-            position_ticket=position_ticket)
+            symbol, OrderSide(side), volume, price, comment=comment)
 
     def pending_orders(self, symbol=None):
         return self.broker.pending_orders_by_magic(symbol)
@@ -325,12 +323,10 @@ class RemoteLeg:
                     'error': 'IPC failure during order'}
         return reply
 
-    def place_limit(self, symbol, side, volume, price, comment="",
-                    position_ticket=None):
+    def place_limit(self, symbol, side, volume, price, comment=""):
         reply = self._request({
             'cmd': 'place_limit', 'symbol': symbol, 'side': side,
             'volume': volume, 'price': price, 'comment': comment,
-            'position_ticket': position_ticket,
         })
         return reply or {'ok': False, 'ticket': None, 'error': 'IPC failure'}
 

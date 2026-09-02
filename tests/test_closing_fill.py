@@ -1,30 +1,37 @@
-"""What happens when a CLOSING order fills — and when it half fills.
+"""A resting CLOSE is synthetic, and what happens when it fires.
 
-A reducing click rests a CLOSING order: its pending carries
-`position=<ticket>`, so executing it closes that ticket rather than
-opening a second one on a hedging account. Everything here is about the
-two ways that goes wrong once the broker only does PART of it.
+WHY IT IS SYNTHETIC, in one paragraph, because this is the thing that
+cost real money:
 
-Reported from the desk, live: clicking the blue ladder to close punched
-orders onto one account, left the other with none, and the legs went out
-of step. Both causes are pinned below.
+A closing order cannot be a broker pending. MT5 honours `position` on
+TRADE_ACTION_DEAL and IGNORES it on TRADE_ACTION_PENDING, so a "closing"
+limit rests as an ordinary limit — and on a hedging account an ordinary
+opposite limit OPENS a second position. Live 2026-09-02, ticket 2092 was
+rested to close ticket 2090 and filled as a BUY 0.01 sitting beside the
+SELL 0.01 it was meant to close. The engine believed that leg was flat,
+closed the other leg on the strength of it, and the reconciler swept
+both futures as orphans a minute later:
 
-- A closing pending fills PARTIALLY like any other. Closing the other
-  leg in FULL against half a close takes the whole hedge off and leaves
-  the quoting leg naked, with the book reporting the position flat.
-- Once the quoting leg's ticket is gone, a closing pending against it
-  cannot close anything. It rests, it is refused when it executes, and
-  the next click rests another one beside it — which is the pile-up the
-  desk saw.
+    15:34:55 CRITICAL reconcile: closed ORPHAN GCZ6.s ticket 2090 — SELL
+    15:34:55 CRITICAL reconcile: closed ORPHAN GCZ6.s ticket 2092 — BUY
 
-Every guard here has a CONTROL that turns the condition off and asserts
-the opposite, so none of them can pass by doing nothing.
+Attaching a broker take-profit to the leg instead is not the answer
+either: one leg closing alone converts the hedge into a naked outright.
+
+So the level is held HERE, and when the market reaches it the position
+is closed BY TICKET on both legs at once. What that costs, stated
+plainly and tested below: it only fires while this is running, and it
+crosses at the touch rather than earning the level.
+
+Every guard has a CONTROL that turns the condition off and asserts the
+opposite, so none of them can pass by doing nothing.
 """
 
 import pytest
 
 from mt5trader.coordinator import Coordinator
 from mt5trader.models import OrderState, SpreadSide
+from mt5trader.quoter import closing_trigger_reached
 
 
 @pytest.fixture
@@ -52,8 +59,16 @@ def click_to_close(coordinator, pair, offset=0.50):
                              md['long_spread'] - offset)
 
 
-def resting(legs, account='acct_b'):
-    return list(legs[account].broker.pendings.values())
+def walk_to_the_level(coordinator, pair, gold_symbols, level, through=0.01):
+    """Move leg B until the spread a BUY close reads has reached `level`.
+
+    The spread is `B - beta x A`, so leg B moves it one for one.
+    """
+    _spot, future = gold_symbols
+    have = coordinator.market[pair.key]['long_spread']
+    move = (level - have) - through
+    future.bid += move
+    future.ask += move
 
 
 def volumes(legs):
@@ -62,213 +77,283 @@ def volumes(legs):
             sum(p['volume'] for p in legs['acct_b'].broker.open_positions()))
 
 
-# -- a closing order that half fills -------------------------------------
+def watches(coordinator, pair):
+    return [g for g in coordinator.quoter.snapshot(pair.key)
+            if g['intent'] == 'CLOSE']
 
-def test_a_HALF_filled_close_takes_BOTH_legs_down_together(engine, pair, legs):
-    """THE BUG THE DESK FOUND, half of it.
 
-    The quoting leg's pending closed 0.05 of 0.10. The other leg was
-    closed IN FULL — the whole hedge off against half a close — so the
-    account still holding 0.05 was left naked while the book said the
-    position was flat.
-    """
+# -- the fault itself -----------------------------------------------------
+
+def test_a_resting_close_puts_NOTHING_at_the_broker(engine, pair, legs):
+    """THE LIVE FAULT. The pending that was supposed to close ticket 2090
+    opened ticket 2092 beside it. There must be no such pending."""
+    coordinator = engine
+    position = sell_one(coordinator, pair)
+
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+
+    assert not legs['acct_a'].broker.pendings
+    assert not legs['acct_b'].broker.pendings, (
+        'a closing pending is at the broker, and on a hedging account it '
+        'OPENS a second position instead of closing one')
+    # It is a level this system watches instead.
+    held = watches(coordinator, pair)
+    assert len(held) == 1
+    assert held[0]['ticket'] is None
+    assert held[0]['position_id'] == position.position_id
+    # ...and nothing has been closed yet.
+    assert volumes(legs) == (0.1, 0.1)
+    assert position.is_open is True
+
+
+def test_the_CONTROL_an_ENTRY_still_rests_a_real_pending(engine, pair, legs):
+    """The control. Only CLOSING orders lose their pending — an entry
+    limit still rests one, because a pending that OPENS is exactly what
+    a pending does."""
+    coordinator = engine
+    md = coordinator.market[pair.key]
+    coordinator.click(pair.key, SpreadSide.SELL, md['short_spread'] + 0.50)
+    coordinator.poll_once()
+
+    assert len(legs['acct_b'].broker.pendings) == 1
+
+
+# -- firing at the level --------------------------------------------------
+
+def test_reaching_the_level_closes_BOTH_legs_by_ticket(engine, pair, legs,
+                                                        gold_symbols):
+    """The close goes as a DEAL carrying the position, which is the one
+    form MT5 actually honours — and both legs go together."""
     coordinator = engine
     position = sell_one(coordinator, pair)
     assert click_to_close(coordinator, pair).get('ok')
     coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
 
-    ticket = list(legs['acct_b'].broker.pendings)[0]
-    half = legs['acct_b'].broker.pendings[ticket]['volume'] / 2.0
-    legs['acct_b'].broker.part_fill_pending(ticket, half)
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
+    coordinator.poll_once()
+
+    assert position.is_open is False
+    assert volumes(legs) == (0.0, 0.0)
+    assert watches(coordinator, pair) == []
+    # Closed by TICKET on both accounts, never offset with an opposite
+    # order — that is what opened the second position live.
+    for account in ('acct_a', 'acct_b'):
+        sent = [e for e in legs[account].broker.sent if e['action'] == 'close']
+        assert sent, f'{account} was not closed by ticket'
+
+
+def test_the_CONTROL_it_does_NOT_fire_before_the_level(engine, pair, legs,
+                                                        gold_symbols):
+    """The control for the test above. One tick short of the level and
+    nothing happens — otherwise 'fires at the level' could pass by
+    closing at any price at all."""
+    coordinator = engine
+    position = sell_one(coordinator, pair)
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
+
+    # Stop one tick ABOVE the level: not reached.
+    walk_to_the_level(coordinator, pair, gold_symbols, level, through=-0.01)
+    coordinator.poll_once()
+
+    assert position.is_open is True
+    assert volumes(legs) == (0.1, 0.1)
+    assert len(watches(coordinator, pair)) == 1
+
+
+def test_the_trigger_reads_the_EXECUTABLE_side_for_its_own_direction():
+    """A BUY closes when the spread can be BOUGHT at or under its level;
+    a SELL when it can be SOLD at or over it. A price nobody has never
+    triggers — None is unknown, not 'reached'."""
+    assert closing_trigger_reached('BUY', 58.90,
+                                   {'long_spread': 58.90}) is True
+    assert closing_trigger_reached('BUY', 58.90,
+                                   {'long_spread': 58.91}) is False
+    assert closing_trigger_reached('SELL', 58.90,
+                                   {'short_spread': 58.90}) is True
+    assert closing_trigger_reached('SELL', 58.90,
+                                   {'short_spread': 58.89}) is False
+    # The WRONG side must never fire it.
+    assert closing_trigger_reached('BUY', 58.90,
+                                   {'short_spread': 10.0}) is False
+    assert closing_trigger_reached('BUY', 58.90, {}) is False
+    assert closing_trigger_reached('BUY', 58.90, None) is False
+
+
+# -- when the close does not go through -----------------------------------
+
+def test_a_close_that_FAILS_keeps_its_level_and_the_brokers_words(
+        engine, pair, legs, gold_symbols):
+    """The position stays open and so does the level. 'Check the log' is
+    not an answer on a live account."""
+    coordinator = engine
+    position = sell_one(coordinator, pair)
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
+
+    legs['acct_a'].broker.fail_closes.add('XAUUSD_')
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
+    coordinator.poll_once()
+
+    assert position.is_open is True
+    held = watches(coordinator, pair)
+    assert len(held) == 1, 'the level was dropped after a failed close'
+    assert 'forced failure' in (held[0]['reason'] or ''), held[0]['reason']
+
+
+def test_a_stale_print_HOLDS_the_close_and_says_so(engine, pair, legs):
+    """Firing a resting order off a print the system itself calls
+    untrustworthy closes at a level the market may never have shown.
+
+    This is NOT a guard withholding a close: a close the trader asks for
+    is never blocked, and the ladder says the resting one is held so
+    they can do exactly that."""
+    coordinator = engine
+    position = sell_one(coordinator, pair)
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
+
+    md = dict(coordinator.market[pair.key])
+    md['long_spread'] = level - 1.0          # well through it
+    md['guard_reason'] = 'the feed is stale'
+    coordinator.quoter.work(pair, md)
+
+    assert position.is_open is True
+    held = watches(coordinator, pair)
+    assert 'stale' in (held[0]['reason'] or '')
+    assert 'held' in (held[0]['reason'] or '')
+
+
+def test_the_CONTROL_the_same_price_fires_it_when_the_print_is_GOOD(
+        engine, pair, legs):
+    """The control for the test above."""
+    coordinator = engine
+    position = sell_one(coordinator, pair)
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
+
+    md = dict(coordinator.market[pair.key])
+    md['long_spread'] = level - 1.0
+    md.pop('guard_reason', None)
+    coordinator.quoter.work(pair, md)
+
+    assert position.is_open is False
+
+
+# -- a close the broker only partly fills ---------------------------------
+
+def half_close(broker):
+    """Make this broker close only HALF of whatever it is asked for."""
+    real = broker.close_position_ticket
+
+    def stingy(symbol, ticket, volume, entry_side, **kw):
+        return real(symbol, ticket, volume / 2.0, entry_side, **kw)
+
+    broker.close_position_ticket = stingy
+
+
+def test_a_HALF_filled_close_takes_BOTH_legs_down_together(engine, pair, legs,
+                                                            gold_symbols):
+    """A market close can come back short. Booking it as whole would
+    take lots off our record that are still at the broker — the book
+    reading flat while the money is there."""
+    coordinator = engine
+    position = sell_one(coordinator, pair)
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
+
+    half_close(legs['acct_a'].broker)
+    half_close(legs['acct_b'].broker)
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
     coordinator.poll_once()
 
     lots_a, lots_b = volumes(legs)
     assert lots_a == pytest.approx(0.05)
     assert lots_b == pytest.approx(0.05)
-    assert lots_a == pytest.approx(lots_b), (
-        'the legs came down by different amounts — that is a naked leg, '
-        'not a spread')
     # ...and the book agrees with the broker rather than claiming flat.
     assert position.is_open is True
     assert position.quantity == pytest.approx(0.5)
 
 
-def test_the_CONTROL_a_whole_fill_still_closes_the_whole_position(engine,
-                                                                  pair, legs):
-    """The control for the test above. A close that fills completely
-    must still take both legs off and mark the position closed —
-    otherwise the partial handling could pass by never closing anything.
-    """
+def test_the_CONTROL_a_whole_close_still_closes_the_whole_position(
+        engine, pair, legs, gold_versions=None, gold_symbols=None):
+    """The control. Without it the partial handling could pass by never
+    closing anything."""
     coordinator = engine
     position = sell_one(coordinator, pair)
-    assert click_to_close(coordinator, pair).get('ok')
-    coordinator.poll_once()
 
-    legs['acct_b'].broker.fill_pending(list(legs['acct_b'].broker.pendings)[0])
-    coordinator.poll_once()
+    coordinator.executor.close_position(pair, position,
+                                        coordinator.market[pair.key])
 
+    assert position.is_open is False
     assert volumes(legs) == (0.0, 0.0)
-    assert position.is_open is False
-    assert not resting(legs)
 
 
-def test_a_HALF_filled_close_re_rests_the_REMAINDER_and_only_that(engine,
-                                                                   pair, legs):
-    """The other half of the desk's report: the pile-up.
-
-    The residual of a partially filled closing pending used to be left
-    at the broker, untracked, carrying a position ticket the fill had
-    just reduced — and the next click rested another one beside it. One
-    order, at the size still on, is the only correct answer.
-    """
+def test_a_leg_the_broker_no_longer_lists_counts_as_DONE(engine, pair, legs):
+    """A ticket MT5 does not list is already gone, and that leg is done
+    however little was closed to get there. Reading it as 'closed
+    nothing' would leave the position open for ever."""
     coordinator = engine
-    sell_one(coordinator, pair)
-    assert click_to_close(coordinator, pair).get('ok')
-    coordinator.poll_once()
-
-    ticket = list(legs['acct_b'].broker.pendings)[0]
-    half = legs['acct_b'].broker.pendings[ticket]['volume'] / 2.0
-    legs['acct_b'].broker.part_fill_pending(ticket, half)
-    coordinator.poll_once()
-
-    rested = resting(legs)
-    assert len(rested) == 1, ('the residual was left resting beside its own '
-                              'replacement')
-    assert rested[0]['volume'] == pytest.approx(0.05)
-    # Still a CLOSE, not an order that would open a second position.
-    assert rested[0]['position_ticket'] is not None
-    # And nothing was punched at the account that quotes nothing.
-    assert not resting(legs, 'acct_a')
-    # THE POINT. One pending is not enough on its own — the old code left
-    # exactly one too, but it was an ORPHAN: the group was dropped, the
-    # position was marked closed, and nobody could pull that order again.
-    # An orphan pending is the incident with a GUARANTEED fill.
-    tracked = [g for g in coordinator.quoter.snapshot(pair.key)
-               if g['ticket'] == rested[0]['ticket']]
-    assert tracked, 'the resting order is at the broker and in no group'
-    assert tracked[0]['intent'] == 'CLOSE'
-    assert coordinator.book.position(tracked[0]['position_id']).is_open
-
-
-def test_a_HALF_filled_close_banks_only_the_HALF_it_closed(engine, pair,
-                                                            legs):
-    """P&L is accumulated, not replaced: a position closed in two pieces
-    earned it in two pieces, and the first piece is not the trade."""
-    coordinator = engine
-    position = sell_one(coordinator, pair)
-    assert click_to_close(coordinator, pair).get('ok')
-    coordinator.poll_once()
-
-    ticket = list(legs['acct_b'].broker.pendings)[0]
-    half = legs['acct_b'].broker.pendings[ticket]['volume'] / 2.0
-    legs['acct_b'].broker.part_fill_pending(ticket, half)
-    coordinator.poll_once()
-    banked = position.realized_pnl
-    assert banked is not None
-
-    legs['acct_b'].broker.fill_pending(list(legs['acct_b'].broker.pendings)[0])
-    coordinator.poll_once()
-
-    assert position.is_open is False
-    assert position.realized_pnl != banked, (
-        'the second piece replaced the first instead of adding to it')
-
-
-def test_a_piece_too_small_for_the_OTHER_legs_step_books_NOTHING(engine, pair,
-                                                                  legs):
-    """The other leg is the constraint, and its step can be ten times the
-    quoting leg's — spot 0.01 against a future's 0.10, which is this
-    desk's real shape. A half close on the quoting leg then rounds to
-    NOTHING on the other, and reducing our own books by what was ASKED
-    would take lots off the record that are still at the broker.
-    """
-    coordinator = engine
-    pair.quoting_leg = 'a'          # so the OTHER leg is the coarse one
-    position = sell_one(coordinator, pair)
-    assert click_to_close(coordinator, pair).get('ok')
-    coordinator.poll_once()
-
-    ticket = list(legs['acct_a'].broker.pendings)[0]
-    legs['acct_a'].broker.part_fill_pending(ticket, 0.05)
-    coordinator.poll_once()
-
-    # Leg B could not come down by 0.05 — its minimum is 0.10.
-    assert volumes(legs)[1] == pytest.approx(0.1)
-    # So NOTHING is booked: the record keeps both legs whole, which errs
-    # towards believing more is on than there is.
-    assert position.is_open is True
-    assert position.quantity == pytest.approx(1.0)
-
-
-# -- a closing order armed against a leg that is already gone -------------
-
-def strand_the_quoting_leg(coordinator, pair, legs):
-    """Leave the position half on: leg B gone, leg A still there.
-
-    Live this is a close that went through on one leg and was refused on
-    the other — the NAKED LEG the executor already names.
-    """
     position = sell_one(coordinator, pair)
     for ticket in list(position.leg_b.position_tickets):
         legs['acct_b'].broker.positions.pop(int(ticket), None)
-    return position
 
+    coordinator.executor.close_position(pair, position,
+                                        coordinator.market[pair.key])
+
+    assert position.is_open is False
+    assert volumes(legs) == (0.0, 0.0)
+
+
+# -- a click against a position whose quoting leg has gone ----------------
 
 def test_a_click_never_rests_against_a_ticket_the_broker_has_lost(engine,
                                                                    pair, legs):
-    """THE PILE-UP THE DESK REPORTED, at its source.
-
-    With leg B's ticket gone, a closing pending on leg B can close
-    nothing. It used to be rested anyway, and every further click rested
-    another one — orders stacking on the quoting account while the
-    account actually holding the leg got none of them, and clicking
-    again never got the trader out.
-
-    What is left is one naked leg, and a naked leg cannot wait at a
-    price.
-    """
+    """What is left is one naked leg, and a naked leg cannot wait at a
+    price."""
     coordinator = engine
-    position = strand_the_quoting_leg(coordinator, pair, legs)
+    position = sell_one(coordinator, pair)
+    for ticket in list(position.leg_b.position_tickets):
+        legs['acct_b'].broker.positions.pop(int(ticket), None)
 
     answer = click_to_close(coordinator, pair)
     coordinator.poll_once()
 
-    assert answer.get('ok') is True
-    # Said out loud: a resting click that went to market is exactly the
-    # surprise the other direction already guards against.
     assert answer.get('at_market') is True
     assert position.position_id in (answer.get('closed') or [])
     assert 'NAKED' in answer['reason']
-    # Nothing rested anywhere, and the leg that was on is off.
-    assert not resting(legs) and not resting(legs, 'acct_a')
     assert volumes(legs) == (0.0, 0.0)
     assert position.is_open is False
 
 
 def test_the_CONTROL_a_whole_position_still_RESTS_where_it_is_clicked(
         engine, pair, legs):
-    """The control. With both legs where they should be, the click must
-    still rest at the trader's level and must NOT go to market —
-    otherwise the guard above could pass by flattening everything."""
+    """The control. With both legs where they should be the click must
+    rest, not go to market."""
     coordinator = engine
     sell_one(coordinator, pair)
 
     answer = click_to_close(coordinator, pair)
     coordinator.poll_once()
 
-    assert answer.get('ok') is True
     assert answer.get('at_market') is not True
     assert answer.get('reducing') is True
-    assert len(resting(legs)) == 1
+    assert len(watches(coordinator, pair)) == 1
     assert volumes(legs) == (0.1, 0.1)
 
 
 def test_a_leg_that_cannot_be_READ_is_not_treated_as_flat(engine, pair, legs,
                                                            monkeypatch):
-    """`positions()` returns None for "the leg could not be read", which
-    is NOT "no position" (spec §7). Reading it as flat would market-close
-    a live spread on no evidence at all — the opposite mistake, and the
-    worse one."""
+    """`positions()` returns None for 'could not be read', which is NOT
+    'no position' (spec §7). Reading it as flat would market-close a live
+    spread on no evidence at all."""
     coordinator = engine
     sell_one(coordinator, pair)
     monkeypatch.setattr(legs['acct_b'], 'positions', lambda symbol=None: None)
@@ -276,32 +361,30 @@ def test_a_leg_that_cannot_be_READ_is_not_treated_as_flat(engine, pair, legs,
     answer = click_to_close(coordinator, pair)
     coordinator.poll_once()
 
-    assert answer.get('at_market') is not True, (
-        'an unreadable leg was read as flat and the position was closed '
-        'at market on no evidence')
+    assert answer.get('at_market') is not True
     assert volumes(legs) == (0.1, 0.1)
 
 
 # -- whose close was it ---------------------------------------------------
 
-def test_the_traders_own_close_is_not_recorded_as_a_take_profit(engine, pair,
-                                                                 legs):
-    """A close the trader clicked is not automation. Reporting it as a
-    take-profit is the same mistake the AutoRouting switch made when it
-    swept their order away."""
+def test_the_traders_own_close_is_not_recorded_as_a_take_profit(
+        engine, pair, legs, gold_symbols):
+    """A close the trader clicked is not automation."""
     coordinator = engine
     position = sell_one(coordinator, pair)
     assert click_to_close(coordinator, pair).get('ok')
     coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
 
-    legs['acct_b'].broker.fill_pending(list(legs['acct_b'].broker.pendings)[0])
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
     coordinator.poll_once()
 
     assert position.close_reason == 'closed by the trader'
 
 
 def test_the_CONTROL_autoroutings_close_still_says_take_profit(engine, pair,
-                                                               legs):
+                                                               legs,
+                                                               gold_symbols):
     """The control for the test above."""
     coordinator = engine
     pair.auto_route = True
@@ -314,62 +397,147 @@ def test_the_CONTROL_autoroutings_close_still_says_take_profit(engine, pair,
     coordinator.poll_once()
     armed = coordinator.book.orders_for_position(position.position_id)
     assert armed and armed[0].auto_armed is True
+    level = watches(coordinator, pair)[0]['level']
 
-    legs['acct_b'].broker.fill_pending(list(legs['acct_b'].broker.pendings)[0])
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
     coordinator.poll_once()
 
     assert position.close_reason == 'auto take-profit'
 
 
-# -- a cancel that races a closing fill -----------------------------------
-
-def test_a_cancel_that_races_a_closing_fill_keeps_the_TICKET(engine, pair,
-                                                              legs,
-                                                              monkeypatch):
-    """`_on_fill` takes the ticket off the group itself. Clearing it in
-    `_pull` FIRST handed it None, so the fill was reported as having
-    closed no order at all — the one number a diagnostic needs to match
-    our close against the broker's."""
-    coordinator = engine
-    position = sell_one(coordinator, pair)
-    assert click_to_close(coordinator, pair).get('ok')
-    coordinator.poll_once()
-    ticket = list(legs['acct_b'].broker.pendings)[0]
-
-    seen = {}
-    real = coordinator.executor.close_other_leg
-
-    def spy(pair_, position_, quote_leg, quote_result, **kw):
-        seen.update(quote_result)
-        return real(pair_, position_, quote_leg, quote_result, **kw)
-
-    monkeypatch.setattr(coordinator.executor, 'close_other_leg', spy)
-
-    # It fills at the moment the trader's disarm reaches the broker.
-    legs['acct_b'].broker.fill_pending(ticket)
-    coordinator.quoter.disarm(position.position_id, 'cancelled by trader')
-
-    assert position.is_open is False, 'the raced fill was tidied away'
-    assert seen.get('closed'), 'the raced fill was never booked as a close'
-    assert seen['closed'][0]['ticket'] == ticket
-
-
 def test_the_synthetic_stops_working_once_its_close_is_whole(engine, pair,
-                                                             legs):
-    """A partial leaves the click WORKING for the rest; a whole fill must
-    not. The control for the partial-settlement path."""
+                                                             legs,
+                                                             gold_symbols):
+    """A partial leaves the click WORKING for the rest; a whole close
+    must not."""
     coordinator = engine
     position = sell_one(coordinator, pair)
     assert click_to_close(coordinator, pair).get('ok')
     coordinator.poll_once()
     order = coordinator.book.orders_for_position(position.position_id)[0]
+    level = watches(coordinator, pair)[0]['level']
 
-    ticket = list(legs['acct_b'].broker.pendings)[0]
-    half = legs['acct_b'].broker.pendings[ticket]['volume'] / 2.0
-    legs['acct_b'].broker.part_fill_pending(ticket, half)
+    half_close(legs['acct_a'].broker)
+    half_close(legs['acct_b'].broker)
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
     coordinator.poll_once()
     assert order.is_working is True, 'the remainder stopped working'
 
-    legs['acct_b'].broker.fill_pending(list(legs['acct_b'].broker.pendings)[0])
+    legs['acct_a'].broker.close_position_ticket = \
+        type(legs['acct_a'].broker).close_position_ticket.__get__(
+            legs['acct_a'].broker)
+    legs['acct_b'].broker.close_position_ticket = \
+        type(legs['acct_b'].broker).close_position_ticket.__get__(
+            legs['acct_b'].broker)
     coordinator.poll_once()
+
+    assert position.is_open is False
     assert order.state is OrderState.FILLED
+
+
+# -- a broker that keeps refusing -----------------------------------------
+
+def test_a_close_that_keeps_failing_is_ESCALATED_not_hammered(engine, pair,
+                                                               legs,
+                                                               gold_symbols):
+    """The level is watched every poll, so a broker that refuses would be
+    asked three times a second for as long as the market sits there.
+    That is hammering, and it buries the one line the trader needs."""
+    coordinator = engine
+    coordinator.config.settings['CLOSE_ATTEMPTS'] = 3
+    position = sell_one(coordinator, pair)
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
+
+    legs['acct_a'].broker.fail_closes.add('XAUUSD_')
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
+    for _ in range(3):
+        coordinator.poll_once()
+    tried = len([e for e in legs['acct_a'].broker.sent
+                 if e['action'] == 'close'])
+    assert watches(coordinator, pair)[0]['escalated'] is True
+    assert 'CLOSE IT BY HAND' in watches(coordinator, pair)[0]['reason']
+
+    # ...and it stops asking.
+    for _ in range(5):
+        coordinator.poll_once()
+    assert len([e for e in legs['acct_a'].broker.sent
+                if e['action'] == 'close']) == tried
+    assert position.is_open is True
+
+
+def test_the_CONTROL_it_RETRIES_before_it_gives_up(engine, pair, legs,
+                                                    gold_symbols):
+    """The control. A close that fails once must be tried again —
+    otherwise 'escalates' could pass by never retrying at all."""
+    coordinator = engine
+    coordinator.config.settings['CLOSE_ATTEMPTS'] = 3
+    sell_one(coordinator, pair)
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
+
+    legs['acct_a'].broker.fail_closes.add('XAUUSD_')
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
+    coordinator.poll_once()
+    assert watches(coordinator, pair)[0]['escalated'] is False
+    coordinator.poll_once()
+    assert len([e for e in legs['acct_a'].broker.sent
+                if e['action'] == 'close']) >= 2
+
+
+def test_the_market_moving_AWAY_clears_the_escalation(engine, pair, legs,
+                                                       gold_symbols):
+    """A session break or a spread that widened out is not a fault to
+    stay escalated over. When the level comes back it gets a clean
+    slate — and this time the broker is willing."""
+    coordinator = engine
+    coordinator.config.settings['CLOSE_ATTEMPTS'] = 2
+    position = sell_one(coordinator, pair)
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
+
+    legs['acct_a'].broker.fail_closes.add('XAUUSD_')
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
+    coordinator.poll_once()
+    coordinator.poll_once()
+    assert watches(coordinator, pair)[0]['escalated'] is True
+
+    # The market leaves...
+    _spot, future = gold_symbols
+    future.bid += 5.0
+    future.ask += 5.0
+    coordinator.poll_once()
+    assert watches(coordinator, pair)[0]['escalated'] is False
+
+    # ...and comes back, to a broker that will take it.
+    legs['acct_a'].broker.fail_closes.discard('XAUUSD_')
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
+    coordinator.poll_once()
+    assert position.is_open is False
+
+
+def test_a_broker_that_HANGS_UP_does_not_take_the_pricing_pass_down(
+        engine, pair, legs, gold_symbols, monkeypatch):
+    """The close is a NETWORK call inside the pricing pass. Unguarded, a
+    broker that drops mid-close raises out of `work()` and takes the
+    whole poll with it — every pair's quotes, not just this level."""
+    coordinator = engine
+    position = sell_one(coordinator, pair)
+    assert click_to_close(coordinator, pair).get('ok')
+    coordinator.poll_once()
+    level = watches(coordinator, pair)[0]['level']
+
+    def hang_up(*a, **kw):
+        raise ConnectionResetError('the terminal went away')
+
+    monkeypatch.setattr(coordinator.executor, 'close_position', hang_up)
+    walk_to_the_level(coordinator, pair, gold_symbols, level)
+    coordinator.poll_once()          # must not raise
+
+    # The quotes still refreshed, and the level is still watched.
+    assert coordinator.market[pair.key]['long_spread'] is not None
+    assert 'went away' in (watches(coordinator, pair)[0]['reason'] or '')
+    assert position.is_open is True
