@@ -252,6 +252,10 @@ class CommandRunner:
         'ROW_HEIGHT_PX': lambda v: max(12, min(40, int(v))),
         #: Anything unrecognised falls back to TT rather than
         #: leaving the ladder with no convention at all.
+        #: Hot, because a desk that wants its old behaviour back in a
+        #: hurry should not have to restart the engine to get it.
+        'CLOSE_FIRST': lambda v: str(v).strip().lower() not in
+            ('0', 'false', 'no', 'off', ''),
         'CLICK_CONVENTION': lambda v: (
             'TOUCH' if str(v).strip().upper() == 'TOUCH' else 'TT'),
         'MARKET_PROTECTION_TICKS': float,

@@ -12,6 +12,22 @@ from collections import defaultdict
 from .models import (OrderState, SpreadSide, SyntheticOrder)
 
 
+def _side_value(side):
+    """'BUY' from a string, an enum, or anything that names a side.
+
+    One reader, because "which side is this" is asked of values that
+    arrive from three places — the command bridge (strings), the
+    quoter (enums) and the recovered book (whatever was persisted).
+    """
+    if side is None:
+        return None
+    value = getattr(side, 'value', side)
+    try:
+        return str(value).strip().upper() or None
+    except Exception:
+        return None
+
+
 class Book:
     def __init__(self):
         self._orders = {}                 # order_id -> SyntheticOrder
@@ -120,6 +136,60 @@ class Book:
     def position(self, position_id):
         return self._positions.get(position_id)
 
+    def positions_to_reduce(self, pair_key, side, quantity, exclude=None):
+        """Open positions the OPPOSITE way, OLDEST FIRST, up to `quantity`.
+
+        A price ladder is expected to REDUCE before it opens: click the
+        offer while short and you are covering, not stacking a second
+        short. These accounts are HEDGING, so MT5 will never net for
+        us — an opposite order always opens a second position — which
+        means the netting has to be done here, by closing tickets.
+
+        Two rules keep it safe:
+
+        - OLDEST FIRST, which is what FIFO means and what every desk
+          expects when they say "close my position".
+        - A position is only picked when it fits ENTIRELY inside what
+          is left to reduce. `close_position` closes whole tickets, so
+          taking a bigger one would close more than the trader asked
+          for and flip their net the other way. Whatever does not fit
+          is left alone and the remainder opens normally.
+        """
+        try:
+            left = float(quantity)
+        except (TypeError, ValueError):
+            return []
+        if left <= 0:
+            return []
+        # COMPARE ON THE VALUE, never on identity.
+        #
+        # `side` arrives as a plain string ('BUY') from the command
+        # bridge and as a SpreadSide enum from the quoter. `is not`
+        # against a string is ALWAYS true, so every open position —
+        # including ones on the SAME side — looked opposite, and a
+        # second buy while long would have closed the trader's own
+        # position instead of adding to it. Caught by the end-to-end
+        # suite, which clicks BUY twice.
+        want = _side_value(side)
+        if want is None:
+            return []
+        opposite = [p for p in self.positions(pair_key)
+                    if _side_value(p.side) not in (None, want)
+                    and (exclude is None or p.position_id != exclude)]
+        opposite.sort(key=lambda p: (p.opened_at or 0, str(p.position_id)))
+        picked = []
+        for position in opposite:
+            size = float(position.quantity or 0.0)
+            if size <= 0 or size > left + 1e-9:
+                # Bigger than what is being reduced: closing it would
+                # over-close. Leave it, and leave the queue in order.
+                break
+            picked.append(position)
+            left -= size
+            if left <= 1e-9:
+                break
+        return picked
+
     def net_position(self, pair_key):
         """(net spreads, average entry spread) for one ladder.
 
@@ -142,3 +212,41 @@ class Book:
     def last_print(self, pair_key):
         prints = self.prints.get(pair_key) or []
         return prints[-1] if prints else None
+
+
+def reduce_first(book, executor, pair, side, quantity, md,
+                 exclude=None, on_closed=None):
+    """Close the tickets an opposite click covers; return what is left.
+
+    ONE implementation, called from both places a position can be
+    created: the MARKET click closes before it opens, and a resting
+    order closes when it fills. Two implementations of "which tickets
+    does this click cover" is two answers to reconcile the day they
+    disagree, on a live book.
+
+    Returns (closed position ids, quantity still to open).
+
+    A close is never withheld: `close_position` consults no guard, and
+    neither does this.
+    """
+    try:
+        left = float(quantity)
+    except (TypeError, ValueError):
+        return [], quantity
+    closed = []
+    for position in book.positions_to_reduce(pair.key, side, left,
+                                             exclude=exclude):
+        result = executor.close_position(
+            pair, position, md, reason='reduced by an opposite click')
+        if not result.get('ok'):
+            # Stop at the first refusal rather than stepping over it.
+            # The rest of the queue is no longer the queue the trader
+            # would have closed, and opening the remainder on top of a
+            # position that would NOT close is how a reduce quietly
+            # becomes a bigger position.
+            break
+        if on_closed is not None:
+            on_closed(position)
+        closed.append(position.position_id)
+        left -= float(position.quantity or 0.0)
+    return closed, max(left, 0.0)
