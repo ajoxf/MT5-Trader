@@ -109,9 +109,21 @@ def test_a_leg_over_the_brokers_MAXIMUM_is_refused_before_either_moves():
     plan = clip_plan(a_pair(), meta(maximum=50.0), meta(), 88.63, 96.475,
                      100.0)
     assert plan['reason'] and 'maximum' in plan['reason']
-    assert '50' in plan['reason']
-    # ...and it says which Qty asked for it.
-    assert 'leg A' in plan['reason']
+    assert '50' in plan['reason'] and 'leg A' in plan['reason']
+    # ...and THE QTY THAT WOULD FIT. A refusal that only says "too big"
+    # leaves the trader guessing at the number, and the guess is the
+    # Qty box — the one control whose meaning they have just been asked
+    # to relearn.
+    assert 'Qty 50 or less fits' in plan['reason']
+
+
+def test_the_qty_that_fits_is_worked_out_per_leg():
+    """Leg B is the one that caps it here, and the arithmetic is that
+    leg's lots-per-Qty, not leg A's."""
+    plan = clip_plan(a_pair(1.0, 2.0), meta(), meta(maximum=50.0),
+                     88.63, 96.475, 100.0)
+    assert 'leg B' in plan['reason']
+    assert 'Qty 25 or less fits' in plan['reason']
 
 
 def test_contract_sizes_that_are_not_known_yet_refuse_rather_than_guess():

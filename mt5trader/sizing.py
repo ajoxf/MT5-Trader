@@ -142,25 +142,40 @@ def clip_plan(pair, meta_a, meta_b, price_a, price_b, spreads=1.0):
 
     floor = minimum_notional(contract_a, contract_b, price_a, price_b,
                              beta, min_a, min_b)
+    def fits(maximum, per_qty):
+        """The largest whole Qty that stays under a broker's cap.
+
+        A refusal that only says "too big" leaves the trader guessing
+        at the number, and the guess is the Qty box — the one control
+        whose meaning they have just been asked to relearn. So the
+        message carries the answer.
+        """
+        if not maximum or not per_qty:
+            return None
+        return math.floor((maximum / per_qty) + 1e-9)
+
     if lots_a <= 0:
-        reason = (f"{spreads:g} spread(s) is {unit_a * spreads:g} lots on "
-                  f"leg A, under its {min_a:g}-lot minimum")
+        reason = (f"Qty {spreads:g} x {unit_a:g} is {unit_a * spreads:g} lots "
+                  f"on leg A, under its {min_a:g}-lot minimum")
     elif lots_b <= 0:
-        reason = (f"{spreads:g} x {unit_b:g} is {unit_b * spreads:g} lots on "
-                  f"leg B, under its {min_b:g}-lot minimum"
+        reason = (f"Qty {spreads:g} x {unit_b:g} is {unit_b * spreads:g} lots "
+                  f"on leg B, under its {min_b:g}-lot minimum"
                   + (f' — this pair needs at least ${floor:,.0f} a leg'
                      if floor else ''))
     elif max_a and lots_a > max_a + 1e-9:
-        reason = (f"leg A wants {lots_a:g} lots but the broker's maximum "
-                  f"is {max_a:g} — the order would be rejected")
+        room = fits(max_a, unit_a)
+        reason = (f"Qty {spreads:g} x {unit_a:g} wants {lots_a:g} lots on "
+                  f"leg A, over this broker's {max_a:g}-lot maximum"
+                  + (f' — Qty {room:g} or less fits' if room else ''))
     elif max_b and lots_b > max_b + 1e-9:
         # Never discovered AFTER leg A has filled. In the stat-arb
         # system an inverted beta sized leg B at 5,167 lots of gold —
         # $2.25bn — and the plan reported it as fine; MT5 would have
         # rejected it with 10014 after leg A was already on.
-        reason = (f"leg B wants {lots_b:g} lots but the broker's maximum "
-                  f"is {max_b:g} — the order would be rejected. Qty {spreads:g} "
-                  f"x {unit_b:g} lots is what asks for it.")
+        room = fits(max_b, unit_b)
+        reason = (f"Qty {spreads:g} x {unit_b:g} wants {lots_b:g} lots on "
+                  f"leg B, over this broker's {max_b:g}-lot maximum"
+                  + (f' — Qty {room:g} or less fits' if room else ''))
 
     k = spread_units(lots_b, contract_b)
     return {
