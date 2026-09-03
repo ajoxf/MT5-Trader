@@ -1790,6 +1790,13 @@ class Coordinator:
                 'row_count': pair.rows,
                 'clip_lots_a': pair.clip_lots_a,
                 'clip_lots_b': pair.clip_lots_b,
+                # What ONE LOT is, in the instrument's own units —
+                # 100 oz of gold, 5,000 of silver, 1,000 barrels of
+                # oil. READ FROM MT5 (`trade_contract_size`) and never
+                # configured: a contract size somebody typed is a
+                # contract size that can be wrong.
+                'contract_a': (pair.meta_a or {}).get('contract_size'),
+                'contract_b': (pair.meta_b or {}).get('contract_size'),
                 'spread_units': sizing.spread_units(
                     pair.clip_lots_b, (pair.meta_b or {}).get('contract_size')),
                 'market': md,

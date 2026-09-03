@@ -228,6 +228,7 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'show_fair_window': show_fair_window,
                 'auto_route_armed': auto_route_armed or [],
                 'clip_lots_a': 0.1, 'clip_lots_b': 0.1, 'spread_units': 10.0,
+                'contract_a': 100.0, 'contract_b': 100.0,
                 'short_spread': 59.09, 'long_spread': 59.11,
                 'market': {'spread': 59.10, 'short_spread': 59.09,
                            'long_spread': 59.11, 'net_change': -0.61,
@@ -3835,9 +3836,12 @@ def test_the_lots_one_spread_costs_can_be_typed_and_says_what_is_in_force(
 
     note = ' '.join(page.text_content('.ladder .ls-clip-note').split())
     # PER QTY and FOR THE QTY IN THE BOX, side by side.
-    assert '1 Qty = 0.10 lots XAUUSD_ / 0.10 lots GC1226' in note
+    assert '1 Qty = 0.10 lots XAUUSD_ = 10.00 units' in note
+    assert '0.10 lots GC1226 = 10.00 units' in note
     assert 'per 1.00 of spread' in note
     assert 'Qty 1.00 sends 0.10 / 0.10 lots' in note
+    # The contract size is MT5's, never the trader's.
+    assert 'come from MT5 and are never typed in' in note
 
     page.evaluate(SPY_ON_PAIR_SAVE)
     page.fill('.ladder .ls-clip-a', '1')

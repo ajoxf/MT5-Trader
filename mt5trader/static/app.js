@@ -1241,14 +1241,24 @@
     // clip_lots_b x contract B — so it is the per-unit figure, not the
     // one for the click.
     var perQty = live.spread_units || 0;
+    // ...and what a lot IS, in the instrument's own units. The desk
+    // thinks in ounces and barrels, not lots: "when a trader places 1,
+    // in the backend it places 100 oz". The contract size comes from
+    // MT5 and is never typed, so this is the one place the two
+    // readings meet.
+    function inUnits(lots, contract) {
+      return contract ? ' = ' + fmt(lots * contract, 2) + ' units' : '';
+    }
     note.textContent =
       'In force: 1 Qty = ' + fmt(lotsA, 2) + ' lots ' +
-      (live.symbol_a || 'A') + ' / ' + fmt(lotsB, 2) + ' lots ' +
-      (live.symbol_b || 'B') +
+      (live.symbol_a || 'A') + inUnits(lotsA, live.contract_a) +
+      ' / ' + fmt(lotsB, 2) + ' lots ' +
+      (live.symbol_b || 'B') + inUnits(lotsB, live.contract_b) +
       (perQty ? ' — ' + money(perQty) + ' per 1.00 of spread' : '') +
       '. Qty ' + fmt(qty, 2) + ' sends ' + fmt(lotsA * qty, 2) + ' / ' +
       fmt(lotsB * qty, 2) + ' lots' +
-      (perQty ? ', ' + money(perQty * qty) + ' per 1.00' : '') + '.';
+      (perQty ? ', ' + money(perQty * qty) + ' per 1.00' : '') +
+      '. Contract sizes come from MT5 and are never typed in.';
   }
 
   function fairKindFields(pane, saved) {
