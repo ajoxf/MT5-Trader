@@ -101,6 +101,18 @@ class QuoteGroup:
         #: broker refusing a close three times a second is a broker
         #: being hammered, so this is bounded and then escalated.
         self.close_attempts = 0
+        #: Spreads to OPEN once this close has gone through, when the
+        #: click that armed it was bigger than the position it covered.
+        #:
+        #: A reducing click is ONE instruction at ONE level. Resting the
+        #: remainder as an ordinary pending at the same moment gave it
+        #: a different engine: the pending sits at the BROKER and fills
+        #: on the broker's own tick stream, while the close is watched
+        #: HERE at poll rate. Live 2026-09-03 the pending filled and the
+        #: close never saw a qualifying tick, so a BUY 12 over a SELL 10
+        #: left the trader +2 AND still -10 — the one net position they
+        #: certainly did not ask for.
+        self.open_after = 0.0
         self.escalated = False
 
     @property
@@ -584,6 +596,17 @@ class Quoter:
         if position is None or not position.is_open:
             # Nothing left to close. Not an error — a manual close, the
             # overnight rule or the reconciler got there first.
+            #
+            # The remainder goes with it, deliberately. The click said
+            # "cover this and open the rest"; something else covered it,
+            # so the rest is no longer the trade that was asked for, and
+            # putting a position on by itself minutes later is the last
+            # thing anyone wants from a ladder.
+            if group.open_after > 0:
+                logging.info(
+                    '%s: %s was closed elsewhere, so the %g spread(s) that '
+                    'click would have opened are dropped', pair.key,
+                    group.position_id, group.open_after)
             self.groups.pop(key, None)
             return None
         if not group.quantity:
@@ -671,9 +694,22 @@ class Quoter:
                 order.filled_quantity = order.quantity
                 order.state = OrderState.FILLED
         self._remember(position)
-        return {'group': key, 'action': 'closed_at_level',
-                'position': position.position_id, 'level': group.level,
-                'ok': True}
+        event = {'group': key, 'action': 'closed_at_level',
+                 'position': position.position_id, 'level': group.level,
+                 'ok': True}
+        # AND ONLY NOW the remainder, if the click was bigger than what
+        # it covered. Not before: a remainder resting while the close is
+        # still outstanding is the two-engines bug above, and it puts
+        # the new position on over the old one.
+        if group.open_after > 0:
+            opened = self.book.add_order(pair, group.side, group.level,
+                                         group.open_after)
+            self.group_for(pair, opened)
+            logging.info('%s: closed %s at %s, now resting the remaining '
+                         '%g spread(s) the click asked for', pair.key,
+                         position.position_id, group.level, group.open_after)
+            event['opened_remainder'] = group.open_after
+        return event
 
     def _close_got_nowhere(self, pair, group, reason):
         """A fire that did not reduce the position. Bounded, then said.
@@ -741,6 +777,18 @@ class Quoter:
                      position.side.opposite.value,
                      position.position_id, level)
         return order
+
+    def carry_remainder(self, order, quantity):
+        """Let a reducing click's leftover ride on the close it armed.
+
+        The remainder opens when — and only when — that close has
+        actually gone through. See `QuoteGroup.open_after`.
+        """
+        group = self.groups.get(self.key_for(order))
+        if group is None:
+            return False
+        group.open_after = float(quantity or 0.0)
+        return True
 
     def disarm(self, position_id, reason='its position is gone'):
         """Pull every closing order armed against one position.
