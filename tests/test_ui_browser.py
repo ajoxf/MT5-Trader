@@ -4063,3 +4063,114 @@ def test_the_name_never_pushes_the_desk_off_the_screen(page):
     assert measured['deskTop'] == pytest.approx(measured['brandBottom'], abs=1)
     assert measured['deskBottom'] == pytest.approx(measured['barTop'], abs=1)
     assert measured['barBottom'] == pytest.approx(measured['viewport'], abs=1)
+
+
+def test_what_a_reducing_click_still_OWES_is_on_the_screen(page):
+    """A click bigger than the position it covers holds the rest back
+    until the close has gone through — one instruction, in order.
+
+    From the desk's screen: short 1707, SELL 100 clicked at 8.11 over a
+    93-lot long. The Work cell read 93 and the other 7 existed only
+    inside the engine. Nothing on the screen said 7 more were coming,
+    what they were waiting for, or — if something else closed that
+    position first — that they had been dropped.
+    """
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    level = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows[5].level""")
+    publisher.orders = [{'order_id': 'C1', 'level': level, 'side': 'SELL',
+                         'quantity': 93, 'filled_quantity': 0,
+                         'state': 'WORKING', 'position_id': 'POS1',
+                         'time_in_force': 'DAY'}]
+    publisher.quotes = [{'pair_key': 'XAUUSD_|GC1226', 'side': 'SELL',
+                         'level': level, 'leg': 'BOTH', 'ticket': None,
+                         'intent': 'CLOSE', 'position_id': 'POS1',
+                         'open_after': 7, 'orders': ['C1']}]
+    publisher.working_sells = 1
+    publisher.resting_closes = 1
+    publisher.broker_pendings = 0
+    publisher.publish()
+
+    page.wait_for_selector('.ladder .grid td.work .after', timeout=WAIT)
+    cell = page.locator('.ladder .grid td.work[data-order-id]').first
+    # BOTH numbers: what is working, and what the click still owes.
+    assert '93' in cell.text_content() and '+7' in cell.text_content()
+    after = page.locator('.ladder .grid td.work .after').first
+    assert 'held back until this close goes through' in \
+        (after.get_attribute('title') or '')
+
+    # THE CONTROL: an ordinary order owes nothing, and must not sprout
+    # a marker that means "there is more coming".
+    publisher.quotes[0]['open_after'] = 0
+    publisher.publish()
+    page.wait_for_function(
+        "() => document.querySelectorAll('.ladder .grid td.work .after')"
+        ".length === 0", timeout=WAIT)
+
+    publisher.orders = None
+    publisher.quotes = None
+    publisher.working_sells = 0
+    publisher.resting_closes = 0
+    publisher.broker_pendings = None
+    publisher.publish()
+
+
+def test_an_order_the_TRADER_withdrew_is_not_dressed_as_a_refusal(page):
+    """"SELL 93 at 8.09 — cancelled. the trader clicked 8.11 to close
+    this instead" is the system doing exactly as it was told. It went
+    out in the same style as a broker refusal — the alarm style, which
+    stays on the screen until it is dismissed — and a desk that reads
+    every notice as an alarm stops reading them.
+
+    A REJECTED order still is one, and still stays.
+    """
+    open_ladder(page)
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    publisher = page.paths['publisher']
+    publisher.dead_orders = [
+        {'order_id': 'X1', 'side': 'SELL', 'quantity': 93, 'level': 8.09,
+         'state': 'CANCELLED',
+         'reason': 'the trader clicked 8.11 to close this instead'}]
+    publisher.publish()
+    page.wait_for_selector('#toasts .toast', timeout=WAIT)
+    assert page.locator('#toasts .toast.ok').count() == 1
+    assert 'clicked 8.11' in page.text_content('#toasts .toast')
+
+    # THE CONTROL: the broker refusing one is a fault, and stays.
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    publisher.dead_orders = [
+        {'order_id': 'X2', 'side': 'SELL', 'quantity': 1, 'level': 8.09,
+         'state': 'REJECTED',
+         'reason': '10027 AutoTrading disabled by client'}]
+    publisher.publish()
+    page.wait_for_selector('#toasts .toast', timeout=WAIT)
+    assert page.locator('#toasts .toast.ok').count() == 0
+    assert '10027' in page.text_content('#toasts .toast')
+
+    publisher.dead_orders = None
+    publisher.publish()
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+
+
+def test_why_an_opposite_click_closes_something_is_on_the_settings_page(page):
+    """The first time a click the other way CLOSES a ticket instead of
+    stacking one, it is a surprise — and on a mixed book a click that
+    ADDS to the net still clears an opposite ticket, which is a bigger
+    surprise. There was no switch and no sentence about it anywhere."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .trading-fields', timeout=WAIT)
+
+    box = page.locator('.window.settings .s-closefirst')
+    assert box.count() == 1
+    assert box.is_checked(), 'reduce-before-open must be the default'
+    text = page.text_content('.window.settings .trading-fields')
+    assert 'reduce before opening' in text
+    # ...and it says WHY, in the terms that make it matter here.
+    assert 'hedging' in text and 'never nets' in text
+    # ...and what it costs, which is the part a trader has to weigh.
+    assert 'CROSSES when the level prints' in text
+
+    page.click('.window.settings .close')
+    page.wait_for_selector('.ladder .grid tbody tr')

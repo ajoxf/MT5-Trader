@@ -321,6 +321,25 @@
       ' It moves only which column sends which side — the price is the ' +
       'row you clicked either way, and the BUY and SELL buttons name ' +
       'their own side and do not change.</div>');
+    // WHY A CLICK SOMETIMES CLOSES SOMETHING. Surprising the first
+    // time it happens on a mixed book, and there was no switch and no
+    // sentence about it anywhere on the screen.
+    var reduce = settings.CLOSE_FIRST !== false;
+    html += field('Opposite clicks',
+      '<label class="check"><input type="checkbox" class="s-closefirst"' +
+      (reduce ? ' checked' : '') + '> reduce before opening</label>' +
+      '<div class="hint">' + (reduce
+        ? 'ON (default): a click the other way CLOSES open tickets ' +
+          'first, oldest first, taking the last one in part. These ' +
+          'accounts are hedging, so MT5 never nets — without this, ' +
+          'covering a short leaves you holding a short AND a long, ' +
+          'both paying carry. On a mixed book a click that ADDS to ' +
+          'the net still clears an opposite ticket: the net moves by ' +
+          'what you clicked either way, but that part CROSSES when ' +
+          'the level prints instead of earning it.'
+        : 'OFF: every click purely OPENS. On a hedging account that ' +
+          'stacks a second, opposite ticket beside what you already ' +
+          'have — both live, both paying carry.') + '</div>');
     html += field('Slippage protection (ticks)',
       '<input class="s-protection" type="number" min="0" step="0.5" ' +
       'value="' + escape(settings.MARKET_PROTECTION_TICKS) + '">' +
@@ -933,6 +952,7 @@
     var fields = {
       CONFIRM_MARKET_CLICKS: panel.querySelector('.s-confirm').checked,
       CLICK_CONVENTION: panel.querySelector('.s-click').value,
+      CLOSE_FIRST: panel.querySelector('.s-closefirst').checked,
       MARKET_PROTECTION_TICKS: number('.s-protection'),
       ROW_HEIGHT_PX: number('.s-rowheight'),
       COMMAND_POLL_SEC: number('.s-drain'),

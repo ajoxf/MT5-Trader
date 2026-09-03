@@ -2275,6 +2275,7 @@
         heldReason = heldReason || heldOff[order.order_id] || null;
       });
       var workQuote = work ? quoteFor[work.order_id] : null;
+      var afterQty = (workQuote && workQuote.open_after) || 0;
       cells += '<td class="work' +
         (work ? ' ' + work.side.toLowerCase() : '') +
         (heldReason ? ' held' : '') +
@@ -2289,6 +2290,18 @@
               '. Click to add another; right-click to pull one.') +
           '"' : '') + '>' +
         (workQty ? workQty : '') +
+        // WHAT THIS CLICK STILL OWES. A reducing click bigger than the
+        // position it covers holds the rest back until the close has
+        // gone through — one instruction, in order. The held part was
+        // in the engine and NOWHERE on the screen: a trader who
+        // clicked 100 over a 93 saw '93' and no sign that 7 more were
+        // coming, waiting, or quietly dropped.
+        (afterQty ? '<span class="after" title="' +
+          escapeHtml(afterQty + ' more to OPEN here, held back until this '
+                     + 'close goes through. One click is one instruction, '
+                     + 'in order: resting it now would put the new '
+                     + 'position on before the old one came off.') +
+          '">+' + afterQty + '</span>' : '') +
         (ghostQty ? '<span class="ghost" title="sent — waiting for the ' +
           'engine">' + ghostQty + '</span>' : '') + '</td>';
       // MT5 publishes no depth for a spread, so only the touch is real.
@@ -2730,7 +2743,15 @@
         html += '<td>' + (row.name || key) + '</td>';
         html += '<td>' + order.side + '</td>';
         html += '<td>' + fmt(order.level, 4) + '</td>';
-        html += '<td>' + (order.quantity - order.filled_quantity) + '</td>';
+        // The size WORKING, and beside it what this click still owes:
+        // a reducing click bigger than the position it covers holds
+        // the rest back until the close has gone through, and that
+        // part was on no panel at all.
+        html += '<td>' + (order.quantity - order.filled_quantity) +
+          (quote.open_after
+            ? ' <span class="after" title="held back until this close '
+              + 'goes through">+' + quote.open_after + '</span>'
+            : '') + '</td>';
         html += '<td>' + order.time_in_force + '</td>';
         html += '<td>' + order.state + '</td>';
         html += '<td>' + (quote.ticket || DASH) + '</td>';
@@ -3293,9 +3314,16 @@
       (pairs[key].dead_orders || []).forEach(function (order) {
         if (state.reported[order.order_id]) { return; }
         state.reported[order.order_id] = true;
+        // A REFUSAL AND A WITHDRAWAL ARE NOT THE SAME NEWS. The
+        // broker rejecting a pending is a fault and stays on the
+        // screen until it is read. An order CANCELLED — by the
+        // trader's own next click, by a sweep, by AutoRouting
+        // standing down — is the system doing as it was told, and
+        // dressing it as an alarm taught the desk to dismiss alarms.
         toast((pairs[key].name || key) + ': ' + order.side + ' ' +
               order.quantity + ' at ' + fmt(order.level, 4) + ' — ' +
-              order.state.toLowerCase() + '. ' + order.reason);
+              order.state.toLowerCase() + '. ' + order.reason,
+              order.state === 'CANCELLED' ? 'ok' : undefined);
       });
     });
   }

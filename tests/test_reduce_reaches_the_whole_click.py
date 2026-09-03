@@ -168,3 +168,76 @@ def test_a_resting_reduce_bigger_than_the_book_still_says_what_it_opens(
 
     assert answer['remainder'] == pytest.approx(3.0)
     assert 'then open 3' in answer['reason']
+
+
+# -- the desk's screen, 2026-09-03, after the fix --------------------------
+
+def test_a_click_that_ADDS_to_the_net_still_clears_the_opposite_ticket(
+        engine, pair):
+    """Short 1707 across one BUY of 93 and the sells behind it; SELL 100
+    clicked. The answer was "CLOSE 1 position(s), then open 7", and it
+    is right — though it does not look it at first.
+
+    The 93 long and 93 of the click cancel: closing the ticket and
+    opening 93 more shorts reach the same net, and closing takes the
+    margin and the financing off both sides instead of stacking a third
+    position on a hedging account. The net moves by exactly the 100 the
+    trader asked for.
+
+    What is NOT obvious, and is now on the screen: the other 7 are held
+    back until that close goes through. One click is one instruction,
+    in order.
+    """
+    coordinator = engine
+    a_short_of(coordinator, pair, 200.0)
+    # The 93-lot LONG the desk was carrying, made last so the short
+    # above cannot reduce it while the book is being set up.
+    long_93 = a_short_of(coordinator, pair, 93.0)
+    long_93.side = SpreadSide.BUY
+
+    net, _avg = coordinator.book.net_position(pair.key)
+    assert net == pytest.approx(-107.0)
+
+    answer = coordinator.click(pair.key, SpreadSide.SELL, 8.11, 100.0)
+
+    assert answer['ok'] and answer['reducing'] is True
+    # ONE closing order, for the whole 93 — not "as much as fits".
+    resting = coordinator.book.orders_for_position(long_93.position_id)
+    assert len(resting) == 1 and resting[0].quantity == pytest.approx(93.0)
+    # ...and the remainder is held on it, not rested beside it.
+    assert answer['remainder'] == pytest.approx(7.0)
+    assert len(coordinator.book.orders(pair.key)) == 1, (
+        'the remainder was rested as its own order — that gives it a '
+        'different engine from the close and opens before it')
+
+
+def test_the_remainder_is_PUBLISHED_so_the_screen_can_show_it(engine, pair):
+    """It was intent the engine held and nothing reported. A trader who
+    clicked 100 saw 93 and had no way to learn the other 7 existed."""
+    coordinator = engine
+    position = a_short_of(coordinator, pair, 2.0)
+    position.side = SpreadSide.BUY
+
+    coordinator.click(pair.key, SpreadSide.SELL, 8.11, 5.0)
+
+    quote = [q for q in coordinator.quoter.snapshot(pair.key)
+             if q['intent'] == 'CLOSE'][0]
+    assert quote['open_after'] == pytest.approx(3.0)
+
+
+def test_turning_CLOSE_FIRST_off_makes_a_click_purely_an_OPEN(engine, pair):
+    """The control, and the way out for a desk that wants a click to
+    mean only what it says. Off, nothing is closed and the whole click
+    opens — on a hedging account that stacks an opposite ticket, which
+    is the trade-off and why it is on by default."""
+    coordinator = engine
+    position = a_short_of(coordinator, pair, 93.0)
+    position.side = SpreadSide.BUY
+    coordinator.config.settings['CLOSE_FIRST'] = False
+
+    answer = coordinator.click(pair.key, SpreadSide.SELL, 8.11, 100.0)
+
+    assert answer['ok'] and not answer.get('reducing')
+    assert coordinator.book.orders_for_position(position.position_id) == []
+    assert coordinator.book.orders(pair.key)[0].quantity == \
+        pytest.approx(100.0)

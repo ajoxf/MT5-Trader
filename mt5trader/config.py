@@ -208,11 +208,24 @@ DEFAULT_SETTINGS = {
     #: does too — by closing tickets OLDEST FIRST, which is what the
     #: broker cannot do for us.
     #:
-    #: A position is only closed when it fits entirely inside the click
-    #: being made. Anything left over opens normally, so a reduce can
-    #: never over-close and flip the net the other way.
+    #: Tickets are taken oldest first, and the LAST one is taken in
+    #: PART — as far as the click reaches and no further. A reduce can
+    #: therefore never over-close and flip the net the other way, and
+    #: never under-close and open the rest the wrong way either. Only
+    #: what the click cannot cover opens, and it opens after the close
+    #: has actually gone through.
     #:
-    #: OFF restores the old behaviour exactly: every click opens.
+    #: Note what this means on a MIXED book: a click that ADDS to the
+    #: net still clears an opposite ticket first. Short 107 across a
+    #: 93 long and a 200 short, SELL 100 clicked, closes the 93 and
+    #: opens 7. The net moves by the 100 asked for either way, and
+    #: closing takes the margin and the financing off both sides
+    #: instead of stacking a third ticket. What it costs is that the
+    #: 93 CROSSES when the level prints rather than earning it.
+    #:
+    #: OFF makes every click purely an open — on a hedging account
+    #: that stacks the opposite ticket, which is the trade-off and why
+    #: it is on by default.
     'CLOSE_FIRST': True,
     #: Ladder row height in pixels. 17 is the reference screen's; a
     #: bigger target is a faster, safer click on a large monitor.

@@ -799,6 +799,19 @@ td.work.held {
   font-style: italic;
   box-shadow: inset 0 0 0 2px #d9a520;
 }
+/* Spreads this click still owes, held back until its close goes
+ * through. Not a working order — it is not at any broker and it is not
+ * in the W count — so it is marked as what it is: the rest of an
+ * instruction, waiting its turn. */
+td.work .after, table .after {
+  margin-left: 3px;
+  padding: 0 2px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #5a3d00;
+  background: #f3e2b8;
+  border-radius: 2px;
+}
 td.work.pending .ghost {
   display: inline-block;
   margin-left: 3px;
@@ -1192,7 +1205,15 @@ table.keys td { padding: 2px 0; font-size: 12px; }
   font-size: 11px;
   cursor: pointer;
 }
-.toast.ok { border-left-color: var(--traded); }
+/* An OUTCOME, not a fault. A 4px stripe was the only thing telling
+ * the two apart, so "resting at 8.11 to close 1 position(s)" — the
+ * system doing exactly as it was told — looked like the broker
+ * refusing something, and a desk that reads every notice as an alarm
+ * stops reading them. This one is tinted, and it clears itself. */
+.toast.ok {
+  border-left-color: var(--traded);
+  background: #edf7ee;
+}
 .toast .dismiss { float: right; color: var(--muted); }
 
 /* -- settings: accounts and pairs ------------------------------------ */

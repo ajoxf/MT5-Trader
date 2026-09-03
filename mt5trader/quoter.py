@@ -136,6 +136,12 @@ class QuoteGroup:
                 'ticket': self.ticket, 'price': self.price,
                 'volume': self.volume, 'repegs': self.repegs,
                 'quantity': self.quantity, 'reason': self.reason,
+                # Spreads this click will OPEN once the close goes
+                # through. It is intent the engine is holding and the
+                # screen showed NOWHERE: a trader who clicked 100 saw
+                # 93 in the Work cell and had no way to learn the other
+                # 7 existed, was waiting, or had been dropped.
+                'open_after': self.open_after,
                 'escalated': self.escalated,
                 'orders': [o.order_id for o in self.orders]}
 
