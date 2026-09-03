@@ -220,9 +220,23 @@ def main():
                              'localhost and reach it through a tunnel')
     parser.add_argument('--no-web', action='store_true',
                         help='engine only, no browser UI')
+    parser.add_argument('--print-shortcut', action='store_true',
+                        help='print the command a desktop shortcut should '
+                             'run, and exit — the installer uses this so '
+                             'the shortcut and the launcher cannot drift '
+                             'apart about what "open Nexus" means')
     parser.add_argument('--no-browser', action='store_true',
                         help='do not open a browser window')
     args = parser.parse_args()
+
+    if args.print_shortcut:
+        # Before anything else starts: this answers a question and
+        # trades nothing.
+        from mt5trader import appwindow
+        line = appwindow.shortcut_target(
+            f'http://127.0.0.1:{args.web_port}/')
+        print(line or '')
+        return 0 if line else 1
 
     made = first_run(args.config)
     for path in made:
@@ -255,12 +269,10 @@ def main():
         print(f'[launcher] the screen is at {url}')
         if not args.no_browser:
             time.sleep(2.0)
-            try:
-                import webbrowser
-                webbrowser.open(url)
-            except Exception as e:                 # a headless box
-                print(f'[launcher] could not open a browser ({e}) — '
-                      f'browse to {url}')
+            # A WINDOW OF ITS OWN, not a tab. See mt5trader/appwindow.py
+            # for why that matters on a screen that sends live orders.
+            from mt5trader import appwindow
+            appwindow.open_window(url)
 
     engine = Engine(args)
     fingerprint = None
