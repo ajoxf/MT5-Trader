@@ -361,6 +361,103 @@ def css_var_rgb(locator, name):
         }""", name)
 
 
+def test_both_columns_are_painted_on_EVERY_row_not_just_at_the_market(page):
+    """A TT ladder's Bids column is solid blue top to bottom and its
+    Asks column solid red, always.
+
+    Ours painted blue only from the best bid DOWN and red only from the
+    best offer UP, so both edges were touch prices and the blocks grew
+    and shrank with every tick. That is movement the row freeze cannot
+    reach, because the rows were never what was moving.
+    """
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr')
+    rows = page.locator('.ladder .grid tbody tr')
+    assert rows.count() >= 6, 'not enough rows to prove anything'
+
+    # Rows the OLD rule left bare: neither in-bid nor in-ask — the ones
+    # between the two touches.
+    bare = page.locator(
+        '.ladder .grid tbody tr:not(.in-bid):not(.in-ask)')
+    assert bare.count() > 0, (
+        'no row sits between the touches, so this cannot show the '
+        'difference — widen the spread in the fixture')
+
+    for index in range(min(bare.count(), 4)):
+        row = bare.nth(index)
+        bid = row.locator('td.bid')
+        ask = row.locator('td.ask')
+        assert is_blue(bid.evaluate('n => getComputedStyle(n).backgroundColor')), (
+            'a row between the touches has an unpainted Bids cell')
+        assert is_red(ask.evaluate('n => getComputedStyle(n).backgroundColor')), (
+            'a row between the touches has an unpainted Asks cell')
+
+
+def test_the_columns_do_not_change_size_when_the_market_moves(page):
+    """The band edges were the touches, so they walked. Count the
+    painted cells before and after moving the market: the number must
+    not change, because every row is painted either way."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr')
+
+    def painted():
+        return page.evaluate("""() => {
+            const rows = document.querySelectorAll(
+                '.ladder .grid tbody tr');
+            let blue = 0, red = 0;
+            rows.forEach(tr => {
+                const b = tr.querySelector('td.bid');
+                const a = tr.querySelector('td.ask');
+                if (b && getComputedStyle(b).backgroundColor !==
+                    'rgba(0, 0, 0, 0)') { blue += 1; }
+                if (a && getComputedStyle(a).backgroundColor !==
+                    'rgba(0, 0, 0, 0)') { red += 1; }
+            });
+            return [blue, red, rows.length];
+        }""")
+
+    rows_in_bid = page.locator('.ladder .grid tbody tr.in-bid').count()
+    before = painted()
+    assert before[0] == before[2] and before[1] == before[2], (
+        f'not every row is painted: {before[0]} blue and {before[1]} red '
+        f'of {before[2]} rows')
+
+    # Walk the market a long way, on every poll, so the touches land
+    # well away from where they were.
+    page.evaluate("""() => {
+        if (!window.__mkReal) { window.__mkReal = window.fetch; }
+        const real = window.__mkReal;
+        window.fetch = function (url, options) {
+            const answer = real(url, options);
+            if (String(url).indexOf('/api/status') < 0) { return answer; }
+            return answer.then(r => r.json()).then(body => {
+                Object.keys(body.pairs || {}).forEach(k => {
+                    const m = body.pairs[k].market;
+                    if (!m) { return; }
+                    if (m.short_spread != null) { m.short_spread += 0.40; }
+                    if (m.long_spread != null) { m.long_spread += 0.40; }
+                });
+                return new Response(JSON.stringify(body), {
+                    status: 200,
+                    headers: {'Content-Type': 'application/json'}});
+            });
+        };
+    }""")
+    page.wait_for_timeout(700)
+    try:
+        moved = page.locator('.ladder .grid tbody tr.in-bid').count()
+        assert moved != rows_in_bid, (
+            'the touches did not actually move, so this proves nothing')
+        after = painted()
+        assert after[0] == after[2] and after[1] == after[2], (
+            f'the painted region changed size when the market moved: '
+            f'{after[0]} blue and {after[1]} red of {after[2]} rows')
+    finally:
+        page.evaluate("() => { if (window.__mkReal) "
+                      "{ window.fetch = window.__mkReal; } }")
+        page.wait_for_timeout(400)
+
+
 def test_bid_is_blue_and_ask_is_red_on_the_rendered_page(page):
     # The ladder repaints three times a second; wait for a painted row
     # rather than racing one.
@@ -705,7 +802,7 @@ def test_the_settings_page_edits_accounts_and_pairs(page):
     # And a second one that tries to take the same port.
     add_account(page, 'CFI Futures', '127.0.0.1:9101')
     # An ERROR toast, which is a different thing from the success one
-    # above: it has no timer on it and waits to be dismissed by hand.
+    # above: it lasts far longer, and can still be dismissed by hand.
     page.wait_for_selector('.toast:not(.ok)')
     toast = page.text_content('.toast:not(.ok)')
     # The refusal names the account holding the port AND the one to use.
@@ -1163,6 +1260,178 @@ def test_a_window_goes_where_it_is_dragged_and_is_still_there_after_a_reload(
     assert restored['x'] == pytest.approx(after['x'], abs=2)
     assert restored['y'] == pytest.approx(after['y'], abs=2)
     tidy(page)
+
+
+def scroll_desk(page, spacer_px=400, to=100):
+    """Put the desk into the state the bug needed: SCROLLED SIDEWAYS.
+
+    A spacer before the windows makes `#desktop` (overflow-x: auto)
+    scrollable, and scrolling it moves the content origin away from the
+    visible edge. Every drag test that ran on an unscrolled desk passed
+    with the bug present, because the two origins coincide at
+    scrollLeft 0.
+    """
+    page.evaluate("""([w, to]) => {
+        const desk = document.getElementById('desktop');
+        let pad = document.getElementById('__spacer');
+        if (!pad) {
+            pad = document.createElement('div');
+            pad.id = '__spacer';
+        }
+        // AFTER the windows, so a modest scroll leaves the ladder's
+        // title bar on screen to be grabbed, and wider than the desk
+        // so there is something to scroll at all.
+        desk.appendChild(pad);
+        pad.style.cssText = 'flex:0 0 auto;height:1px;width:'
+            + (desk.clientWidth + w) + 'px';
+        desk.scrollLeft = to;
+    }""", [spacer_px, to])
+    page.wait_for_timeout(60)
+    return page.evaluate("document.getElementById('desktop').scrollLeft")
+
+
+def unscroll_desk(page):
+    page.evaluate("""() => {
+        const pad = document.getElementById('__spacer');
+        if (pad) { pad.remove(); }
+        document.getElementById('desktop').scrollLeft = 0;
+    }""")
+    page.wait_for_timeout(60)
+
+
+def test_a_window_follows_the_cursor_on_a_desk_scrolled_sideways(page):
+    """The window is positioned against the desktop's CONTENT origin,
+    and the drag used to measure from its VISIBLE edge. Those differ by
+    exactly scrollLeft, so on a scrolled desk the window jumped away
+    from the cursor — and the clamp, computed from the visible width,
+    then flung it back the other way."""
+    open_ladder(page)
+    tidy(page)
+    scrolled = scroll_desk(page)
+    assert scrolled > 0, 'the desk did not scroll, so this proves nothing'
+    try:
+        before = page.locator('.window.ladder').first.bounding_box()
+        drag(page, '.window.ladder', -150, 60)
+        after = page.locator('.window.ladder').first.bounding_box()
+        # On the SCREEN, where the hand is: dragged left 150, it moves
+        # left 150. Not right, and not by the scroll distance.
+        assert after['x'] - before['x'] == pytest.approx(-150, abs=8), (
+            f"dragged 150px left, moved {after['x'] - before['x']:+.0f}px")
+        assert after['y'] - before['y'] == pytest.approx(60, abs=8)
+    finally:
+        unscroll_desk(page)
+        tidy(page)
+
+
+def test_a_drag_on_a_scrolled_desk_moves_by_exactly_the_drag_distance(page):
+    """The other direction, and to the pixel.
+
+    The error was the scroll distance, so a loose assertion here passes
+    with the bug present. It has to be exact: drag 240, move 240.
+    """
+    open_ladder(page)
+    tidy(page)
+    scrolled = scroll_desk(page)
+    assert scrolled > 0, 'the desk did not scroll, so this proves nothing'
+    try:
+        before = page.locator('.window.ladder').first.bounding_box()
+        drag(page, '.window.ladder', 240, -40)
+        after = page.locator('.window.ladder').first.bounding_box()
+        assert after['x'] - before['x'] == pytest.approx(240, abs=8), (
+            f"dragged 240px right, moved {after['x'] - before['x']:+.0f}px "
+            f'on a desk scrolled {scrolled}px')
+    finally:
+        unscroll_desk(page)
+        tidy(page)
+
+
+def test_ticking_lock_tells_the_ENGINE_and_not_only_the_browser(page):
+    """Lock has to reach the server, or the two things that actually
+    move a price off its row — the anchor and the row window — carry on
+    following the market under a ladder the trader believes is still."""
+    open_ladder(page)
+    sent = []
+    page.expose_binding('__sawSend', lambda source, body: sent.append(body))
+    page.evaluate("""() => {
+        if (!window.__sendReal) { window.__sendReal = window.fetch; }
+        const real = window.__sendReal;
+        window.fetch = function (url, options) {
+            if (String(url).indexOf('/api/command') >= 0 && options) {
+                try { window.__sawSend(String(options.body)); } catch (e) {}
+            }
+            return real(url, options);
+        };
+    }""")
+    box = page.locator('.ladder .lock-scroll').first
+    was = box.is_checked()
+    box.set_checked(not was)
+    page.wait_for_timeout(300)
+    try:
+        assert any('lock_ladder' in body for body in sent), (
+            'ticking Lock sent no lock_ladder command: the engine never '
+            f'heard about it. Commands seen: {sent}')
+    finally:
+        box.set_checked(was)
+        page.wait_for_timeout(200)
+        page.evaluate("() => { if (window.__sendReal) "
+                      "{ window.fetch = window.__sendReal; } }")
+
+
+def test_an_error_toast_is_given_a_timer_so_refusals_stop_stacking(page):
+    """Errors used to stay until dismissed, on purpose — so a refusal
+    could not scroll past unread. But a refusal that REPEATS (a broker
+    refusing every order) built a wall of identical boxes over the
+    ladder, each needing its own click, burying the market behind the
+    message about it.
+
+    Driven through a REAL refusal rather than a test-only hook, so it
+    also proves the toast that a live rejection produces is the one
+    that clears.
+    """
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+
+    # Capture what setTimeout is asked for, and never let it fire, so
+    # the assertion does not cost ten seconds of real time.
+    page.evaluate("""() => {
+        window.__delays = [];
+        window.__realTimeout = window.setTimeout;
+        window.setTimeout = function (fn, ms) {
+            window.__delays.push(ms);
+            return window.__realTimeout(fn, 999999);
+        };
+    }""")
+    try:
+        add_account(page, 'Toast A', '127.0.0.1:9401', login='7001')
+        page.wait_for_selector('tr[data-account="Toast A"]')
+        # The same port twice: a real, engine-worded refusal.
+        add_account(page, 'Toast B', '127.0.0.1:9401')
+        page.wait_for_selector('.toast:not(.ok)')
+
+        delays = page.evaluate('() => window.__delays')
+        assert delays, 'the error toast was given no timer at all'
+        longest = max(delays)
+        assert 5000 <= longest <= 20000, (
+            f'{longest}ms is not "readable, then gone": {delays}')
+    finally:
+        page.evaluate("""() => {
+            if (window.__realTimeout) { window.setTimeout = window.__realTimeout; }
+            document.getElementById('toasts').innerHTML = '';
+        }""")
+
+
+def test_a_success_toast_still_clears_sooner_than_an_error(page):
+    """The control. An error must OUTLAST a success — otherwise the fix
+    is just "everything vanishes fast", which is the opposite problem.
+    """
+    source = page.evaluate("""async () => {
+        const r = await fetch('/static/app.js');
+        return await r.text();
+    }""")
+    assert "kind === 'ok' ? 4000 : 10000" in source, (
+        'the two durations are no longer the success-then-error pair '
+        'this test was written against')
 
 
 def test_a_window_can_never_be_dropped_where_it_cannot_be_got_back(page):
@@ -3377,3 +3646,122 @@ def test_closing_at_a_price_is_refused_on_a_flat_ladder(page):
     # An error toast stays until it is dismissed, and this page is
     # shared with every other test in the file.
     page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+
+
+def click_side_at(page, column, convention, index=4):
+    """Click a bids/asks cell and return (side, level) actually sent.
+
+    The convention is set immediately before the click: the 300ms poll
+    replaces state.snapshot wholesale, and the fixture's status.json
+    carries no click_convention, so a value injected earlier is gone by
+    the time the next click lands. The live engine writes it into every
+    snapshot, so this is a harness detail only.
+    """
+    set_convention(page, convention)
+    cell = page.locator(
+        '.ladder .grid tbody tr[data-level] td.' + column).nth(index)
+    level = float(cell.evaluate('n => n.closest("tr").dataset.level'))
+    before = command_count(page)
+    cell.click()
+    page.wait_for_timeout(300)
+    assert command_count(page) == before + 1, 'no order was sent'
+    sent = last_command(page)
+    return sent['payload']['side'], sent['payload']['level'], level
+
+
+def set_convention(page, value):
+    """Make EVERY poll carry the convention.
+
+    Setting it on state.snapshot alone loses the race: /api/status
+    arrives three times a second and replaces the snapshot wholesale,
+    so the value can be gone before the click lands. The live engine
+    puts it in every snapshot, so stamping it onto the response is the
+    faithful thing to simulate.
+    """
+    page.evaluate("""(v) => {
+        window.__conv = v;
+        // No one-time guard: other tests in this file swap window.fetch
+        // for stubs of their own and restore it afterwards, which can
+        // drop this patch. Reinstalling from whatever fetch is current
+        // survives that in any order.
+        if (!window.__convReal) { window.__convReal = window.fetch; }
+        const real = window.__convReal;
+        window.fetch = function (url, options) {
+            const answer = real(url, options);
+            if (String(url).indexOf('/api/status') < 0) { return answer; }
+            return answer.then(r => r.json()).then(body => {
+                body.click_convention = window.__conv;
+                return new Response(JSON.stringify(body), {
+                    status: 200,
+                    headers: {'Content-Type': 'application/json'}});
+            });
+        };
+    }""", value)
+    # One full poll, so the patched response is the one on screen.
+    page.wait_for_timeout(400)
+
+
+def test_the_tt_convention_buys_from_the_bids_column(page):
+    """TT's price ladder: clicking BIDS joins the bid, which is a
+    resting BUY. This app read the other way, so every click a trader
+    arriving from TT made was the opposite of the one they meant."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody td.bid', timeout=5000)
+    set_convention(page, 'TT')
+
+    side, sent_level, clicked = click_side_at(page, 'bid', 'TT')
+    assert side == 'BUY'
+    assert sent_level == clicked, 'the price moved between click and send'
+
+    side, sent_level, clicked = click_side_at(page, 'ask', 'TT')
+    assert side == 'SELL'
+    assert sent_level == clicked
+
+
+def test_the_touch_convention_is_the_other_way_round(page):
+    """The CONTROL. A setting that sent the same side either way would
+    be a switch that does nothing."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody td.bid', timeout=5000)
+    set_convention(page, 'TOUCH')
+
+    side, _, _ = click_side_at(page, 'bid', 'TOUCH')
+    assert side == 'SELL'
+    side, _, _ = click_side_at(page, 'ask', 'TOUCH')
+    assert side == 'BUY'
+
+
+def test_the_tooltip_says_what_the_click_will_do(page):
+    """A tooltip promising BUY while the click sends SELL is worse than
+    no tooltip at all."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody td.bid', timeout=5000)
+
+    for convention, on_bid, on_ask in (('TT', 'BUY', 'SELL'),
+                                       ('TOUCH', 'SELL', 'BUY')):
+        set_convention(page, convention)
+        bid = page.get_attribute('.ladder .grid tbody td.bid', 'title')
+        ask = page.get_attribute('.ladder .grid tbody td.ask', 'title')
+        assert bid.startswith('Click: ' + on_bid), (convention, bid)
+        assert ask.startswith('Click: ' + on_ask), (convention, ask)
+        # And the leg wording follows the side, not the column.
+        assert ('buy leg B' in bid) == (on_bid == 'BUY')
+
+
+def test_the_buy_and_sell_buttons_ignore_the_convention(page):
+    """They name their own side. If the switch moved them too, the one
+    unambiguous way to get in would become ambiguous."""
+    open_ladder(page)
+    page.wait_for_selector('.ladder .buy-touch', timeout=5000)
+
+    sides = {}
+    for convention in ('TT', 'TOUCH'):
+        set_convention(page, convention)
+        before = command_count(page)
+        set_convention(page, convention)
+        page.click('.ladder .buy-touch')
+        page.wait_for_timeout(300)
+        assert command_count(page) == before + 1
+        sides[convention] = last_command(page)['payload']['side']
+
+    assert sides == {'TT': 'BUY', 'TOUCH': 'BUY'}, sides

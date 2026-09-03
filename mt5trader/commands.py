@@ -189,6 +189,18 @@ class CommandRunner:
         self.coordinator.recentre_ladder(payload['pair'])
         return {'ok': True, 'pair': payload['pair']}
 
+    def _do_lock_ladder(self, payload):
+        """Hold this pair's price window still, or release it.
+
+        The engine has to know, not just the browser: the anchor and
+        the row window are built server-side, and a Lock the engine
+        never hears about leaves both of them following the market
+        under a ladder the trader believes is still.
+        """
+        locked = self.coordinator.lock_ladder(payload['pair'],
+                                              payload.get('locked'))
+        return {'ok': True, 'pair': payload['pair'], 'locked': locked}
+
     def _do_cancel_order(self, payload):
         return self.coordinator.cancel_order(payload['order_id'])
 
@@ -249,6 +261,14 @@ class CommandRunner:
     HOT_SETTINGS = {
         'CONFIRM_MARKET_CLICKS': lambda v: bool(v),
         'ROW_HEIGHT_PX': lambda v: max(12, min(40, int(v))),
+        #: Anything unrecognised falls back to TT rather than
+        #: leaving the ladder with no convention at all.
+        #: Hot, because a desk that wants its old behaviour back in a
+        #: hurry should not have to restart the engine to get it.
+        'CLOSE_FIRST': lambda v: str(v).strip().lower() not in
+            ('0', 'false', 'no', 'off', ''),
+        'CLICK_CONVENTION': lambda v: (
+            'TOUCH' if str(v).strip().upper() == 'TOUCH' else 'TT'),
         'MARKET_PROTECTION_TICKS': float,
         'CLICK_AWAY_RESTS': lambda v: bool(v),
         'REFUSE_SHARED_ACCOUNT': lambda v: bool(v),

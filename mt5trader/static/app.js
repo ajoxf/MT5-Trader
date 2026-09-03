@@ -110,10 +110,20 @@
     box.className = 'toast' + (kind === 'ok' ? ' ok' : '');
     box.innerHTML = '<span class="dismiss">&times;</span>';
     box.appendChild(document.createTextNode(message));
-    // Errors stay until dismissed, on purpose.
+    // Errors used to stay until dismissed, on purpose — so that a
+    // refusal could not scroll past unread. But a refusal that REPEATS
+    // (a broker refusing every order, a leg that will not quote) built
+    // a wall of identical boxes over the ladder, each needing its own
+    // click. That buries the market behind the message about it.
+    //
+    // So errors clear too, just slower: long enough to read twice,
+    // and still dismissable on click. Anything that must not be missed
+    // belongs in the checklist or the banner, which persist properly,
+    // rather than in a box that was always going to disappear.
     box.addEventListener('click', function () { box.remove(); });
     el('toasts').appendChild(box);
-    if (kind === 'ok') { window.setTimeout(function () { box.remove(); }, 4000); }
+    window.setTimeout(function () { box.remove(); },
+                      kind === 'ok' ? 4000 : 10000);
   }
 
   function ask(title, body, confirmLabel, onConfirm) {
@@ -355,16 +365,42 @@
     return el('desktop').getBoundingClientRect();
   }
 
+  function desktopOrigin() {
+    /* Where a floating window's `left: 0` actually SITS on the screen.
+     *
+     * The desktop scrolls sideways (`overflow-x: auto`) and is the
+     * containing block for every floating window, so `style.left` is
+     * measured from the scrolled CONTENT origin. A bounding rect is
+     * measured from the VISIBLE edge. Those two differ by exactly
+     * `scrollLeft`, and a drag that reads one and writes the other
+     * moves the window by the scroll distance in the wrong direction
+     * — which reads as a window that runs away from the cursor.
+     */
+    var node = el('desktop');
+    var rect = node.getBoundingClientRect();
+    return {left: rect.left - node.scrollLeft,
+            top: rect.top - node.scrollTop};
+  }
+
   function clampTo(node, left, top) {
-    var desktop = desktopBox();
+    var desktop = el('desktop');
     var width = node.offsetWidth || 200;
+    // The right-hand stop is the edge of what the trader can SEE right
+    // now, which is the scrolled viewport rather than the desktop's
+    // own width. Clamping to the width alone pinned every window into
+    // the first screenful: drag one past the fold and it sprang back.
+    // Deliberately NOT scrollWidth — a floating window contributes to
+    // that, so the ceiling would grow as the window approached it and
+    // the window would never stop.
+    var rightStop = desktop.scrollLeft + desktop.clientWidth
+      - KEEP_VISIBLE_PX;
+    var bottomStop = desktop.scrollTop + desktop.clientHeight - 24;
     return {
       left: Math.min(Math.max(left, KEEP_VISIBLE_PX - width),
-                     Math.max(desktop.width - KEEP_VISIBLE_PX, 0)),
+                     Math.max(rightStop, 0)),
       // Never above the desktop: a title bar under the banner cannot be
       // grabbed at all.
-      top: Math.min(Math.max(top, 0),
-                    Math.max(desktop.height - 24, 0))
+      top: Math.min(Math.max(top, 0), Math.max(bottomStop, 0))
     };
   }
 
@@ -408,6 +444,11 @@
 
   function floatByDefault(node, id) {
     var desktop = desktopBox();
+    // Sizes come from the VISIBLE desktop; positions are written in
+    // content coordinates, so they are measured from the scrolled
+    // origin. Mixing the two puts a tool window off-screen the moment
+    // the desk has been scrolled sideways.
+    var origin = desktopOrigin();
     if (!desktop.width) { return; }
     var wanted = size(node,
                       Math.min(1180, Math.max(desktop.width - 80, 320)),
@@ -423,10 +464,11 @@
       function (ladder) {
         if (ladder.classList.contains('floating')) { return; }
         var box = ladder.getBoundingClientRect();
-        free = Math.max(free, box.right - desktop.left + 8);
+        free = Math.max(free, box.right - origin.left + 8);
       });
     var left = Math.max(Math.min(free + index * 24,
-                                 desktop.width - wanted.w - 8), 8);
+                                 el('desktop').scrollLeft + desktop.width
+                                 - wanted.w - 8), 8);
     var top = Math.min(30 + index * 24,
                        Math.max(desktop.height - wanted.h - 8, 0));
     var at = place(node, left, top);
@@ -530,7 +572,7 @@
     if (e.target.closest('button, select, input, a')) { return; }
 
     var box = node.getBoundingClientRect();
-    var desktop = desktopBox();
+    var desktop = desktopOrigin();
     var grabX = e.clientX - box.left;
     var grabY = e.clientY - box.top;
     var startX = e.clientX;
@@ -555,7 +597,10 @@
         place(node, box.left - desktop.left, box.top - desktop.top);
         raise(node);
       }
-      var frame = desktopBox();
+      // Re-read every move: a drag that reaches the edge scrolls the
+      // desktop under the window, and an origin captured at grab time
+      // would then be stale by exactly that scroll.
+      var frame = desktopOrigin();
       var at = place(node, event.clientX - grabX - frame.left,
                      event.clientY - grabY - frame.top);
       layout[panelIdOf(node)].left = at.left;
@@ -733,7 +778,7 @@
       });
 
     node.querySelector('.lock-scroll').addEventListener('change', function (e) {
-      state.locked[key] = e.target.checked;
+      setLocked(key, e.target.checked);
     });
     node.querySelector('.recentre').addEventListener('click', function () {
       // Both halves: the ENGINE re-anchors the price window (the rows
@@ -840,13 +885,9 @@
       var row = cell.closest('tr');
       var level = parseFloat(row.dataset.level);
       if (cell.classList.contains('ask')) {
-        // The ASK side is where you BUY the spread: buy leg B, sell
-        // leg A. The Bids side is the other way round. This mapping is
-        // the desk's, and every colour, tooltip and button on the
-        // window follows it.
-        clickLevel(key, 'BUY', level);
+        clickLevel(key, sideForColumn('ask'), level);
       } else if (cell.classList.contains('bid')) {
-        clickLevel(key, 'SELL', level);
+        clickLevel(key, sideForColumn('bid'), level);
       } else if (cell.classList.contains('work')) {
         // ADD one more at this level, on the side already resting
         // there. Clicking your own working order to DESTROY it is the
@@ -898,6 +939,43 @@
       (quote.crosses_leg
         ? ' — leg ' + quote.crosses_leg + ' crosses at market when it fills'
         : '');
+  }
+
+  function sideForColumn(column) {
+    /* Which SIDE a click in the bids or asks column sends.
+     *
+     * TT (default): the price-ladder convention every desk arrives
+     * with — clicking BIDS joins the bid, which is a resting BUY, and
+     * clicking ASKS joins the offer, which is a resting SELL.
+     * TOUCH: the hit/lift reading — clicking ASKS lifts the offer.
+     *
+     * This is the ONLY place the mapping exists. It changes nothing
+     * else: the level comes from the row that was clicked, and the
+     * side reaches the engine already decided, so sizing, hedging and
+     * execution are identical either way. The BUY and SELL buttons and
+     * the B/S keys name their side outright and never come through
+     * here.
+     */
+    // Absent means TOUCH, matching the engine's own default. The
+    // fallback has to be the conservative one: a snapshot from before
+    // this setting existed, or one that arrives without it, must send
+    // exactly the side it always did rather than silently inverting
+    // every click on the screen.
+    var tt = state.snapshot.click_convention === 'TT';
+    if (column === 'ask') { return tt ? 'SELL' : 'BUY'; }
+    return tt ? 'BUY' : 'SELL';
+  }
+
+  function clickHint(column, level) {
+    /* What this cell will actually DO, in the words of the convention
+     * in force. A tooltip that says BUY while the click sends SELL is
+     * worse than no tooltip at all, so it is built from the same
+     * mapping the click uses rather than written out twice. */
+    var side = sideForColumn(column);
+    var legs = side === 'BUY' ? 'buy leg B, sell leg A'
+                              : 'sell leg B, buy leg A';
+    return 'Click: ' + side + ' the spread at ' + fmt(level, 4) +
+      ' (' + legs + ')';
   }
 
   function clickLevel(key, side, level) {
@@ -1364,6 +1442,15 @@
   function renderLadder(key, row) {
     var node = ladderNode(key);
     var market = row.market || {};
+    // The ENGINE holds the lock; the browser only shows it. On the
+    // first draw of a pair — a reload, or a second screen — adopt what
+    // the engine reports rather than starting unticked over a window
+    // the engine is still holding still.
+    if (state.locked[key] === undefined) {
+      state.locked[key] = !!row.ladder_locked;
+      var first = node.querySelector('.lock-scroll');
+      if (first) { first.checked = state.locked[key]; }
+    }
     node.classList.toggle('mode-market', row.order_type === 'MARKET');
     node.classList.toggle('inactive', state.active !== panelId('ladder', key));
     node.querySelector('.title').textContent = row.name || key;
@@ -1525,12 +1612,17 @@
       ? DASH : money(row.open_pnl);
     pnl.classList.toggle('up', row.open_pnl > 0);
     pnl.classList.toggle('down', row.open_pnl < 0);
-    // The unit and the derivation, always (a number with no unit is not
-    // checkable).
-    node.querySelector('.clip').textContent =
-      '1 spread = ' + fmt(row.clip_lots_a, 2) + ' A / ' +
-      fmt(row.clip_lots_b, 2) + ' B, ' + money(row.spread_units) +
-      ' per 1.00';
+    // HIDDEN ON REQUEST, not removed. The numbers are correct — Qty is
+    // in SPREADS and 0.01 lots is what one spread IS, from
+    // L_B = L_A x C_A / (beta x C_B) — but reading "Qty 1" and
+    // "0.01 lots" side by side reads as a contradiction on the desk.
+    // The derivation still lives in the element's tooltip. To put it
+    // back, restore this line.
+    node.querySelector('.clip').textContent = '';
+    // node.querySelector('.clip').textContent =
+    //   '1 spread = ' + fmt(row.clip_lots_a, 2) + ' A / ' +
+    //   fmt(row.clip_lots_b, 2) + ' B, ' + money(row.spread_units) +
+    //   ' per 1.00';
     node.querySelector('.errors').textContent = (row.errors || []).join(' ');
     renderLegBook(node, row, market);
     // After the books are in: the floor includes them, and they are the
@@ -2050,7 +2142,14 @@
       if (inBid) { classes.push('in-bid'); }
       if (inAsk) { classes.push('in-ask'); }
       if (line.is_best_bid) { classes.push('market-line'); }
-      if (line.is_mid) { classes.push('mid-line'); }
+      // The heavy rule marks where the market is; on a LOCKED ladder
+      // it marks the anchor instead, because the anchor is the one
+      // price on a locked ladder that is guaranteed not to move. With
+      // the rows frozen and the bands solid, a rule chasing the mid
+      // was the only thing left hopping about.
+      if (state.locked[key] ? line.is_anchor : line.is_mid) {
+        classes.push('mid-line');
+      }
       if (line.is_best_ask) { classes.push('best-ask'); }
       var isLast = lastPrint.level !== undefined &&
         Math.abs(lastPrint.level - level) < (row.increment || 1) / 2;
@@ -2087,14 +2186,12 @@
       // implies. Nothing where the brokers publish no depth — an
       // invented size is one a trader would click on.
       cells += '<td class="bid' + (line.is_best_bid ? ' has-qty' : '') +
-        '" title="Click: SELL the spread at ' + fmt(level, 4) +
-        ' (sell leg B, buy leg A)">' +
+        '" title="' + clickHint('bid', level) + '">' +
         depthText(line.bid_size, line.is_best_bid, '▲') + '</td>';
       cells += '<td class="price' + (isLast ? ' last-trade' : '') + '">' +
         fmt(level, digitsFor(row.increment)) + '</td>';
       cells += '<td class="ask' + (line.is_best_ask ? ' has-qty' : '') +
-        '" title="Click: BUY the spread at ' + fmt(level, 4) +
-        ' (buy leg B, sell leg A)">' +
+        '" title="' + clickHint('ask', level) + '">' +
         depthText(line.ask_size, line.is_best_ask, '▼') + '</td>';
       cells += '<td class="ltq' + (isLast ? ' print' : '') + '">' +
         (isLast ? fmt(lastPrint.quantity, 2) : '') + '</td>';
@@ -2114,6 +2211,24 @@
   //: window that re-centres between a mousedown and the mouseup is a
   //: window that moved the order.
   var BUSY_GRACE_MS = 1200;
+
+  function setLocked(key, locked) {
+    /* Lock, in one place, because it has to reach THREE things.
+     *
+     * The browser stops recentring its scroll; the engine stops
+     * re-anchoring the price window; and the engine stops widening
+     * that window to follow the touches. Only the first of those is
+     * local, and a Lock that did only the first is what left the
+     * ladder crawling with the box ticked.
+     */
+    locked = !!locked;
+    state.locked[key] = locked;
+    var node = document.querySelector('.ladder[data-pair="' +
+                                      cssEscape(key) + '"]');
+    var box = node && node.querySelector('.lock-scroll');
+    if (box) { box.checked = locked; }
+    send('lock_ladder', {pair: key, locked: locked});
+  }
 
   function ladderIsBusy(key) {
     /* The trader is working this ladder RIGHT NOW: the pointer is over
@@ -2296,10 +2411,12 @@
       openPanel(panelId('ladder', key));
     } else if (cell.classList.contains('bid')) {
       // Identical semantics to a ladder click, through the identical
-      // code path — a test asserts it.
-      clickLevel(key, 'SELL', row.short_spread);
+      // code path and the identical mapping — a test asserts it. The
+      // PRICE is still the one that cell displays; only the side moves
+      // with the convention.
+      clickLevel(key, sideForColumn('bid'), row.short_spread);
     } else if (cell.classList.contains('ask')) {
-      clickLevel(key, 'BUY', row.long_spread);
+      clickLevel(key, sideForColumn('ask'), row.long_spread);
     }
   }
 
@@ -3345,7 +3462,10 @@
     if (lower === 'f') { return flatten(key); }
     if (lower === 'x') { return send('cancel_where', {pair: key}); }
     if (lower === 'l') {
-      state.locked[key] = !state.locked[key];
+      // Through the same path as the tick, so the keyboard and the
+      // checkbox cannot end up disagreeing about a ladder that is
+      // held: the key used to set the flag and leave the box unticked.
+      setLocked(key, !state.locked[key]);
       return render();
     }
     if (lower === 'm') {

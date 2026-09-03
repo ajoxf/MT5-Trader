@@ -159,6 +159,43 @@ DEFAULT_SETTINGS = {
     #: under a click is how a trader clicks the wrong price, so this is
     #: a comfort setting with a real edge to it.
     'RECENTRE_SEC': 5.0,
+    #: Which COLUMN places a buy. 'TT' is the price-ladder convention
+    #: every desk arrives with: clicking the BIDS column joins the bid,
+    #: which is a resting BUY, and clicking ASKS joins the offer, which
+    #: is a resting SELL. 'TOUCH' is the hit/lift reading: clicking the
+    #: ASKS column lifts the offer and buys.
+    #:
+    #: It changes NOTHING but which column sends which side. The side
+    #: itself, the price the row carries, the sizing and the execution
+    #: are all downstream of the click and identical either way — the
+    #: BUY and SELL buttons and the B/S keys name their side outright
+    #: and are not affected at all.
+    #:
+    #: DEFAULT IS TOUCH, which is what this app has always done,
+    #: so adding the switch moves no existing click and the whole
+    #: suite — the end-to-end money path included — goes on
+    #: asserting the same thing it always did. A desk that wants
+    #: TT sets it deliberately. Flipping the DEFAULT is a
+    #: separate decision from having the switch.
+    'CLICK_CONVENTION': 'TOUCH',
+
+    #: Does a click the OPPOSITE way close what is open, or stack a
+    #: second position beside it?
+    #:
+    #: These accounts are HEDGING, so MT5 never nets: an opposite order
+    #: always opens a SECOND position, and the trader who clicked the
+    #: offer to cover a short ends up with a short and a long, both
+    #: live, both paying carry, and a ticket count nobody expected.
+    #: Every price ladder on every exchange reduces first, so this
+    #: does too — by closing tickets OLDEST FIRST, which is what the
+    #: broker cannot do for us.
+    #:
+    #: A position is only closed when it fits entirely inside the click
+    #: being made. Anything left over opens normally, so a reduce can
+    #: never over-close and flip the net the other way.
+    #:
+    #: OFF restores the old behaviour exactly: every click opens.
+    'CLOSE_FIRST': True,
     #: Ladder row height in pixels. 17 is the reference screen's; a
     #: bigger target is a faster, safer click on a large monitor.
     'ROW_HEIGHT_PX': 17,

@@ -7,7 +7,7 @@ OPENS a second position instead of closing the first.
 
 It shares AutoRouting's machinery, and that is exactly where it can go
 wrong: turning AutoRouting off pulls what AutoRouting armed, and an
-exit the TRADER rested by hand must survive that. `armed_by` is the
+exit the TRADER rested by hand must survive that. `auto_armed` is the
 whole of the distinction, so most of this file is about it.
 """
 
@@ -33,6 +33,25 @@ def market_entry(coordinator, pair, side=SpreadSide.BUY):
     return coordinator.book.positions(pair.key)[0]
 
 
+def away(coordinator, pair):
+    """A level the market cannot reach on this poll.
+
+    A resting close is held HERE and fired when the market gets to it,
+    so a level the market is already through fires at once — which is
+    the behaviour of a different test from most of these.
+    """
+    return coordinator.market[pair.key]['short_spread'] + 5.0
+
+
+def reach(coordinator, pair, gold_symbols, level):
+    """Walk leg B until the spread can be SOLD at or over `level`."""
+    _spot, future = gold_symbols
+    move = (level - coordinator.market[pair.key]['short_spread']) + 0.01
+    future.bid += move
+    future.ask += move
+    coordinator.poll_once()
+
+
 # -- what it places --------------------------------------------------------
 
 def test_it_rests_one_order_per_position_at_the_price_asked(engine, pair):
@@ -49,27 +68,42 @@ def test_it_rests_one_order_per_position_at_the_price_asked(engine, pair):
     assert resting[0].side is SpreadSide.SELL
 
 
-def test_the_closing_order_carries_the_position_it_closes(engine, pair, legs):
-    """Without the ticket this is an ENTRY on a hedging account."""
+def test_it_closes_BY_TICKET_and_rests_nothing_at_either_broker(
+        engine, pair, legs, gold_symbols):
+    """The level is held HERE. MT5 ignores `position` on a pending, so
+    an opposite limit rested at the broker OPENS a second position on a
+    hedging account instead of closing the first — that is exactly what
+    happened live. When the market reaches the level both legs are
+    closed by ticket."""
     coordinator = engine
     position = market_entry(coordinator, pair)
-    coordinator.close_at_limit(pair.key, 12.5)
+    level = away(coordinator, pair)
+    coordinator.close_at_limit(pair.key, level)
     coordinator.poll_once()
 
-    order = coordinator.book.orders_for_position(position.position_id)[0]
-    assert order.position_id == position.position_id
-    pendings = list(legs['acct_a'].broker.pendings.values()) + \
-        list(legs['acct_b'].broker.pendings.values())
-    assert pendings, 'nothing reached either broker'
-    assert any(p.get('position_ticket') for p in pendings)
+    assert coordinator.book.orders_for_position(position.position_id)
+    assert not legs['acct_a'].broker.pendings
+    assert not legs['acct_b'].broker.pendings
+
+    reach(coordinator, pair, gold_symbols, level)
+
+    assert position.is_open is False
+    assert legs['acct_a'].broker.open_positions() == []
+    assert legs['acct_b'].broker.open_positions() == []
+    closes = [e for e in legs['acct_a'].broker.sent if e['action'] == 'close']
+    assert closes and closes[-1]['ticket'] == \
+        position.leg_a.position_tickets[0]
 
 
 def test_it_is_marked_as_the_TRADER_s_order(engine, pair):
     coordinator = engine
     position = market_entry(coordinator, pair)
     coordinator.close_at_limit(pair.key, 12.5)
-    assert coordinator.book.orders_for_position(
-        position.position_id)[0].armed_by == 'trader'
+    order = coordinator.book.orders_for_position(position.position_id)[0]
+    assert order.auto_armed is False
+    # ...and the orphan sweep still sees it: a closing order left
+    # against a position that has gone fills into nothing.
+    assert coordinator.book.auto_armed_for(position.position_id) == []
 
 
 def test_nothing_crosses_now(engine, pair, legs):
@@ -77,10 +111,10 @@ def test_nothing_crosses_now(engine, pair, legs):
     control against this quietly becoming CLOSE ALL."""
     coordinator = engine
     market_entry(coordinator, pair)
-    before = len(legs['acct_b'].broker.positions)
-    coordinator.close_at_limit(pair.key, 12.5)
+    before = len(legs['acct_b'].broker.open_positions())
+    coordinator.close_at_limit(pair.key, away(coordinator, pair))
     coordinator.poll_once()
-    assert len(legs['acct_b'].broker.positions) == before
+    assert len(legs['acct_b'].broker.open_positions()) == before
 
 
 # -- what it refuses -------------------------------------------------------
@@ -155,7 +189,7 @@ def test_turning_AutoRouting_off_DOES_pull_what_AutoRouting_armed(engine,
     position = market_entry(coordinator, pair)
     coordinator.poll_once()
     armed = coordinator.book.orders_for_position(position.position_id)
-    assert len(armed) == 1 and armed[0].armed_by == 'auto'
+    assert len(armed) == 1 and armed[0].auto_armed is True
 
     pair.auto_route = False
     coordinator.work_auto_route(pair, coordinator.market.get(pair.key))

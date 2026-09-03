@@ -12,6 +12,22 @@ from collections import defaultdict
 from .models import (OrderState, SpreadSide, SyntheticOrder)
 
 
+def _side_value(side):
+    """'BUY' from a string, an enum, or anything that names a side.
+
+    One reader, because "which side is this" is asked of values that
+    arrive from three places — the command bridge (strings), the
+    quoter (enums) and the recovered book (whatever was persisted).
+    """
+    if side is None:
+        return None
+    value = getattr(side, 'value', side)
+    try:
+        return str(value).strip().upper() or None
+    except Exception:
+        return None
+
+
 class Book:
     def __init__(self):
         self._orders = {}                 # order_id -> SyntheticOrder
@@ -24,25 +40,33 @@ class Book:
     # -- working orders ---------------------------------------------------
 
     def add_order(self, pair, side, level, quantity, order_type=None,
-                  time_in_force=None, position_id=None, armed_by='trader'):
+                  time_in_force=None, position_id=None, auto_armed=False):
         order = SyntheticOrder(
             pair.key, side, level, quantity,
             order_type or pair.order_type, time_in_force or pair.time_in_force,
-            position_id=position_id, armed_by=armed_by)
+            position_id=position_id, auto_armed=auto_armed)
         self._orders[order.order_id] = order
         return order
 
-    def orders_for_position(self, position_id, working_only=True,
-                            armed_by=None):
+    def auto_armed_for(self, position_id):
+        """Only the closing orders AUTOMATION armed against a position.
+
+        What the AutoRouting switch is allowed to pull. A close the
+        trader placed by hand is not automation and does not stand
+        down with it.
+        """
+        return [o for o in self.orders_for_position(position_id)
+                if getattr(o, 'auto_armed', False)]
+
+    def orders_for_position(self, position_id, working_only=True):
         """The closing orders armed against one position.
 
-        An auto-TP left resting after its position is gone is the
-        orphan-pending incident with a GUARANTEED fill: it executes,
-        and with nothing to close it opens a naked position instead.
+        A closing order left armed after its position is gone would
+        fire at the next tick that reaches its level and close
+        something that is not there.
         """
         return [o for o in self._orders.values()
                 if o.position_id == position_id
-                and (armed_by is None or o.armed_by == armed_by)
                 and (o.is_working or not working_only)]
 
     def orders(self, pair_key=None, working_only=True):
@@ -122,6 +146,60 @@ class Book:
     def position(self, position_id):
         return self._positions.get(position_id)
 
+    def positions_to_reduce(self, pair_key, side, quantity, exclude=None):
+        """Open positions the OPPOSITE way, OLDEST FIRST, up to `quantity`.
+
+        A price ladder is expected to REDUCE before it opens: click the
+        offer while short and you are covering, not stacking a second
+        short. These accounts are HEDGING, so MT5 will never net for
+        us — an opposite order always opens a second position — which
+        means the netting has to be done here, by closing tickets.
+
+        Two rules keep it safe:
+
+        - OLDEST FIRST, which is what FIFO means and what every desk
+          expects when they say "close my position".
+        - A position is only picked when it fits ENTIRELY inside what
+          is left to reduce. `close_position` closes whole tickets, so
+          taking a bigger one would close more than the trader asked
+          for and flip their net the other way. Whatever does not fit
+          is left alone and the remainder opens normally.
+        """
+        try:
+            left = float(quantity)
+        except (TypeError, ValueError):
+            return []
+        if left <= 0:
+            return []
+        # COMPARE ON THE VALUE, never on identity.
+        #
+        # `side` arrives as a plain string ('BUY') from the command
+        # bridge and as a SpreadSide enum from the quoter. `is not`
+        # against a string is ALWAYS true, so every open position —
+        # including ones on the SAME side — looked opposite, and a
+        # second buy while long would have closed the trader's own
+        # position instead of adding to it. Caught by the end-to-end
+        # suite, which clicks BUY twice.
+        want = _side_value(side)
+        if want is None:
+            return []
+        opposite = [p for p in self.positions(pair_key)
+                    if _side_value(p.side) not in (None, want)
+                    and (exclude is None or p.position_id != exclude)]
+        opposite.sort(key=lambda p: (p.opened_at or 0, str(p.position_id)))
+        picked = []
+        for position in opposite:
+            size = float(position.quantity or 0.0)
+            if size <= 0 or size > left + 1e-9:
+                # Bigger than what is being reduced: closing it would
+                # over-close. Leave it, and leave the queue in order.
+                break
+            picked.append(position)
+            left -= size
+            if left <= 1e-9:
+                break
+        return picked
+
     def net_position(self, pair_key):
         """(net spreads, average entry spread) for one ladder.
 
@@ -144,3 +222,74 @@ class Book:
     def last_print(self, pair_key):
         prints = self.prints.get(pair_key) or []
         return prints[-1] if prints else None
+
+
+def reduce_first(book, executor, pair, side, quantity, md,
+                 exclude=None, on_closed=None):
+    """Close the tickets an opposite click covers; return what is left.
+
+    ONE implementation, called from both places a position can be
+    created: the MARKET click closes before it opens, and a resting
+    order closes when it fills. Two implementations of "which tickets
+    does this click cover" is two answers to reconcile the day they
+    disagree, on a live book.
+
+    Returns (closed position ids, quantity still to open, failure).
+
+    `failure` is None when every close asked for went through, and the
+    BROKER'S OWN WORDS when one did not. It has to be told apart from
+    "there was nothing to close": both used to return an empty list, so
+    a caller could not tell a refusal from a quiet no-op, and the
+    MARKET path opened a new position on top of one that had just
+    failed to close — which is the exact mess this feature exists to
+    prevent, and worse if the close half-executed and left a leg naked.
+
+    A close is never withheld: `close_position` consults no guard, and
+    neither does this.
+    """
+    try:
+        left = float(quantity)
+    except (TypeError, ValueError):
+        return [], quantity, None
+    closed = []
+    for position in book.positions_to_reduce(pair.key, side, left,
+                                             exclude=exclude):
+        result = executor.close_position(
+            pair, position, md, reason='reduced by an opposite click')
+        if not result.get('ok'):
+            # Stop at the first refusal rather than stepping over it.
+            # The rest of the queue is no longer the queue the trader
+            # would have closed, and opening the remainder on top of a
+            # position that would NOT close is how a reduce quietly
+            # becomes a bigger position.
+            return closed, max(left, 0.0), close_failure(result, position)
+        if on_closed is not None:
+            on_closed(position)
+        closed.append(position.position_id)
+        left -= float(position.quantity or 0.0)
+    return closed, max(left, 0.0), None
+
+
+def close_failure(result, position):
+    """Why a close did not go through, in the BROKER's own words.
+
+    "check the log" is not an answer on a live account. Each leg
+    reports its own error, and a close that went through on one leg and
+    not the other has left a NAKED LEG — which is the sentence the
+    trader has to see first.
+    """
+    legs = (result or {}).get('legs') or {}
+    said = []
+    done = []
+    for leg, answer in sorted(legs.items()):
+        if (answer or {}).get('ok'):
+            done.append(leg.upper())
+        else:
+            reason = ((answer or {}).get('error')
+                      or (answer or {}).get('reason') or 'refused')
+            said.append(f'leg {leg.upper()}: {reason}')
+    head = f'could not close position {position.position_id}'
+    if done and said:
+        head = (f'NAKED LEG — position {position.position_id} closed on '
+                f'leg {done[0]} but NOT on the other')
+    return f"{head} ({'; '.join(said) if said else 'no reason reported'})"

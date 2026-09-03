@@ -685,8 +685,37 @@ table.exits td:nth-child(3) { color: #a02722; }
 /* Dark text on the softer bands: white on a pale blue is the first
  * thing to become unreadable, and the size is the number being traded
  * off. */
+/* THE TWO COLUMNS ARE FURNITURE, and this is the whole point.
+ *
+ * They used to be painted only where the market was: blue from the
+ * best bid DOWN, red from the best offer UP. So the top edge of the
+ * blue and the bottom edge of the red were the two touches, and both
+ * edges moved with every tick — a block of colour growing and
+ * shrinking down the screen. Holding the PRICE rows still did nothing
+ * about it, which is why the ladder still read as moving after the
+ * rows had stopped.
+ *
+ * On a TT ladder the Bids column is solid blue from the top of the
+ * window to the bottom and the Asks column is solid red, always. They
+ * never change size, so there is nothing to track out of the corner of
+ * the eye. What moves is the NUMBERS inside them, which is what the
+ * trader is actually reading.
+ *
+ * Every row is clickable in both columns and always was, so painting
+ * every row also stops the uncoloured rows looking inert. Where the
+ * market IS gets said by the things that say it without moving a block
+ * of colour: the touch markers, the sizes, and the heavy rule. */
+td.bid { background: var(--bid); color: #06182a; }
+td.ask { background: var(--ask); color: #2b0605; }
+/* Kept, and deliberately the same colour. The classes still carry
+ * "which side of the touch is this row", which MARKET mode and the
+ * Filter both read — they just no longer decide whether there is any
+ * colour here. */
 tr.in-bid td.bid { background: var(--bid); color: #06182a; }
 tr.in-ask td.ask { background: var(--ask); color: #2b0605; }
+/* The touch itself: ONE row, a shade lighter, carrying the size and
+ * the arrow. A single row changing shade is not a block of colour
+ * sliding down the screen. */
 td.bid.has-qty { background: var(--bid-cell); color: #10263a; }
 td.ask.has-qty { background: var(--ask-cell); color: #3a0d0b; }
 

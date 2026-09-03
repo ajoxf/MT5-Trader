@@ -23,13 +23,13 @@ from datetime import datetime
 from . import algo as algo_module, atomicfile, carry, \
     config as config_module, depth as depth_book, fairvalue, hedgeratio, \
     sizing, takeprofit
+from . import book as book_module
 from .book import Book
 from .database import Store
 from .executor import PairExecutor, mark_position
 from .models import (MAGIC_NUMBER, LegFill, OrderType, SpreadPosition,
                      SpreadSide)
-from . import quoter as quoter_module
-from .quoter import Quoter
+from .quoter import Quoter, quoting_leg
 from .reconcile import Reconciler
 from .session import SessionClock, day_orders, overnight_action
 from .spread import (LevelSigma, QuoteAgeTracker, SpreadJumpTracker,
@@ -63,8 +63,13 @@ class Coordinator:
         self.executor = PairExecutor(config, legs, clock=clock, sleep=sleep)
         self.quoter = Quoter(config, legs, self.executor, self.book)
         # Whoever closes a position — the trader, the overnight rule,
-        # a flatten, the kill — pulls its resting take-profit first.
+        # a flatten, the kill — disarms its resting close first.
         self.executor.before_close = self.quoter.disarm
+        # ...and whatever the quoter books itself reaches the database.
+        # `quoter.work` returns its events and this module drops them, so
+        # without this a LIMIT entry was recovered as NOTHING and a close
+        # that filled on a resting order came back OPEN.
+        self.quoter.on_change = self.remember
         self.reconciler = Reconciler(config, legs, self.book, self.executor,
                                      clock=clock)
         self._last_reconcile = None
@@ -107,6 +112,11 @@ class Coordinator:
         #: still between polls so a row keeps its price; see
         #: `ladder_anchor`.
         self._ladder_anchor = {}
+        #: Pairs whose ladder the trader has LOCKED. A locked ladder
+        #: does not re-anchor and does not widen its window to follow
+        #: the touches: the price at every row stays where it is until
+        #: they press Centre. See `_anchor_for` and `ladder_rows`.
+        self._ladder_locked = {}
         #: pair key -> when a stale leg was last written to the log
         self._stale_logged = {}
         #: pair key -> when a stale pair last re-subscribed itself
@@ -719,15 +729,14 @@ class Coordinator:
               and pair.auto_route)
         if not on:
             for position in self.book.positions(pair.key):
-                # ONLY what AutoRouting armed. An exit the trader rested
-                # by hand (Close @ Limit) is theirs, and pulling it
-                # because an automation they never used is off would
-                # take their exit away without their asking.
-                if self.book.orders_for_position(position.position_id,
-                                                 armed_by='auto'):
-                    self.quoter.disarm(position.position_id,
-                                       'AutoRouting was turned off',
-                                       armed_by='auto')
+                # ONLY what AutoRouting armed. A close the trader
+                # clicked is not automation: sweeping it here left them
+                # believing they had an order working to get out, with
+                # nothing at the broker, because of a switch they never
+                # touched.
+                if self.book.auto_armed_for(position.position_id):
+                    self.quoter.disarm_auto(position.position_id,
+                                            'AutoRouting was turned off')
                     position.tp_armed = False
                     events.append({'pair': pair.key,
                                    'action': 'auto_route_pulled',
@@ -1013,6 +1022,32 @@ class Coordinator:
             # "rest it here" or "do nothing". TT rests it, and so does
             # this; the toast says which it did, because a market click
             # that quietly became a working order is a surprise.
+            armed, quantity, closed, failure = self._rest_reducing_orders(
+                pair, side, level, quantity)
+            if failure is not None:
+                return self._refuse(pair_key, side, level, failure, closed)
+            if closed and quantity <= 1e-9:
+                return self._closed_at_market(closed, armed)
+            if armed:
+                # ONE CLICK, ONE INSTRUCTION, IN ORDER. Any remainder
+                # rides on the LAST close armed and opens only once
+                # that close has gone through. Resting it now gives it
+                # a DIFFERENT ENGINE from the close — a pending at the
+                # BROKER, filling on the broker's own tick stream,
+                # against a level watched here at poll rate. Live
+                # 2026-09-03 the pending filled and the close never saw
+                # a qualifying tick, so a BUY 12 over a SELL 10 left the
+                # trader +2 AND still -10.
+                if quantity > 1e-9:
+                    self.quoter.carry_remainder(armed[-1], quantity)
+                return {'ok': True, 'order': armed[0].to_dict(),
+                        'rested': True, 'reducing': True, 'closed': closed,
+                        'remainder': quantity if quantity > 1e-9 else None,
+                        'reason': f'{level:g} is away from the market — '
+                                  f'resting there to CLOSE '
+                                  f'{len(armed)} position(s)'
+                                  + (f', then open {quantity:g}'
+                                     if quantity > 1e-9 else '')}
             order = self.book.add_order(pair, side, level, quantity)
             self.quoter.group_for(pair, order)
             return {'ok': True, 'order': order.to_dict(), 'rested': True,
@@ -1020,6 +1055,30 @@ class Coordinator:
                               f'resting here as a working order'}
 
         if pair.order_type is OrderType.MARKET:
+            # REDUCE BEFORE OPENING. A market click the opposite way is
+            # a cover, not a second position. Closing first (rather
+            # than opening and closing after) is deliberate: it never
+            # holds both sides at once, so it cannot be caught halfway
+            # by a disconnect with double the exposure on.
+            closed, quantity, failure = self._reduce_first(
+                pair, side, quantity, md)
+            if failure is not None:
+                # DO NOT OPEN ON TOP OF A CLOSE THAT FAILED. The trader
+                # clicked to cover; the cover did not happen. Opening
+                # anyway leaves them with the position they wanted gone
+                # AND a new one — and if the close half-executed, a
+                # naked leg under both. Refuse, in the broker's own
+                # words, and let them decide.
+                if self.store is not None:
+                    self.store.event('refused', pair_key, reason=failure,
+                                     side=getattr(side, 'value', side),
+                                     level=level)
+                return {'ok': False, 'refused': True, 'closed': closed,
+                        'reason': failure}
+            if closed and quantity <= 1e-9:
+                return {'ok': True, 'closed': closed, 'reduced': True,
+                        'reason': f'closed {len(closed)} position(s) '
+                                  f'oldest first'}
             result = self.executor.market_entry(pair, side, md, quantity,
                                                 level)
             if result.ok and result.position:
@@ -1036,9 +1095,177 @@ class Coordinator:
             # NOT: a resting order simply waits for a quote it can rest
             # on (spec §8), which is what the quoter does.
             return {'ok': False, 'refused': True, 'reason': refusal}
+        armed, quantity, closed, failure = self._rest_reducing_orders(
+            pair, side, level, quantity)
+        if failure is not None:
+            return self._refuse(pair_key, side, level, failure, closed)
+        if closed and quantity <= 1e-9:
+            return self._closed_at_market(closed, armed)
+        if armed:
+            # Same rule as above: the remainder waits for the close.
+            if quantity > 1e-9:
+                self.quoter.carry_remainder(armed[-1], quantity)
+            return {'ok': True, 'order': armed[0].to_dict(),
+                    'reducing': True, 'closed': closed,
+                    'remainder': quantity if quantity > 1e-9 else None,
+                    'reason': f'resting at {level:g} to CLOSE '
+                              f'{len(armed)} position(s)'
+                              + (f', then open {quantity:g}'
+                                 if quantity > 1e-9 else '')}
         order = self.book.add_order(pair, side, level, quantity)
         self.quoter.group_for(pair, order)
-        return {'ok': True, 'order': order.to_dict()}
+        return {'ok': True, 'order': order.to_dict(), 'closed': closed}
+
+    def _refuse(self, pair_key, side, level, reason, closed=()):
+        if self.store is not None:
+            self.store.event('refused', pair_key, reason=reason,
+                             side=getattr(side, 'value', side), level=level)
+        return {'ok': False, 'refused': True, 'closed': list(closed),
+                'reason': reason}
+
+    def _closed_at_market(self, closed, armed):
+        """A click that RESTED nothing because there was nothing to rest
+        against — said out loud.
+
+        A resting click that quietly went to market is exactly the
+        surprise the other direction already guards against, and the
+        trader has to be told which of the two happened.
+        """
+        reason = (f'closed {len(closed)} NAKED position(s) at market — the '
+                  f'other leg was already gone, so there was nothing left '
+                  f'to rest against')
+        if armed:
+            # Both happened: say so, or the toast reports half the click.
+            reason += f', and rested a close for {len(armed)} more'
+        answer = {'ok': True, 'closed': closed, 'reduced': True,
+                  'at_market': True, 'reason': reason}
+        if armed:
+            answer['order'] = armed[0].to_dict()
+        return answer
+
+    def _reduce_first(self, pair, side, quantity, md, exclude=None):
+        """Close what this click covers, and say what is left to open.
+
+        Returns (closed position ids, quantity still to open). One
+        implementation for both paths — a MARKET click closes before it
+        opens, a resting order closes when it fills — because two
+        implementations of "which tickets does this cover" is two
+        answers to reconcile the day they disagree.
+
+        A close is never withheld: `close_position` consults no guard,
+        and neither does this.
+        """
+        if not self.config.get('CLOSE_FIRST', True):
+            return [], quantity, None
+        return book_module.reduce_first(
+            self.book, self.executor, pair, side, quantity, md,
+            exclude=exclude, on_closed=self.remember)
+
+    def _rest_reducing_orders(self, pair, side, level, quantity):
+        """Rest CLOSING orders for what this click covers.
+
+        THE FIX FOR THE BUG THE DESK FOUND. The first version opened a
+        position on the fill and closed the old one afterwards, so a
+        click meant to flatten left a BRAND NEW position on: SELL 1
+        became BUY 1 instead of flat, with two fresh tickets.
+
+        A resting order that reduces must be a CLOSING order from the
+        moment it is placed, not an opening one with a close bolted on
+        after. `quoter.arm` already builds exactly that — it is what
+        AutoRouting rests. It puts NOTHING at the broker: MT5 ignores
+        `position` on a pending order, so a "closing" limit is an
+        ordinary one and opens a second position on a hedging account.
+        The level is held by the quoter, and when the market reaches it
+        BOTH legs are closed by ticket. The result is FLAT.
+
+        Returns (orders armed, quantity still to open, positions closed at
+        market, failure).
+        """
+        if not self.config.get('CLOSE_FIRST', True):
+            return [], quantity, [], None
+        try:
+            left = float(quantity)
+        except (TypeError, ValueError):
+            return [], quantity, [], None
+        armed = []
+        closed = []
+        for position in self.book.positions_to_reduce(pair.key, side, left):
+            # THE LEG THIS WOULD REST ON MAY ALREADY BE FLAT.
+            #
+            # A resting close fires by TICKET. Once the broker no
+            # longer has that ticket there is nothing for the level to
+            # close, and arming one would leave the trader watching a
+            # price that can never get them out.
+            #
+            # What is left is not a spread any more, it is one naked
+            # leg, and a naked leg cannot wait at a price. It is closed
+            # BY TICKET, at market, now — and a close is never withheld.
+            if self._quoting_leg_is_gone(pair, position):
+                answer = self.executor.close_position(
+                    pair, position, self.market.get(pair.key),
+                    reason='the other leg was already gone')
+                if not answer.get('ok'):
+                    return (armed, max(left, 0.0), closed,
+                            book_module.close_failure(answer, position))
+                self.remember(position)
+                closed.append(position.position_id)
+                left -= float(position.quantity or 0.0)
+                continue
+            # A target may already be armed here by AutoRouting, at ITS
+            # level. The trader has just named a different one, and a
+            # click that silently rested at somebody else's price is a
+            # click that did not do what it said. Theirs wins, and the
+            # old one is pulled rather than left to race it.
+            existing = self.book.orders_for_position(position.position_id)
+            # ALREADY RESTING AT THIS LEVEL? LEAVE IT ALONE.
+            #
+            # Pulling a live pending and putting an identical one back
+            # loses its place in the broker's QUEUE — the trader gives
+            # up their position in the line for no change at all. This
+            # is the ordinary case where AutoRouting's target and the
+            # click agree, and it must be a no-op.
+            at_this_level = [o for o in existing
+                             if abs(o.level - level) < 1e-9]
+            if at_this_level:
+                # The one AT THIS LEVEL, not merely the first of them:
+                # `existing[0]` reported an order resting somewhere else
+                # as the one the click had just placed.
+                armed.append(at_this_level[0])
+                left -= float(position.quantity or 0.0)
+                continue
+            if existing:
+                # A DIFFERENT level: the trader has just named their
+                # own, and a click that silently rested at somebody
+                # else's price is a click that did not do what it said.
+                # Theirs wins, and the old one is pulled rather than
+                # left to race it.
+                self.quoter.disarm(
+                    position.position_id,
+                    f'the trader clicked {level:g} to close this instead')
+            order = self.quoter.arm(pair, position, level,
+                                    position.quantity, auto=False)
+            if order is None:
+                break
+            armed.append(order)
+            left -= float(position.quantity or 0.0)
+        return armed, max(left, 0.0), closed, None
+
+    def _quoting_leg_is_gone(self, pair, position):
+        """Is the leg a closing order would REST on already flat?
+
+        False when it is still there, and false when the leg could not
+        be READ: None is "unknown", never "flat" (spec §7). Acting on an
+        unreadable leg would market-close a position on no evidence,
+        which is the opposite mistake and a worse one.
+        """
+        leg = quoting_leg(pair)
+        fill = position.leg_a if leg == 'a' else position.leg_b
+        if fill is None or not fill.position_tickets:
+            return False
+        volume = self.executor.leg_open_volume(pair, leg, fill)
+        if volume is None:
+            return False
+        return volume <= 1e-9
 
     def _away_from_the_market(self, pair, side, md, level):
         """Is this click at a price the market cannot fill right now?
@@ -1100,7 +1327,7 @@ class Coordinator:
                 already.append(position.position_id)
                 continue
             order = self.quoter.arm(pair, position, level,
-                                    quantity=quantity, armed_by='trader')
+                                    quantity=quantity, auto=False)
             if order is None:
                 continue
             armed.append(order.to_dict())
@@ -1363,10 +1590,30 @@ class Coordinator:
         spread = (md or {}).get('spread')
         if not increment or spread is None:
             return self._ladder_anchor.get(key)
-        anchor = ladder_anchor(self._ladder_anchor.get(key), spread,
-                               increment, int(pair.rows))
+        held = self._ladder_anchor.get(key)
+        # LOCKED means locked. The drift rule below is what a ladder
+        # does when the trader has not said otherwise; once they have,
+        # the window stays where they put it however far the market
+        # walks, and Centre is how they get it back.
+        if held is not None and self._ladder_locked.get(key):
+            return held
+        anchor = ladder_anchor(held, spread, increment, int(pair.rows))
         self._ladder_anchor[key] = anchor
         return anchor
+
+    def lock_ladder(self, key, locked):
+        """Hold this pair's price window still, or let it follow again.
+
+        The Lock tick on the ladder. It used to stop only the BROWSER
+        scrolling, which left the two movers that actually shift a
+        price off its row — the anchor re-centring, and the window
+        widening to cover the touches — running underneath it. A
+        control named Lock that locks a third of the movement is worse
+        than no control, because the trader believes the ladder is
+        still.
+        """
+        self._ladder_locked[key] = bool(locked)
+        return bool(locked)
 
     def recentre_ladder(self, key):
         """Drop the anchor so the next poll rebuilds around the market.
@@ -1374,6 +1621,10 @@ class Coordinator:
         The manual Recentre button, and what a pair falls back to when
         its market has walked out of the window entirely.
         """
+        # Deliberately does NOT clear the lock: Centre means "show me
+        # the market again", not "and start following it". A trader who
+        # locked the ladder gets a window rebuilt around the market and
+        # then held there.
         self._ladder_anchor.pop(key, None)
 
     def broker_offset(self):
@@ -1564,10 +1815,16 @@ class Coordinator:
                 # column, the click that places an order and the price
                 # that names it cannot disagree about where a level is.
                 'rows': ladder_rows(pair, md, self.book, sizes=sizes,
-                                    anchor=self._anchor_for(key, pair, md)),
+                                    anchor=self._anchor_for(key, pair, md),
+                                    frozen=bool(self._ladder_locked
+                                                .get(key))),
                 # What the window is built around, so the screen can say
                 # how far the market has drifted from it.
                 'ladder_anchor': self._ladder_anchor.get(key),
+                # Published so a browser that reloaded, or a second one
+                # on another screen, shows the tick that matches what
+                # the engine is actually doing.
+                'ladder_locked': bool(self._ladder_locked.get(key)),
                 'depth_published': sizes['published'],
                 'orders': [o.to_dict() for o in self.book.orders(key)],
                 # Orders that STOPPED working recently, with the reason.
@@ -1586,7 +1843,7 @@ class Coordinator:
                 # setting when there is one, otherwise the wider book.
                 # A ladder must be able to say which broker will show
                 # an order, before the first click.
-                'quoting_leg_effective': quoter_module.quoting_leg(pair),
+                'quoting_leg_effective': quoting_leg(pair),
                 'leg_a_width': (pair.meta_a or {}).get('width'),
                 'leg_b_width': (pair.meta_b or {}).get('width'),
                 'working_buys': buys, 'working_sells': sells,
@@ -1610,6 +1867,9 @@ class Coordinator:
             'confirm_market_clicks': bool(
                 self.config.get('CONFIRM_MARKET_CLICKS', False)),
             'row_height_px': self.config.get('ROW_HEIGHT_PX', 17),
+            # Which column the screen should treat as a buy. UI
+            # only: the side reaches the engine already decided.
+            'click_convention': self.config.get('CLICK_CONVENTION', 'TT'),
             #: How often the ladder re-centres on the mid, and whether a
             #: click away from the touch rests. Both are read from the
             #: ENGINE, never from the screen's own idea of them.
@@ -1941,7 +2201,8 @@ def ladder_anchor(previous, spread, increment, rows, drift=0.34):
     return previous
 
 
-def ladder_rows(pair, md, book, rows=None, sizes=None, anchor=None):
+def ladder_rows(pair, md, book, rows=None, sizes=None, anchor=None,
+                frozen=False):
     """The rows the ladder draws: the anchor +/- N increments.
 
     Generated here rather than in the browser so the ladder cannot
@@ -1968,7 +2229,18 @@ def ladder_rows(pair, md, book, rows=None, sizes=None, anchor=None):
     low = centre - rows * increment
     high = centre + rows * increment
 
-    marks = [md.get('short_spread'), md.get('long_spread')]
+    # The two touches move with every tick, so widening the window to
+    # reach them ADDS AND REMOVES ROWS AT THE ENDS as the market walks
+    # — and a row appearing above shifts every price below it down by
+    # one. That is the second way a ladder crawls, and holding the
+    # anchor still does nothing about it. A frozen ladder therefore
+    # stops following the touches.
+    #
+    # Working orders keep their claim either way: their levels are
+    # FIXED once placed, so they widen the window once and never
+    # again, and a resting order the trader cannot see is one they
+    # cannot pull.
+    marks = [] if frozen else [md.get('short_spread'), md.get('long_spread')]
     marks += [order.level for order in book.orders(pair.key)]
     marks = [m for m in marks if m is not None]
     if marks:
@@ -2000,6 +2272,13 @@ def ladder_rows(pair, md, book, rows=None, sizes=None, anchor=None):
             # touches can be many rows apart, and "where the market is"
             # is then a question the inside rule alone cannot answer.
             'is_mid': _at(level, md.get('spread'), increment),
+            # The row the WINDOW is built around, which on a locked
+            # ladder does not move at all. The heavy rule sits here
+            # rather than on the live mid when the trader has asked for
+            # a still ladder: a rule that hops a row every few ticks is
+            # the last thing left moving once the prices and the bands
+            # have stopped.
+            'is_anchor': _at(level, centre, increment),
             # What the two ORDER BOOKS can actually do here, in
             # spreads. None where a broker publishes no depth — which
             # is not the same as none available, and must not look it.

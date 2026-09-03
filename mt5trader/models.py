@@ -103,14 +103,18 @@ class SyntheticOrder:
 
     def __init__(self, pair_key, side, level, quantity, order_type,
                  time_in_force, clock=time.time, position_id=None,
-                 armed_by='trader'):
+                 auto_armed=False):
         self.order_id = new_id('SO')
-        #: WHO placed it: the trader, or AutoRouting. Only what
-        #: AutoRouting armed is swept when AutoRouting is switched off —
-        #: a closing order the trader rested by hand is theirs, and
-        #: pulling it because an automation they never used was turned
-        #: off would take their exit away without their asking.
-        self.armed_by = armed_by
+        #: Did AUTOMATION arm this, or the trader?
+        #:
+        #: Both are closing orders and both carry a position_id, so
+        #: nothing else can tell them apart. It matters because
+        #: standing AutoRouting down pulls what AutoRouting armed —
+        #: and it must NOT pull a close the trader placed by hand. A
+        #: trader who clicks to get out and finds their order swept by
+        #: a switch they did not touch is a trader who believes they
+        #: are covered and is not.
+        self.auto_armed = bool(auto_armed)
         #: The position this order CLOSES, when it is a closing order.
         #: None on an ordinary click. It is what makes an AutoRouting
         #: take-profit a different order from an entry at the same
@@ -156,7 +160,7 @@ class SyntheticOrder:
             'pending_ticket': self.pending_ticket,
             'position_id': self.position_id,
             'intent': 'CLOSE' if self.position_id else 'OPEN',
-            'armed_by': self.armed_by,
+            'auto_armed': self.auto_armed,
             'reason': self.reason,
         }
 
@@ -239,6 +243,43 @@ class SpreadPosition:
     def is_open(self):
         return self.closed_at is None
 
+    def reduce_by(self, closed_fraction, realized=None):
+        """Book PART of this position closing, and stay open for the rest.
+
+        A closing order fills partially like any other, and both
+        half-measures are wrong. Marking the whole position closed
+        loses the leg still on at the broker — the book reads flat
+        while the money is there, which is the one failure this system
+        must never have. Leaving it at full size claims an exposure
+        that is no longer on, and every close sized from it then asks
+        the broker for more than it has.
+
+        The leg volumes come down with the quantity because the
+        reconciler and the P&L both read them. The TICKETS do not
+        change: MT5 keeps the same ticket at a reduced volume, and a
+        later close still has to name it.
+
+        Returns the quantity still open.
+        """
+        try:
+            fraction = float(closed_fraction)
+        except (TypeError, ValueError):
+            return self.quantity
+        fraction = max(0.0, min(1.0, fraction))
+        if fraction <= 0.0:
+            return self.quantity
+        left = 1.0 - fraction
+        self.quantity *= left
+        for fill in (self.leg_a, self.leg_b):
+            if fill is not None:
+                fill.volume *= left
+        if realized is not None:
+            # ACCUMULATED, not replaced: a position closed in three
+            # pieces earned its P&L in three pieces.
+            self.realized_pnl = (realized if self.realized_pnl is None
+                                 else self.realized_pnl + realized)
+        return self.quantity
+
     def mark(self, closing_spread):
         """Open P&L in dollars at the spread it would close at.
 
@@ -251,7 +292,28 @@ class SpreadPosition:
         move = closing_spread - self.entry_spread
         if self.side is SpreadSide.SELL:
             move = -move
-        return move * self.spread_units * self.quantity
+        # SIZE IS ALREADY IN `spread_units`, AND MUST NOT BE APPLIED
+        # TWICE.
+        #
+        # Every place a position is built passes
+        # `spread_units(leg_b.volume, contract_b)`, and `leg_b.volume`
+        # is the volume of the WHOLE position — 1.0 lots for 100
+        # spreads, not the 0.01 one spread costs. So `spread_units` is
+        # already the dollars a 1.00 move in the spread is worth for
+        # this position entire. Multiplying by `quantity` on top
+        # charged the size a second time.
+        #
+        # It was invisible at Qty 1, which is the size everything was
+        # tested at: there `spread_units` is 0.01 x 100 = 1.0 and
+        # `quantity` is 1, so the double count is x1 and the answer
+        # comes out right. At Qty 10 it read 10x, and at Qty 100 it
+        # read $6,000.00 against MT5's own -$56.70.
+        #
+        # The per-ONE-spread k of the same name — `spread_units(
+        # clip_lots_b, ...)` on the ladder and in the exit maths — is a
+        # different number and IS multiplied by quantity by its own
+        # callers. Only a POSITION's is whole already.
+        return move * self.spread_units
 
     def to_dict(self):
         return {

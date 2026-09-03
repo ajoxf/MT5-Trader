@@ -349,17 +349,44 @@ class FakeBroker:
         return {'ok': True, 'ticket': ticket, 'error': None, 'price': price}
 
     def part_fill_pending(self, ticket, volume):
-        """A partial fill: some volume becomes a position, the rest of
-        the pending keeps resting — which is what MT5 does, and what a
-        naive 'the pending is gone' model hides."""
+        """A partial fill: some volume executes, the rest of the pending
+        keeps resting — which is what MT5 does, and what a naive 'the
+        pending is gone' model hides.
+
+        A pending carrying a POSITION closes that much OF IT and opens
+        nothing, exactly as a full fill of one does. Modelling a partial
+        close as an OPEN made the fake disagree with the broker in the
+        one case the closing path is hardest to get right, and a test
+        run against that fake proves nothing about a live account.
+        """
         pending = self.pendings[int(ticket)]
         pending['volume'] -= volume
+        closes = pending.get('position_ticket')
+        if closes:
+            self._close_against(pending, int(closes), volume, int(ticket))
+            return int(ticket)
         self.positions[int(ticket)] = {
             'ticket': int(ticket), 'symbol': pending['symbol'],
             'side': pending['side'], 'volume': volume,
             'price_open': pending['price'], 'magic': MAGIC_NUMBER,
             'comment': pending['comment'], 'profit': 0.0}
         return int(ticket)
+
+    def _close_against(self, pending, closes, filled, order_ticket):
+        """A closing pending executing: the deal belongs to the closing
+        ORDER and points at the position it reduced."""
+        target = self.positions.get(int(closes))
+        if target is None:
+            return
+        entry = OrderSide(target['side'])
+        self._record_deal(pending['symbol'], entry.opposite.value,
+                          filled, pending['price'], 'close',
+                          pending['comment'], int(closes), MAGIC_NUMBER,
+                          order_ticket=order_ticket)
+        if filled >= target['volume'] - 1e-9:
+            del self.positions[int(closes)]
+        else:
+            target['volume'] -= filled
 
     def fill_pending(self, ticket, volume=None):
         """The broker fills a resting order.
@@ -376,17 +403,7 @@ class FakeBroker:
         filled = pending['volume'] if volume is None else volume
         closes = pending.get('position_ticket')
         if closes:
-            target = self.positions.get(int(closes))
-            if target is not None:
-                entry = OrderSide(target['side'])
-                self._record_deal(pending['symbol'], entry.opposite.value,
-                                  filled, pending['price'], 'close',
-                                  pending['comment'], int(closes),
-                                  MAGIC_NUMBER, order_ticket=int(ticket))
-                if filled >= target['volume'] - 1e-9:
-                    del self.positions[int(closes)]
-                else:
-                    target['volume'] -= filled
+            self._close_against(pending, int(closes), filled, int(ticket))
             return int(ticket)
         self.positions[int(ticket)] = {
             'ticket': int(ticket), 'symbol': pending['symbol'],

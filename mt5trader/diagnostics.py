@@ -112,7 +112,25 @@ def check_account(checklist, name, terminal, account=None, offset=None,
                        'Check the login and server on this row'])
         return checklist
     live = terminal.get('login')
-    if expect_login and live and str(live) != str(expect_login):
+    if not expect_login:
+        # An account that names no login cannot be checked against
+        # anything, so it used to PASS on whatever login it found. That
+        # is the one reading that must never be green: it is exactly
+        # the state in which a leg trades an account nobody chose.
+        checklist.add(
+            scope, 'Account login', FAIL,
+            f'no login is configured for this account — it is attached '
+            f'to {live}, but nothing says that is the right one',
+            ['Set this account\'s login on the Exchanges page',
+             'Put its password in .env under the matching key',
+             'A leg that cannot name its login cannot be checked '
+             'against anything, and will trade whatever it attaches to'])
+        # Deliberately NOT an early return, unlike the mismatch below.
+        # There the terminal belongs to somebody else and the rest of
+        # the list would describe the wrong account; here the terminal
+        # is real and every other check still tells the operator
+        # something true.
+    elif expect_login and live and str(live) != str(expect_login):
         # This reported whatever login it FOUND as a pass, so a leg
         # attached to the other leg's terminal read "PASS — CONNECTED"
         # while trading the wrong account. The question is not "is a
@@ -126,8 +144,9 @@ def check_account(checklist, name, terminal, account=None, offset=None,
              'Two accounts need two MT5 installations, each with its own '
              'terminal_path — one terminal holds one login'])
         return checklist
-    checklist.add(scope, 'Account login', PASS,
-                  f"{live} on {terminal.get('server')}")
+    else:
+        checklist.add(scope, 'Account login', PASS,
+                      f"{live} on {terminal.get('server')}")
 
     # Algo Trading is a BUTTON in that terminal, and MT5 answers every
     # order with 10027 until it is on. Nothing else on the screen says
@@ -148,6 +167,33 @@ def check_account(checklist, name, terminal, account=None, offset=None,
                        'read-only account does this'])
     elif terminal.get('trade_allowed'):
         checklist.add(scope, 'Trading permission', PASS, 'allowed')
+
+    # The SERVER's own algo switch, which is a different thing from the
+    # button above and fails with a different code. The button is the
+    # trader's (10027, "disabled by client"); this is the broker's
+    # (10026, "disabled by server"), set per account on their side and
+    # not fixable from this machine at all.
+    #
+    # It is checked because it was read and not checked: a freshly
+    # opened account connects, reports its balance and quotes happily,
+    # and then refuses the first LIVE order with 10026. Finding that
+    # out by clicking on a real ladder is the worst possible time.
+    expert = terminal.get('trade_expert')
+    if expert is False:
+        checklist.add(scope, 'Algo trading (server)', FAIL,
+                      'the BROKER has algo trading off for this account — '
+                      'every order comes back "10026 AutoTrading disabled '
+                      'by server"',
+                      ['Ask the broker to enable Expert Advisor / API '
+                       'trading on THIS account number',
+                       'It is set per account: an account that trades by '
+                       'hand can still refuse every order sent by a '
+                       'program',
+                       'Nothing on this machine can turn it on — the Algo '
+                       'Trading button is a different switch'])
+    elif expert:
+        checklist.add(scope, 'Algo trading (server)', PASS,
+                      'the broker allows it on this account')
 
     hedging = terminal.get('hedging')
     if hedging is True:

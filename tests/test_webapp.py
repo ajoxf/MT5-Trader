@@ -321,11 +321,17 @@ class FakeRemoteLeg:
 
 @pytest.fixture
 def wired(client, paths, monkeypatch):
-    """Two accounts saved, and a leg runner that answers."""
+    """Two accounts saved, and a leg runner that answers.
+
+    Both carry the login the fake runner reports. They used to carry
+    none, which is now a FAIL of its own — an account that names no
+    login cannot be checked against the terminal it attached to. A
+    fixture that leaves it out is testing a config no desk should run.
+    """
     from mt5trader import webapp
     cfg.save_raw(paths['config'], {
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
-                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
+                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
         'pairs': {}})
     monkeypatch.setattr(webapp, 'RemoteLeg', FakeRemoteLeg)
     return client
@@ -387,8 +393,8 @@ def test_diagnose_checks_the_symbols_and_whether_the_two_legs_fit(wired,
     """The checks that only make sense across a pair: a beta stamped for
     THIS pair, a spread that is a difference, a clip both legs carry."""
     cfg.save_raw(paths['config'], {
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
-                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
+                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
         'pairs': {'XAUUSD_|GC1226': {
             'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
             'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
@@ -412,8 +418,8 @@ def test_diagnose_catches_a_beta_left_behind_by_another_instrument(wired,
     """A stale beta defines a spread that does not exist — the fault
     that turned a +3.30 oil spread into -0.05."""
     cfg.save_raw(paths['config'], {
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
-                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
+                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
         'pairs': {'XAUUSD_|GC1226': {
             'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
             'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
@@ -738,8 +744,8 @@ def test_diagnose_says_whether_the_broker_publishes_a_book(wired, paths):
     depth beyond the touch, and the ladder leaves those columns empty
     rather than inventing a number from one leg."""
     cfg.save_raw(paths['config'], {
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
-                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
+                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
         'pairs': {'XAUUSD_|GC1226': {
             'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
             'leg_b': {'account': 'fut', 'symbol': 'GC1226'},

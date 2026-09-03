@@ -1,4 +1,27 @@
-"""LIMIT mode: quote one leg, cross the other.
+"""LIMIT mode: quote one leg, cross the other — and hold closing levels.
+
+TWO KINDS OF RESTING ORDER LIVE HERE, and they are not symmetric.
+
+An ENTRY is backed by a REAL pending on one leg. A CLOSE is backed by
+NOTHING at the broker: it is a level this module watches, and a close by
+TICKET when the market reaches it.
+
+That asymmetry is forced, not chosen. MT5 honours `position` on
+TRADE_ACTION_DEAL and IGNORES it on TRADE_ACTION_PENDING, so a "closing"
+limit rests as an ordinary limit — and on a hedging account an ordinary
+opposite limit OPENS a second position. Live 2026-09-02: ticket 2092 was
+rested to close ticket 2090 and filled as a BUY 0.01 beside the SELL
+0.01 it was meant to close. This module believed that leg was flat,
+closed the other leg on the strength of it, and the reconciler swept
+both futures as orphans a minute later. Attaching a broker take-profit
+to the leg instead is not the answer either: one leg closing alone
+converts the hedge into a naked outright.
+
+What holding the level here costs, said plainly because it is real: the
+close only fires while this is running, and it crosses at the touch
+rather than earning the level.
+
+THE ENTRY PATH, which is what the rest of this file is about:
 
 A synthetic working order is backed by a REAL pending limit on ONE leg
 (the "quoting" leg). When that limit fills, the other leg is crossed at
@@ -38,27 +61,32 @@ Three more rules, each of which has a test:
 import logging
 
 from . import sizing
+from .book import close_failure
 from .executor import slippage
 from .models import (LegFill, OrderState, OrderType, SpreadPosition,
                      SpreadSide, new_id)
 
 
 class QuoteGroup:
-    """The real pending behind one (pair, side, level).
+    """One (pair, side, level) — and what, if anything, is at the broker.
 
-    Three clicks at 58.40 are three synthetics and ONE pending at the
-    summed size. Cancelling one re-sizes it; cancelling the last pulls
-    it. The synthetics stay individually cancellable — this is an
-    aggregation, not a replacement for them.
+    An ENTRY group is backed by a REAL pending. Three clicks at 58.40
+    are three synthetics and ONE pending at the summed size. Cancelling
+    one re-sizes it; cancelling the last pulls it. The synthetics stay
+    individually cancellable — an aggregation, not a replacement.
+
+    A CLOSING group is backed by NOTHING. It is a level this system
+    watches, and a close by ticket when the market reaches it. Its
+    `ticket` stays None for its whole life.
     """
 
     def __init__(self, pair_key, side, level, leg, position_id=None):
         self.pair_key = pair_key
         #: Set when this group CLOSES a position (AutoRouting, spec
-        #: 5.4). Its real pending carries `position=<ticket>`, so
-        #: executing it closes rather than opening — on a hedging
-        #: account a plain opposite pending would open a second
-        #: position.
+        #: 5.4). It rests NOTHING at the broker: MT5 ignores `position`
+        #: on a pending order, so a "closing" limit is an ordinary one
+        #: and OPENS a second position on a hedging account. The level
+        #: is held here and closed by ticket instead.
         self.position_id = position_id
         self.side = SpreadSide(side)
         self.level = float(level)
@@ -69,6 +97,23 @@ class QuoteGroup:
         self.repegs = 0
         self.reason = None             # in the broker's own words
         self.orders = []               # the synthetics behind it
+        #: Consecutive fires of a CLOSING group that got nowhere. A
+        #: broker refusing a close three times a second is a broker
+        #: being hammered, so this is bounded and then escalated.
+        self.close_attempts = 0
+        #: Spreads to OPEN once this close has gone through, when the
+        #: click that armed it was bigger than the position it covered.
+        #:
+        #: A reducing click is ONE instruction at ONE level. Resting the
+        #: remainder as an ordinary pending at the same moment gave it
+        #: a different engine: the pending sits at the BROKER and fills
+        #: on the broker's own tick stream, while the close is watched
+        #: HERE at poll rate. Live 2026-09-03 the pending filled and the
+        #: close never saw a qualifying tick, so a BUY 12 over a SELL 10
+        #: left the trader +2 AND still -10 — the one net position they
+        #: certainly did not ask for.
+        self.open_after = 0.0
+        self.escalated = False
 
     @property
     def quantity(self):
@@ -81,12 +126,17 @@ class QuoteGroup:
 
     def to_dict(self):
         return {'pair_key': self.pair_key, 'side': self.side.value,
-                'level': self.level, 'leg': self.leg.upper(),
+                'level': self.level,
+                # A close touches BOTH legs by ticket. Naming the
+                # quoting leg here would say an order rests on one
+                # account, which is the thing that was never true.
+                'leg': 'BOTH' if self.closing else self.leg.upper(),
                 'position_id': self.position_id,
                 'intent': 'CLOSE' if self.closing else 'OPEN',
                 'ticket': self.ticket, 'price': self.price,
                 'volume': self.volume, 'repegs': self.repegs,
                 'quantity': self.quantity, 'reason': self.reason,
+                'escalated': self.escalated,
                 'orders': [o.order_id for o in self.orders]}
 
 
@@ -134,6 +184,26 @@ def implied_spread(pair, md, side, leg, price):
     return anchor - beta * price
 
 
+def closing_trigger_reached(side, level, md):
+    """Has the market come to a resting CLOSE?
+
+    Reads the EXECUTABLE side for the order's own direction: a BUY is
+    reached when the spread can be BOUGHT at or under its level, a SELL
+    when it can be SOLD at or over it. That is the same side the ladder
+    drew the level on, so an order fires where the trader watched it.
+
+    A price nobody has NEVER triggers. None is unknown, not "reached".
+    """
+    if not md or level is None:
+        return False
+    side = SpreadSide(getattr(side, 'value', side))
+    if side is SpreadSide.BUY:
+        offer = md.get('long_spread')
+        return offer is not None and offer <= level + 1e-9
+    bid = md.get('short_spread')
+    return bid is not None and bid >= level - 1e-9
+
+
 class Quoter:
     """Holds every LIMIT-mode group and works them each poll."""
 
@@ -149,6 +219,15 @@ class Quoter:
         #: The last market seen per pair, so an auto-close can be marked
         #: at the touch it was decided on rather than at nothing.
         self._markets = {}
+        #: Called with a position whenever THIS module changes it, so it
+        #: reaches the database. Set by the coordinator, like
+        #: `executor.before_close`.
+        #:
+        #: `work()` returns its events and the coordinator drops them, so
+        #: without this hook nothing the quoter did was ever written: a
+        #: LIMIT entry was recovered as NOTHING after a restart, and a
+        #: close that filled on a resting order came back OPEN.
+        self.on_change = None
 
     # -- the ladder's side of it -------------------------------------------
 
@@ -191,6 +270,14 @@ class Quoter:
         for key, group in list(self.groups.items()):
             if group.pair_key != pair.key:
                 continue
+            if group.closing:
+                # A CLOSING order rests nothing at the broker. It is a
+                # level this system watches, and a close by TICKET when
+                # the market reaches it.
+                event = self._work_closing(pair, md, group)
+                if event:
+                    events.append(event)
+                continue
             if group.ticket is not None:
                 event = self._check_fill(pair, md, group)
                 if event:
@@ -215,17 +302,10 @@ class Quoter:
         return events
 
     def _wanted_volume(self, pair, group):
-        """Lots on the quoting leg for the spreads still working here."""
-        if group.closing:
-            # A closing order is sized to WHAT ACTUALLY FILLED, not to
-            # the pair's clip: a partially filled entry gets a partially
-            # sized take-profit, and anything else would either leave a
-            # remainder on or close more than is there.
-            position = self.book.position(group.position_id)
-            if position is None:
-                return 0.0
-            fill = position.leg_a if group.leg == 'a' else position.leg_b
-            return fill.volume if fill else 0.0
+        """Lots on the quoting leg for the spreads still working here.
+
+        ENTRY groups only. A closing group rests nothing to size.
+        """
         meta_a, meta_b = pair.meta_a or {}, pair.meta_b or {}
         plan = sizing.clip_plan(pair, meta_a, meta_b, meta_a.get('mid'),
                                 meta_b.get('mid'), group.quantity)
@@ -258,12 +338,7 @@ class Quoter:
         if group.ticket is None:
             result = leg.place_limit(
                 symbol, order_side.value, volume, price,
-                comment=new_id('TP' if group.closing else 'LADDER'),
-                # THE line that makes an auto-TP a close: with a
-                # position on the request, executing it closes that
-                # position. Without it, on a hedging account, it would
-                # open a second one facing the other way.
-                position_ticket=self._closing_ticket(group))
+                comment=new_id('LADDER'))
             if not result.get('ok'):
                 group.reason = result.get('error')
                 for order in group.orders:
@@ -309,17 +384,6 @@ class Quoter:
                           group.position_id),
                 'action': 'repegged', 'price': price, 'drift': drift}
 
-    def _closing_ticket(self, group):
-        """The broker ticket this group's pending must CLOSE, or None."""
-        if not group.closing:
-            return None
-        position = self.book.position(group.position_id)
-        if position is None:
-            return None
-        fill = position.leg_a if group.leg == 'a' else position.leg_b
-        tickets = (fill.position_tickets if fill else None) or []
-        return tickets[0] if tickets else None
-
     def _drift(self, pair, md, group):
         """How far the resting pending's implied spread has wandered."""
         if group.price is None:
@@ -340,8 +404,7 @@ class Quoter:
             return self._on_fill(pair, group, cancel)
         result = leg.place_limit(
             symbol, order_side.value, volume, price,
-            comment=new_id('TP' if group.closing else 'LADDER'),
-            position_ticket=self._closing_ticket(group))
+            comment=new_id('LADDER'))
         if not result.get('ok'):
             group.ticket = None
             group.reason = result.get('error')
@@ -364,14 +427,19 @@ class Quoter:
         if leg is None or group.ticket is None:
             return None
         state = leg.cancel_order(group.ticket)
-        group.ticket = None
         group.reason = reason
         if state.get('filled_volume'):
             # A cancel that did not prevent a fill is a distinct event
             # and must stay visible, not be smoothed into a clean pull.
+            #
+            # `_on_fill` takes the ticket off the group itself. Clearing
+            # it here FIRST handed it None, so the fill was booked
+            # against no ticket at all and the exit price had nothing to
+            # anchor on.
             logging.critical("%s: pending at %s FILLED as it was cancelled — "
                              "hedging it", pair.key, group.level)
             return self._on_fill(pair, group, state)
+        group.ticket = None
         return state
 
     def _check_fill(self, pair, md, group):
@@ -396,25 +464,14 @@ class Quoter:
         filled = float(state.get('filled_volume') or 0.0)
         started = self.executor.clock()
         ticket, group.ticket = group.ticket, None
-        if group.closing:
-            return self._on_closing_fill(pair, group, state, filled, ticket)
-        if state.get('still_open') and ticket is not None:
-            # A PARTIAL fill leaves the rest of the pending resting.
-            # Pull it before hedging: the residual is re-rested at the
-            # next pass at the size that is actually still working, and
-            # leaving it would put a second pending on the same level.
-            leg = self.legs.get(pair.account_a if group.leg == 'a'
-                                else pair.account_b)
-            if leg is not None:
-                rest = leg.cancel_order(ticket)
-                extra = float(rest.get('filled_volume') or 0.0) - filled
-                if extra > 0:
-                    # It filled further while we were cancelling it.
-                    filled += extra
-                    state = dict(state, price=rest.get('price') or
-                                 state.get('price'),
-                                 position_tickets=rest.get('position_tickets')
-                                 or state.get('position_tickets'))
+        # A PARTIAL fill leaves the rest of the pending resting, and it
+        # is pulled on BOTH paths. A closing order used to skip this:
+        # its residual stayed at the broker carrying a position ticket
+        # that the fill had just closed, nobody tracked it any more, and
+        # every further click rested another one beside it — pendings
+        # piling up on the quoting account while the other account got
+        # nothing. That is the state the desk reported.
+        state, filled = self._pull_residual(pair, group, state, filled, ticket)
 
         meta_a, meta_b = pair.meta_a or {}, pair.meta_b or {}
         beta = float(pair.hedge_ratio or 1.0)
@@ -472,69 +529,237 @@ class Quoter:
         position = self._book_fill(pair, group, fills, contract_a, contract_b,
                                    elapsed_ms)
         self._settle_orders(group, position.quantity)
+        # NOTHING IS REDUCED HERE, deliberately.
+        #
+        # An earlier version closed the opposite position at this
+        # point, after the fill had already opened a new one. The
+        # arithmetic looked right and the result was not: a click meant
+        # to flatten left a BRAND NEW position on — SELL 1 became BUY 1
+        # instead of flat, with two fresh tickets, which is what the
+        # desk reported.
+        #
+        # A resting order that reduces is now a CLOSING order from the
+        # moment it is placed (coordinator._rest_reducing_orders), so
+        # its fill lands in `_on_closing_fill` and never reaches here
+        # at all. Two mechanisms for one job would double-close.
         return {'group': (group.pair_key, group.side.value, group.level,
                           group.position_id),
                 'action': 'filled', 'position': position.position_id,
                 'hedge_ms': elapsed_ms}
 
-    def _on_closing_fill(self, pair, group, state, filled, ticket):
-        """An AutoRouting take-profit filled on the quoting leg.
+    def _pull_residual(self, pair, group, state, filled, ticket):
+        """Pull what is left of a partially filled pending.
 
-        That leg is already flat — the pending carried
-        `position=<ticket>`, so executing it CLOSED it. The other leg is
-        still on, and until it is closed this is an outright position:
-        it goes now, by ticket, at market.
+        The residual is re-rested at the next pass at the size that is
+        actually still working; leaving it would put a second pending on
+        the same level. Returns the (state, filled) to act on, because
+        it can fill FURTHER while being cancelled.
         """
+        if not state.get('still_open') or ticket is None:
+            return state, filled
+        leg = self.legs.get(pair.account_a if group.leg == 'a'
+                            else pair.account_b)
+        if leg is None:
+            return state, filled
+        rest = leg.cancel_order(ticket)
+        extra = float(rest.get('filled_volume') or 0.0) - filled
+        if extra > 0:
+            # It filled further while we were cancelling it.
+            filled += extra
+            state = dict(state, price=rest.get('price') or state.get('price'),
+                         position_tickets=rest.get('position_tickets')
+                         or state.get('position_tickets'))
+        return state, filled
+
+    def _work_closing(self, pair, md, group):
+        """One pass over a resting CLOSE. Nothing of this is at the broker.
+
+        A closing order CANNOT be a broker pending. MT5 honours
+        `position` on TRADE_ACTION_DEAL and ignores it on
+        TRADE_ACTION_PENDING, so a "closing" limit rests as an ordinary
+        limit and, on a hedging account, OPENS a second position facing
+        the other way. Live 2026-09-02: ticket 2092 was rested to close
+        ticket 2090 and filled as a BUY 0.01 beside the SELL 0.01 it was
+        meant to close.
+
+        Attaching a broker take-profit to the leg instead is not the
+        answer either — one leg closing alone converts the hedge into a
+        naked outright, which is the rule this system is built on.
+
+        So the level is held HERE, and when the market reaches it the
+        position is closed BY TICKET on both legs at once. What this
+        costs, honestly: the close only happens while this is running,
+        and it crosses at the touch rather than earning the level.
+        """
+        key = self.key_for_group(group)
         position = self.book.position(group.position_id)
-        self.groups.pop(self.key_for_group(group), None)
-        if position is None:
-            # The position went while the order was resting. That is the
-            # orphan-pending case with a guaranteed fill, and it has now
-            # happened: say so loudly rather than booking a close of
-            # something that is not there.
-            logging.critical(
-                '%s: a take-profit filled for position %s, which is no '
-                'longer in the book. Check the account by hand.',
-                pair.key, group.position_id)
-            return {'group': self.key_for_group(group),
-                    'action': 'tp_orphaned', 'position': group.position_id}
-        # Shaped exactly like `close_tickets`' answer, so the exit
-        # price is volume-weighted off the SAME structure however the
-        # close was sent.
-        quote_result = {'ok': True, 'closed': [
-            {'ticket': ticket, 'volume': filled, 'price': state.get('price')}]}
-        answer = self.executor.close_other_leg(
-            pair, position, group.leg, quote_result,
-            md=self.market_for(pair), reason='auto take-profit')
+        if position is None or not position.is_open:
+            # Nothing left to close. Not an error — a manual close, the
+            # overnight rule or the reconciler got there first.
+            #
+            # The remainder goes with it, deliberately. The click said
+            # "cover this and open the rest"; something else covered it,
+            # so the rest is no longer the trade that was asked for, and
+            # putting a position on by itself minutes later is the last
+            # thing anyone wants from a ladder.
+            if group.open_after > 0:
+                logging.info(
+                    '%s: %s was closed elsewhere, so the %g spread(s) that '
+                    'click would have opened are dropped', pair.key,
+                    group.position_id, group.open_after)
+            self.groups.pop(key, None)
+            return None
+        if not group.quantity:
+            self.groups.pop(key, None)
+            return None
+
+        if not md or md.get('guard_reason'):
+            # A guard NEVER withholds a close the trader asks for — and
+            # this is not that. Firing a resting order off a print the
+            # system itself calls untrustworthy closes at a level the
+            # market may never have shown. It is HELD, and said on the
+            # ladder, so the trader can close by hand at once. Nothing
+            # blocks that.
+            group.reason = (f"{(md or {}).get('guard_reason') or 'no price'}"
+                            f" — the resting close is held")
+            return None
+        if not closing_trigger_reached(group.side, group.level, md):
+            # The market has moved away. Whatever refused the close a
+            # moment ago gets a clean slate when the level comes back:
+            # a session break or a spread that widened out is not a
+            # fault to stay escalated over.
+            group.close_attempts = 0
+            group.escalated = False
+            group.reason = None
+            return None
+        if group.escalated:
+            # Already said, loudly, and the reason stays on the ladder.
+            # A close the trader asks for is still never blocked.
+            return None
+        group.reason = None
+
+        quantity = position.quantity
+        try:
+            answer = self.executor.close_position(
+                pair, position, md, reason=self._close_reason(group),
+                # This module owns these orders; it settles them itself
+                # below. Letting the close disarm them would mark a
+                # close that WORKED as 'cancelled', and would delete the
+                # level a close that FAILED still has to be watched at.
+                disarm=False)
+        except Exception as e:
+            # This is a NETWORK call inside the pricing pass. Unguarded,
+            # a broker that hangs up mid-close would raise out of
+            # `work()` and take the whole poll down with it — every
+            # pair's quotes, not just this level.
+            self._close_got_nowhere(pair, group, f'the close raised: {e}')
+            return {'group': key, 'action': 'close_failed',
+                    'position': position.position_id, 'ok': False,
+                    'escalated': group.escalated, 'reason': group.reason}
+        if not answer.get('ok'):
+            # The position stays open and so does the level. The
+            # broker's own words go on the ladder — never "check the
+            # log" (spec §11).
+            self._close_got_nowhere(pair, group,
+                                    close_failure(answer, position))
+            self._remember(position)
+            return {'group': key, 'action': 'close_failed',
+                    'position': position.position_id, 'ok': False,
+                    'escalated': group.escalated, 'reason': group.reason}
+        if answer.get('partial') and not answer.get('fraction'):
+            # It reported a close and took nothing off. Counted as a
+            # failure, or a broker that answers without acting would be
+            # retried at poll rate for ever.
+            self._close_got_nowhere(
+                pair, group, 'the close reported success and moved nothing')
+            self._remember(position)
+            return {'group': key, 'action': 'close_failed',
+                    'position': position.position_id, 'ok': False,
+                    'escalated': group.escalated, 'reason': group.reason}
+        group.close_attempts = 0
+        if answer.get('partial'):
+            # The broker closed only PART of it. The synthetics settle
+            # for what actually went and the rest keep working, so the
+            # level stays armed and takes the remainder off at the next
+            # pass it is still reached on.
+            self._settle_orders(group, quantity * answer.get('fraction', 0.0))
+            self._remember(position)
+            return {'group': key, 'action': 'closed_part_at_level',
+                    'position': position.position_id, 'level': group.level,
+                    'imbalanced': answer.get('imbalanced', False),
+                    'remaining': answer.get('remaining'), 'ok': True}
+        self.groups.pop(key, None)
         for order in group.orders:
             if order.is_working:
                 order.filled_quantity = order.quantity
                 order.state = OrderState.FILLED
-        return {'group': self.key_for_group(group), 'action': 'tp_filled',
-                'position': position.position_id, 'ok': answer.get('ok')}
+        self._remember(position)
+        event = {'group': key, 'action': 'closed_at_level',
+                 'position': position.position_id, 'level': group.level,
+                 'ok': True}
+        # AND ONLY NOW the remainder, if the click was bigger than what
+        # it covered. Not before: a remainder resting while the close is
+        # still outstanding is the two-engines bug above, and it puts
+        # the new position on over the old one.
+        if group.open_after > 0:
+            opened = self.book.add_order(pair, group.side, group.level,
+                                         group.open_after)
+            self.group_for(pair, opened)
+            logging.info('%s: closed %s at %s, now resting the remaining '
+                         '%g spread(s) the click asked for', pair.key,
+                         position.position_id, group.level, group.open_after)
+            event['opened_remainder'] = group.open_after
+        return event
+
+    def _close_got_nowhere(self, pair, group, reason):
+        """A fire that did not reduce the position. Bounded, then said.
+
+        The level is watched every poll, so a broker that refuses would
+        be asked three times a second for as long as the market sits
+        there. That is hammering, and it buries the one line the trader
+        needs. After `CLOSE_ATTEMPTS` it is escalated ONCE and left
+        alone — the same shape the reconciler uses, and for the same
+        reason.
+
+        Nothing here blocks a close the trader asks for by hand.
+        """
+        group.close_attempts += 1
+        attempts = int(self.config.get('CLOSE_ATTEMPTS', 3) or 3)
+        group.reason = reason
+        if group.close_attempts < attempts:
+            logging.error('%s: a resting close at %s did not go through: %s',
+                          pair.key, group.level, reason)
+            return
+        group.escalated = True
+        group.reason = (f'CLOSE IT BY HAND — {reason} '
+                        f'(after {group.close_attempts} attempts)')
+        logging.critical('%s: %s', pair.key, group.reason)
+
+    def _close_reason(self, group):
+        """Whose close this was, in the words the trader reads.
+
+        A close the trader clicked is not automation (spec 5.4), and
+        reporting their own click as a take-profit is the same mistake
+        the AutoRouting switch made when it swept their order away.
+        """
+        if any(getattr(o, 'auto_armed', False) for o in group.orders):
+            return 'auto take-profit'
+        return 'closed by the trader'
 
     def key_for_group(self, group):
         return (group.pair_key, group.side.value, round(group.level, 10),
                 group.position_id)
 
-    def market_for(self, pair):
-        """The pair's last market, for marking a close. Set by `work`."""
-        return self._markets.get(pair.key)
-
-    def arm(self, pair, position, level, quantity=None, armed_by='auto'):
+    def arm(self, pair, position, level, quantity=None, auto=True):
         """Rest a working order to CLOSE `position` at `level`.
 
-        This is what AutoRouting does on a fill, and what the trader
-        does by hand with Close @ Limit. Neither is a strategy: it
-        places the exit order the trader would otherwise place a click
-        at a time. No signal, no re-entry, no loop.
+        This is what AutoRouting does on a fill, and it is not a
+        strategy: it places the exit order the trader would otherwise
+        place by hand, at a level derived from settings they typed. No
+        signal, no re-entry, no loop.
 
         It arms a TARGET and NO STOP — the position runs until the
         target, the overnight rule, or the trader.
-
-        `armed_by` is WHO asked. It decides one thing only, and it
-        matters: switching AutoRouting off sweeps what AutoRouting
-        armed, and must not touch an exit the trader rested by hand.
         """
         if level is None:
             return None
@@ -545,43 +770,69 @@ class Quoter:
             pair, position.side.opposite, level,
             quantity if quantity is not None else position.quantity,
             order_type=OrderType.LIMIT,
-            position_id=position.position_id, armed_by=armed_by)
+            position_id=position.position_id, auto_armed=auto)
         self.group_for(pair, order)
         logging.info('%s: %s armed a %s to close %s at %s', pair.key,
-                     'AutoRouting' if armed_by == 'auto' else 'the trader',
+                     'AutoRouting' if auto else 'the trader',
                      position.side.opposite.value,
                      position.position_id, level)
         return order
 
-    def disarm(self, position_id, reason='its position is gone',
-               armed_by=None):
+    def carry_remainder(self, order, quantity):
+        """Let a reducing click's leftover ride on the close it armed.
+
+        The remainder opens when — and only when — that close has
+        actually gone through. See `QuoteGroup.open_after`.
+        """
+        group = self.groups.get(self.key_for(order))
+        if group is None:
+            return False
+        group.open_after = float(quantity or 0.0)
+        return True
+
+    def disarm(self, position_id, reason='its position is gone'):
         """Pull every closing order armed against one position.
 
-        Called BEFORE the close, never after: an auto-TP left resting
-        after its position is gone is the orphan-pending incident with a
-        GUARANTEED fill — it will execute, and with nothing to close it
-        opens a naked position instead.
+        Called BEFORE the close, never after: a level left armed
+        against a position that has gone fires at the next tick that
+        reaches it, and closes something that is not there.
         """
         pulled = []
-        for order in self.book.orders_for_position(position_id,
-                                                   armed_by=armed_by):
+        for order in self.book.orders_for_position(position_id):
             self.book.cancel(order.order_id, reason)
             pulled.append(order)
-        if armed_by is not None and not pulled:
-            return pulled
         for key, group in list(self.groups.items()):
             if group.position_id != position_id:
-                continue
-            if armed_by is not None and any(
-                    o.is_working for o in group.orders):
-                # Something the caller was not asked to pull is still
-                # working here: the real pending stays, re-sized on the
-                # next pass to what is left.
                 continue
             pair = self.config.pairs.get(group.pair_key)
             if pair is not None:
                 self._pull(pair, group, reason)
             self.groups.pop(key, None)
+        return pulled
+
+    def disarm_auto(self, position_id, reason):
+        """Pull only what AUTOMATION armed against a position.
+
+        `disarm` pulls everything, which is right when the position is
+        GONE — any closing order left behind would fill and open a
+        naked one. It is wrong for the AutoRouting switch, which stands
+        automation down and has no business touching a close the trader
+        placed by hand.
+        """
+        pulled = []
+        for order in self.book.auto_armed_for(position_id):
+            self.book.cancel(order.order_id, reason)
+            pulled.append(order)
+            for key, group in list(self.groups.items()):
+                if group.position_id != position_id:
+                    continue
+                if not any(o.order_id == order.order_id
+                           for o in group.orders):
+                    continue
+                pair = self.config.pairs.get(group.pair_key)
+                if pair is not None:
+                    self._pull(pair, group, reason)
+                self.groups.pop(key, None)
         return pulled
 
     def _pull_pair(self, pair, reason):
@@ -627,7 +878,22 @@ class Quoter:
         # benchmark is the clicked level, not the touch it crossed.
         position.entry_slippage = slippage(group.level, entry_spread,
                                            group.side)
-        return self.book.add_position(position)
+        return self._remember(self.book.add_position(position))
+
+    def _remember(self, position):
+        """Write a position the quoter changed through to the database.
+
+        On the change, not on a timer: the window between an order
+        filling and the state being safe is the window a crash turns
+        into a position nobody can recover.
+        """
+        if self.on_change is not None and position is not None:
+            try:
+                self.on_change(position)
+            except Exception as e:            # never lose the trade
+                logging.critical('could not persist %s: %s',
+                                 position.position_id, e)
+        return position
 
     def _settle_orders(self, group, filled_spreads):
         """Mark the synthetics behind a fill, OLDEST first.

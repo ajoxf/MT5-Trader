@@ -208,8 +208,11 @@
     // What each field was RENDERED with. Comparing against this is how
     // an operator's unapplied edit is told apart from a value that
     // simply came back unchanged from the server.
-    Array.prototype.forEach.call(section.querySelectorAll('input'),
-      function (input) {
+    // input AND select: the ladder-click convention is a <select>,
+    // and a control left out here reverts under the 5s poll and is
+    // then SAVED back at its old value by Apply.
+    Array.prototype.forEach.call(
+      section.querySelectorAll('input, select'), function (input) {
         input.dataset.rendered = input.type === 'checkbox'
           ? String(input.checked) : input.value;
       });
@@ -231,8 +234,8 @@
     // newAccountDraft() instead.
     if (!section || !section.querySelector('.s-stale')) { return null; }
     var edited = null;
-    Array.prototype.forEach.call(section.querySelectorAll('input'),
-      function (input) {
+    Array.prototype.forEach.call(
+      section.querySelectorAll('input, select'), function (input) {
         if (input.dataset.rendered === undefined) { return; }
         var now = input.type === 'checkbox'
           ? String(input.checked) : input.value;
@@ -302,6 +305,22 @@
           'crosses both accounts immediately. The arming carries the ' +
           'weight instead: the mode badge, the tinted columns, the ' +
           'cursor.') + '</div>');
+    var tt = (settings.CLICK_CONVENTION || 'TT') !== 'TOUCH';
+    html += field('Ladder click',
+      '<select class="s-click">' +
+      '<option value="TT"' + (tt ? ' selected' : '') + '>' +
+      'Bids buy — TT price ladder</option>' +
+      '<option value="TOUCH"' + (tt ? '' : ' selected') + '>' +
+      'Asks buy — hit and lift</option></select>' +
+      '<div class="hint">' + (tt
+        ? 'TT: clicking BIDS joins the bid, which is a resting BUY; ' +
+          'clicking ASKS joins the offer and sells. What every desk ' +
+          'arrives with.'
+        : 'HIT/LIFT: clicking ASKS lifts the offer and BUYS; clicking ' +
+          'BIDS hits the bid and sells.') +
+      ' It moves only which column sends which side — the price is the ' +
+      'row you clicked either way, and the BUY and SELL buttons name ' +
+      'their own side and do not change.</div>');
     html += field('Slippage protection (ticks)',
       '<input class="s-protection" type="number" min="0" step="0.5" ' +
       'value="' + escape(settings.MARKET_PROTECTION_TICKS) + '">' +
@@ -913,6 +932,7 @@
     }
     var fields = {
       CONFIRM_MARKET_CLICKS: panel.querySelector('.s-confirm').checked,
+      CLICK_CONVENTION: panel.querySelector('.s-click').value,
       MARKET_PROTECTION_TICKS: number('.s-protection'),
       ROW_HEIGHT_PX: number('.s-rowheight'),
       COMMAND_POLL_SEC: number('.s-drain'),

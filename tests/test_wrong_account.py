@@ -58,13 +58,26 @@ def test_a_login_of_a_different_type_is_not_a_mismatch():
     assert login_check(checklist)['status'] == PASS
 
 
-def test_no_expected_login_still_passes():
-    """Nothing configured is not a mismatch — an account may legitimately
-    attach to whatever terminal is open."""
+def test_an_account_with_no_configured_login_is_a_FAILURE():
+    """This used to PASS, on purpose: "nothing configured is not a
+    mismatch — an account may legitimately attach to whatever terminal
+    is open".
+
+    That is indefensible on a live account. Every other guard is
+    written `if login and ...`, so a blank Login box skipped all of
+    them: the leg attached to whichever terminal was open, traded THAT
+    account, and the checklist reported it healthy because there was
+    nothing configured to disagree with. A leg that cannot name its
+    login cannot be checked against anything.
+    """
     checklist = diagnostics.Checklist()
     diagnostics.check_account(checklist, 'LegB', terminal(100006))
 
-    assert login_check(checklist)['status'] == PASS
+    check = login_check(checklist)
+    assert check['status'] == FAIL
+    # And it names what it actually attached to, so the operator can
+    # see whose account they were one click away from trading.
+    assert '100006' in check['message']
 
 
 class FakeInfo:
@@ -125,9 +138,81 @@ def test_the_runner_connects_when_the_terminal_is_the_right_one(monkeypatch):
     assert broker.connected is True
 
 
-def test_an_account_with_no_login_configured_still_attaches(monkeypatch):
-    """A blank login means "attach to whatever is open", which is a
-    supported way to run a single-account desk."""
+def test_an_account_with_no_login_configured_does_NOT_attach(monkeypatch):
+    """This was supported on purpose — a blank login meant "attach to
+    whatever is open", for a single-account desk.
+
+    It is withdrawn. On a two-legged hedge that convenience is how a
+    leg ends up trading an account nobody chose, and it defeats every
+    other guard at once: they are all written `if login and ...`.
+    """
     broker, _ = broker_for(monkeypatch, 100006, None)
 
-    assert broker.initialize() is True
+    assert broker.initialize() is False
+    assert broker.connected is False
+
+
+def test_a_leg_refuses_to_start_with_no_login_configured():
+    """The runner's half of the same rule.
+
+    `leg_runner.main()` exits when initialize() is False, so refusing
+    here is refusing to trade at all — which is the only safe answer
+    for a leg that cannot say which account it is for.
+    """
+    import types
+    from mt5trader import broker as broker_mod
+
+    account = types.SimpleNamespace(
+        name='LegA', login=None, password='x', server='S',
+        terminal_path=r'C:\MT5-15\terminal64.exe')
+    reached = []
+
+    class NeverCalled:
+        def initialize(self, **kwargs):
+            reached.append(kwargs)
+            return True
+
+        def shutdown(self):
+            pass
+
+    original = broker_mod.mt5
+    broker_mod.mt5 = NeverCalled()
+    try:
+        session = broker_mod.BrokerSession(account)
+        assert session.initialize() is False
+        assert reached == [], (
+            'it tried to attach to a terminal despite having no login '
+            f'to check against: {reached}')
+        assert session.connected is False
+    finally:
+        broker_mod.mt5 = original
+
+
+def test_the_control_a_leg_WITH_a_login_still_starts():
+    """Without this the refusal above passes on a broker that never
+    connects to anything at all."""
+    import types
+    from mt5trader import broker as broker_mod
+
+    account = types.SimpleNamespace(
+        name='LegA', login=100015, password='x', server='S',
+        terminal_path=r'C:\MT5-15\terminal64.exe')
+
+    class Ok:
+        def initialize(self, **kwargs):
+            return True
+
+        def account_info(self):
+            return FakeInfo(100015)
+
+        def shutdown(self):
+            pass
+
+    original = broker_mod.mt5
+    broker_mod.mt5 = Ok()
+    try:
+        session = broker_mod.BrokerSession(account)
+        assert session.initialize() is True
+        assert session.connected is True
+    finally:
+        broker_mod.mt5 = original
