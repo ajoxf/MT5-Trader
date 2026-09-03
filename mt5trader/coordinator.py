@@ -1789,6 +1789,7 @@ class Coordinator:
                 'increment': pair.effective_increment(),
                 'increment_derived': pair.derived_increment(),
                 'order_type': pair.order_type.value,
+                'exit_type': pair.exit_type.value,
                 'time_in_force': pair.time_in_force.value,
                 'overnight': pair.overnight.value,
                 # AutoRouting: on a fill, rest a working order to close

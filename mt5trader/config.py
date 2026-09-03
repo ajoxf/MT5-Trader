@@ -344,6 +344,7 @@ class PairConfig:
                  hedge_ratio=1.0, hedge_ratio_for=None, pair_type='SPOT_FUTURE',
                  increment=None, clip_lots_a=None, clip_lots_b=None,
                  default_quantity=1.0, order_type=OrderType.LIMIT.value,
+                 exit_type=OrderType.MARKET.value,
                  time_in_force=TimeInForce.DAY.value,
                  overnight=OvernightMode.ALLOW.value,
                  quoting_leg=None, enabled=True, rows=30,
@@ -373,6 +374,23 @@ class PairConfig:
         # Blank is the DEFAULT, never an exception: see `_choice`.
         self.order_type = _choice(OrderType, order_type,
                                   OrderType.LIMIT.value, key, 'order_type')
+        #: How this ladder GETS OUT by default — the instruction the
+        #: close controls and the F key follow.
+        #:
+        #: MARKET crosses now. LIMIT rests one closing order per open
+        #: position at a level and waits there. Either way the thing
+        #: that eventually reaches the broker is the SAME: a market
+        #: close by ticket on both legs. Nothing rests a closing
+        #: pending, because MT5 ignores `position` on a pending and an
+        #: opposite limit OPENS a second position on a hedging account
+        #: — that happened live on 2026-09-02. So this selects WHEN,
+        #: not what.
+        #:
+        #: Default MARKET, and CLOSE ALL crosses now whatever this
+        #: says: the way out must not change meaning under the button
+        #: pressed in a hurry.
+        self.exit_type = _choice(OrderType, exit_type,
+                                 OrderType.MARKET.value, key, 'exit_type')
         self.time_in_force = _choice(TimeInForce, time_in_force,
                                      TimeInForce.DAY.value, key,
                                      'time_in_force')
@@ -558,7 +576,8 @@ class PairConfig:
     HOT_FIELDS = (('expiry', 'expiry_a', 'auto_route',
                    'swap_a_long_per_lot', 'swap_a_short_per_lot',
                    'swap_b_long_per_lot', 'swap_b_short_per_lot',
-                   'order_type', 'time_in_force', 'overnight', 'increment',
+                   'order_type', 'exit_type',
+                   'time_in_force', 'overnight', 'increment',
                    'default_quantity', 'quoting_leg', 'rows',
                    # What ONE spread means in leg A lots. Leg B is
                    # never typed: it is the hedge, and it is derived.
@@ -587,6 +606,9 @@ class PairConfig:
                 value = pair_type_name(value)
             elif field == 'order_type':
                 value = _choice(OrderType, value, self.order_type.value,
+                                self.key, field)
+            elif field == 'exit_type':
+                value = _choice(OrderType, value, self.exit_type.value,
                                 self.key, field)
             elif field == 'time_in_force':
                 value = _choice(TimeInForce, value, self.time_in_force.value,
@@ -624,6 +646,7 @@ class PairConfig:
             'clip_lots_a': self.clip_lots_a, 'clip_lots_b': self.clip_lots_b,
             'default_quantity': self.default_quantity,
             'order_type': self.order_type.value,
+            'exit_type': self.exit_type.value,
             'time_in_force': self.time_in_force.value,
             'overnight': self.overnight.value,
             'quoting_leg': self.quoting_leg,

@@ -1590,6 +1590,14 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
 /* Darker once a pending is actually AT the broker on that leg. */
 .rail .quoting-note.live { color: var(--frame-text); }
 
+/* Which way out is this ladder's DEFAULT — the one F fires. Both
+ * buttons stay on the screen either way; the ring says which one the
+ * key will press, so nobody has to remember. */
+.rail .quick.primary-exit {
+  outline: 2px solid #f0c674;
+  outline-offset: -2px;
+}
+
 /* Close at a price, on the row under CLOSE ALL. One row, not two: the
  * rail is read top to bottom while the market moves. */
 .rail .close-lmt-row { display: flex; gap: 2px; margin-top: 2px; }

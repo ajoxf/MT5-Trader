@@ -1087,6 +1087,7 @@
   //:           expiry, a swap. Blank is a real state here.
   var LADDER_FIELDS = [
     ['.ls-order-type', 'order_type', 'live'],
+    ['.ls-exit-type', 'exit_type', 'live'],
     ['.ls-tif', 'time_in_force', 'live'],
     ['.ls-overnight', 'overnight', 'live'],
     ['.ls-increment', 'increment', 'live-number'],
@@ -1412,6 +1413,21 @@
         });
   }
 
+  function exitPair(key) {
+    /* The ladder's DEFAULT way out — what F does.
+     *
+     * MARKET crosses now; LIMIT rests at the price on the rail. Both
+     * buttons stay on the screen whichever is selected: this decides
+     * which one is the default, never which one exists.
+     */
+    var node = document.querySelector(
+      '.ladder[data-pair="' + cssEscape(key) + '"]');
+    var row = state.snapshot.pairs[key] || {};
+    if ((row.exit_type || 'MARKET') !== 'LIMIT') { return flatten(key); }
+    var box = node && node.querySelector('.close-limit');
+    return closeAtLimit(key, box ? box.value : '');
+  }
+
   function flatten(key) {
     var row = state.snapshot.pairs[key] || {};
     if (!row.net_position) {
@@ -1559,6 +1575,20 @@
     ours.classList.toggle('legs', session.ours === false);
 
     setValue(node.querySelector('.order-type'), row.order_type);
+    // WHICH way out is this ladder's default — said on the buttons
+    // themselves, because F fires one of them and a trader must not
+    // have to remember which. CLOSE ALL still crosses now either way:
+    // the way out does not change meaning under the button pressed in
+    // a hurry, it only stops being the DEFAULT one.
+    var atLimit = (row.exit_type || 'MARKET') === 'LIMIT';
+    var flat = node.querySelector('.flatten');
+    var lmt = node.querySelector('.close-limit-go');
+    if (flat && lmt) {
+      flat.classList.toggle('primary-exit', !atLimit);
+      lmt.classList.toggle('primary-exit', atLimit);
+      flat.title = flat.title.replace(/ \(F\)$/, '') + (atLimit ? '' : ' (F)');
+      lmt.title = lmt.title.replace(/ \(F\)$/, '') + (atLimit ? ' (F)' : '');
+    }
     setValue(node.querySelector('.tif'), row.time_in_force);
     setValue(node.querySelector('.increment'), row.increment);
 
@@ -3497,7 +3527,7 @@
     }
     if (lower === 'b') { return atTouch(key, 'BUY'); }
     if (lower === 's') { return atTouch(key, 'SELL'); }
-    if (lower === 'f') { return flatten(key); }
+    if (lower === 'f') { return exitPair(key); }
     if (lower === 'x') { return send('cancel_where', {pair: key}); }
     if (lower === 'l') {
       // Through the same path as the tick, so the keyboard and the

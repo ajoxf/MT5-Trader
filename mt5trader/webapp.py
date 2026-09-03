@@ -919,6 +919,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             )}), 409
         for field in ('name', 'leg_a', 'leg_b', 'pair_type', 'hedge_ratio',
                       'increment', 'default_quantity', 'order_type',
+                      'exit_type',
                       'time_in_force', 'overnight', 'quoting_leg', 'enabled',
                       'rows', 'clip_lots_a', 'clip_lots_b',
                       'expiry', 'expiry_a', 'auto_route',

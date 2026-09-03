@@ -149,6 +149,11 @@ class CommandRunner:
     #: nothing understands.
     EDITABLE = {
         'order_type': OrderType,
+        #: How this ladder gets OUT by default: MARKET crosses now,
+        #: LIMIT rests at a level and waits. CLOSE ALL crosses either
+        #: way — the way out must not change meaning under the button
+        #: pressed in a hurry.
+        'exit_type': OrderType,
         'time_in_force': TimeInForce,
         'overnight': OvernightMode,
         'increment': lambda v: float(v) if v not in (None, '') else None,

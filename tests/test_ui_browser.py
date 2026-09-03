@@ -87,6 +87,10 @@ class Publisher:
         #: What is ON. Close @ Limit refuses on a flat ladder, so a
         #: test of it has to publish a position first.
         self.net_position = 0.0
+        #: How this ladder gets OUT by default. MARKET in the engine
+        #: too: a default that WAITS is a position nobody is getting
+        #: out of.
+        self.exit_type = 'MARKET'
         #: Which leg LIMIT mode rests its real pending on. The other
         #: leg is crossed at market when it fills, and a broker window
         #: showing nothing on that leg is the mode, not a fault.
@@ -111,7 +115,8 @@ class Publisher:
                            self.show_fair_window, self.orders,
                            self.quotes, self.working_buys,
                            self.working_sells, self.algo, self.algo_block,
-                           self.net_position, self.quoting_leg)
+                           self.net_position, self.quoting_leg,
+                           self.exit_type)
         if at is not None:
             payload['at'] = at
         # A tmp name of its OWN. The timer thread and the test publish
@@ -159,7 +164,7 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              auto_route=False, auto_route_armed=None,
              auto_route_master=True, show_fair_window=True, orders=None, quotes=None,
              working_buys=0, working_sells=0, algo='NONE', algo_block=None,
-             net_position=0.0, quoting_leg='b'):
+             net_position=0.0, quoting_leg='b', exit_type='MARKET'):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -203,7 +208,8 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'hedge_ratio': 1.0, 'hedge_ratio_for': 'XAUUSD_|GC1226',
                 'pair_type': 'SPOT_FUTURE',
                 'increment': 0.01, 'increment_derived': 0.01,
-                'order_type': order_type, 'time_in_force': 'DAY',
+                'order_type': order_type, 'exit_type': exit_type,
+                'time_in_force': 'DAY',
                 'overnight': 'ALLOW', 'default_quantity': 1.0,
                 'auto_route': auto_route,
                 'auto_route_on': bool(auto_route and auto_route_master),
@@ -3806,4 +3812,56 @@ def test_the_lots_one_spread_costs_can_be_typed_and_says_what_is_in_force(
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
     assert page.evaluate('() => window.__sent.clip_lots_a') is None
+    page.evaluate("() => { window.fetch = window.__realFetch; }")
+
+
+def test_the_default_way_out_is_shown_on_the_button_F_will_press(page):
+    """Two ways out, and F fires one of them. Which one is the ladder's
+    OWN setting, so it is said on the buttons rather than remembered —
+    and both stay on the screen either way: the way out must not change
+    meaning under the button pressed in a hurry."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+
+    publisher.exit_type = 'MARKET'
+    publisher.publish()
+    page.wait_for_selector('.ladder .flatten.primary-exit', timeout=WAIT)
+    assert page.locator('.ladder .close-limit-go.primary-exit').count() == 0
+    assert '(F)' in (page.get_attribute('.ladder .flatten', 'title') or '')
+
+    publisher.exit_type = 'LIMIT'
+    publisher.publish()
+    page.wait_for_selector('.ladder .close-limit-go.primary-exit',
+                           timeout=WAIT)
+    assert page.locator('.ladder .flatten.primary-exit').count() == 0
+    assert '(F)' in (page.get_attribute('.ladder .close-limit-go',
+                                        'title') or '')
+    # CLOSE ALL is still there, and still says it crosses NOW.
+    assert page.locator('.ladder .flatten').count() == 1
+    assert 'NOW' in (page.get_attribute('.ladder .flatten', 'title') or '')
+
+    publisher.exit_type = 'MARKET'
+    publisher.publish()
+
+
+def test_the_exit_type_is_set_where_the_entry_mode_s_twin_is(page):
+    """In the ladder's own settings, beside the exit fields it governs
+    — not on the rail, which has no row to spare."""
+    open_ladder(page)
+    # The page polls; the pane seeds from the snapshot it HAS, so wait
+    # for the engine's default to have arrived before reading it.
+    page.wait_for_function(
+        "() => window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+        ".exit_type === 'MARKET'", timeout=WAIT)
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-exit-type', timeout=WAIT)
+    assert page.locator(
+        '.ladder .ls-group:has(.ls-overnight) .ls-exit-type').count() == 1
+    assert page.input_value('.ladder .ls-exit-type') == 'MARKET'
+
+    page.evaluate(SPY_ON_PAIR_SAVE)
+    page.select_option('.ladder .ls-exit-type', 'LIMIT')
+    page.click('.ladder .ls-save')
+    page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
+    assert page.evaluate('() => window.__sent.exit_type') == 'LIMIT'
     page.evaluate("() => { window.fetch = window.__realFetch; }")

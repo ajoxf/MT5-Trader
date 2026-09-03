@@ -225,7 +225,14 @@
              for a row: lift the offer, hit the bid, close what is on. -->
         <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY</button>
         <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL</button>
-        <button class="quick flatten" title="Close every open position on this pair, at market, by ticket. It does not touch working orders — use Cancel all for those. Asks once (F)">CLOSE ALL</button>
+        <!-- The exit type is chosen in this ladder's settings, not
+             here: the rail has no row to spare, and it is a decision
+             made once rather than during the move. What the rail
+             shows is the RESULT — a ring round whichever of these two
+             F will press. Both stay on the screen whichever is set:
+             the way out must not change meaning under the button
+             pressed in a hurry. -->
+        <button class="quick flatten" title="Close every open position on this pair, at market, by ticket, NOW. It does not touch working orders — use Cancel all for those. Asks once">CLOSE ALL</button>
         <!-- The other way to close: name a price and wait there. Same
              machinery as an AutoRouting target — one working order per
              position, carrying that position's ticket so it CLOSES
@@ -337,6 +344,11 @@
         </div>
         <div class="ls-group">
           <h4>Exit</h4>
+          <label class="lsf"><span>Exit type</span>
+            <select class="ls-exit-type" title="What F and the emphasised close button do. MARKET crosses both legs now; LIMIT rests one closing order per open position and waits at the price on the rail. Either way what reaches the broker is a market close by ticket — a closing PENDING would open a second position on a hedging account. CLOSE ALL always crosses now.">
+              <option value="MARKET">Market</option>
+              <option value="LIMIT">Limit</option>
+            </select></label>
           <label class="lsf"><span>Overnight</span>
             <select class="ls-overnight" title="What happens to an OPEN POSITION at the session cutoff. It governs positions; DAY/GTC governs working orders, and the two are not the same thing.">
               <option value="ALLOW">Hold overnight</option>
