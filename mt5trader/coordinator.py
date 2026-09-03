@@ -1235,7 +1235,8 @@ class Coordinator:
             return [], quantity, [], None
         armed = []
         closed = []
-        for position in self.book.positions_to_reduce(pair.key, side, left):
+        for position, take in self.book.positions_to_reduce(pair.key, side,
+                                                            left):
             # THE LEG THIS WOULD REST ON MAY ALREADY BE FLAT.
             #
             # A resting close fires by TICKET. Once the broker no
@@ -1255,6 +1256,9 @@ class Coordinator:
                             book_module.close_failure(answer, position))
                 self.remember(position)
                 closed.append(position.position_id)
+                # The WHOLE position went: a naked leg cannot be
+                # part-closed at a level, so what came off is the
+                # ticket, not the slice the click reached.
                 left -= float(position.quantity or 0.0)
                 continue
             # A target may already be armed here by AutoRouting, at ITS
@@ -1277,7 +1281,9 @@ class Coordinator:
                 # `existing[0]` reported an order resting somewhere else
                 # as the one the click had just placed.
                 armed.append(at_this_level[0])
-                left -= float(position.quantity or 0.0)
+                # What that order already covers, which is its own
+                # size — not the whole position, when it is a part.
+                left -= float(at_this_level[0].quantity or take)
                 continue
             if existing:
                 # A DIFFERENT level: the trader has just named their
@@ -1288,12 +1294,16 @@ class Coordinator:
                 self.quoter.disarm(
                     position.position_id,
                     f'the trader clicked {level:g} to close this instead')
-            order = self.quoter.arm(pair, position, level,
-                                    position.quantity, auto=False)
+            # AS FAR AS THE CLICK REACHES, not the whole ticket. A
+            # BUY 100 over a 1,200 short rests a close for 100 of it
+            # and opens NOTHING; before this it armed the small old
+            # tickets, gave up at the big one, and opened the rest the
+            # other way.
+            order = self.quoter.arm(pair, position, level, take, auto=False)
             if order is None:
                 break
             armed.append(order)
-            left -= float(position.quantity or 0.0)
+            left -= take
         return armed, max(left, 0.0), closed, None
 
     def _quoting_leg_is_gone(self, pair, position):
@@ -1916,6 +1926,13 @@ class Coordinator:
                 'broker_pendings': sum(
                     1 for quote in self.quoter.snapshot(key)
                     if quote.get('ticket')),
+                # How many of the working orders are resting CLOSES. A
+                # closing order puts nothing at the broker by design,
+                # so counting it against `broker_pendings` made every
+                # reducing click look like orders that failed to place.
+                'resting_closes': sum(
+                    1 for order in self.book.orders(key)
+                    if order.position_id),
                 'positions': positions,
                 'net_position': net, 'avg_entry': avg_entry,
                 'open_pnl': open_pnl if positions else None,

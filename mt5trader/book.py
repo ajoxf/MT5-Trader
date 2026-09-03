@@ -147,23 +147,34 @@ class Book:
         return self._positions.get(position_id)
 
     def positions_to_reduce(self, pair_key, side, quantity, exclude=None):
-        """Open positions the OPPOSITE way, OLDEST FIRST, up to `quantity`.
+        """What an opposite click covers: `[(position, spreads)]`.
 
-        A price ladder is expected to REDUCE before it opens: click the
-        offer while short and you are covering, not stacking a second
-        short. These accounts are HEDGING, so MT5 will never net for
-        us — an opposite order always opens a second position — which
-        means the netting has to be done here, by closing tickets.
+        OLDEST FIRST, which is what FIFO means and what every desk
+        expects when they say "close my position". A price ladder is
+        expected to REDUCE before it opens: click the offer while short
+        and you are covering, not stacking a second short. These
+        accounts are HEDGING, so MT5 will never net for us — an
+        opposite order always opens a second position — which means the
+        netting has to be done here, by closing tickets.
 
-        Two rules keep it safe:
+        THE LAST ONE IS TAKEN IN PART. Whole tickets only was the rule
+        here, with a ticket bigger than the click ending the scan:
 
-        - OLDEST FIRST, which is what FIFO means and what every desk
-          expects when they say "close my position".
-        - A position is only picked when it fits ENTIRELY inside what
-          is left to reduce. `close_position` closes whole tickets, so
-          taking a bigger one would close more than the trader asked
-          for and flip their net the other way. Whatever does not fit
-          is left alone and the remainder opens normally.
+            live 2026-09-03, short 1207 spreads, BUY 100 clicked
+            -> "resting at 7.69 to CLOSE 2 position(s), then open 93"
+
+        Two old tickets of 5 and 2 fitted; the 1,200 behind them did
+        not, so 93 of the trader's 100 went the OTHER WAY — opening
+        longs against their own short instead of covering it. A reduce
+        that opens is the exact failure "reduce before you open" exists
+        to prevent; it had simply moved from the side to the size.
+
+        A part-close is supported end to end: `close_position` takes a
+        quantity, `_closed_fraction` measures what actually came off,
+        and `reduce_by` leaves the position open for the rest. So the
+        oldest ticket is closed as far as the click reaches and no
+        further, and nothing opens while there is still an opposite
+        position to cover.
         """
         try:
             left = float(quantity)
@@ -190,12 +201,17 @@ class Book:
         picked = []
         for position in opposite:
             size = float(position.quantity or 0.0)
-            if size <= 0 or size > left + 1e-9:
-                # Bigger than what is being reduced: closing it would
-                # over-close. Leave it, and leave the queue in order.
+            if size <= 0:
+                continue
+            # As much of this ticket as the click still reaches. Never
+            # more: over-closing would flip the net the other way,
+            # which is the mistake at the opposite end from the one
+            # above and just as expensive.
+            take = min(size, left)
+            if take <= 1e-9:
                 break
-            picked.append(position)
-            left -= size
+            picked.append((position, take))
+            left -= take
             if left <= 1e-9:
                 break
         return picked
@@ -252,10 +268,11 @@ def reduce_first(book, executor, pair, side, quantity, md,
     except (TypeError, ValueError):
         return [], quantity, None
     closed = []
-    for position in book.positions_to_reduce(pair.key, side, left,
-                                             exclude=exclude):
+    for position, take in book.positions_to_reduce(pair.key, side, left,
+                                                   exclude=exclude):
         result = executor.close_position(
-            pair, position, md, reason='reduced by an opposite click')
+            pair, position, md, reason='reduced by an opposite click',
+            quantity=take)
         if not result.get('ok'):
             # Stop at the first refusal rather than stepping over it.
             # The rest of the queue is no longer the queue the trader
@@ -266,7 +283,7 @@ def reduce_first(book, executor, pair, side, quantity, md,
         if on_closed is not None:
             on_closed(position)
         closed.append(position.position_id)
-        left -= float(position.quantity or 0.0)
+        left -= take
     return closed, max(left, 0.0), None
 
 

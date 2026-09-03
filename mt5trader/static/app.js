@@ -226,6 +226,24 @@
     }
   }
 
+  function toastOutcome(result) {
+    /* What the engine said, in the style that says which it was.
+     *
+     * A REASON IS NOT A REFUSAL. An error toast stays on the screen
+     * until it is dismissed, on purpose — and an ordinary outcome
+     * ("resting at 7.69 to CLOSE 2 position(s), then open 93") was
+     * going out in exactly that style, so a click that did precisely
+     * what it was asked read as a fault and sat there until somebody
+     * clicked it away.
+     */
+    var data = (result && result.data) || {};
+    if (result && result.ok === false) {
+      return toast(result.error || 'the engine refused that');
+    }
+    if (data.refused) { return toast(data.reason || 'refused'); }
+    if (data.reason) { return toast(data.reason, 'ok'); }
+  }
+
   function pollResult(id, then, tries) {
     tries = tries || 0;
     return fetch('/api/result/' + id).then(function (r) { return r.json(); })
@@ -239,13 +257,7 @@
           });
         }
         soundFor(result);
-        if (result && result.ok === false) {
-          toast(result.error || 'the engine refused that');
-        } else if (result && result.data && result.data.reason) {
-          toast(result.data.reason);
-        } else if (result && result.data && result.data.refused) {
-          toast(result.data.reason || 'refused');
-        }
+        toastOutcome(result);
         if (then) { then(result); }
         return result;
       });
@@ -1672,14 +1684,25 @@
     counts.querySelector('.cnt-s').textContent = 'S:' + sold(row);
     var working = row.working_buys + row.working_sells;
     var resting = row.broker_pendings;
-    // Ours, and — when they disagree — the broker's. A pending at the
-    // broker that our book knows nothing about is the one number worth
-    // interrupting for: it is money resting that nothing is watching.
+    // How many of ours SHOULD be at the broker. A resting close is
+    // held here and fired by ticket — it can never have a pending —
+    // so counting it against the broker's number made every reducing
+    // click read as two orders that had failed to place, in red.
+    var closes = row.resting_closes || 0;
+    var expected = working - closes;
+    var disagree = resting !== undefined && resting !== expected;
     counts.querySelector('.cnt-w').textContent =
-      'W:' + working + (resting !== undefined && resting !== working
-                        ? ' (broker ' + resting + ')' : '');
-    counts.querySelector('.cnt-w').classList.toggle(
-      'mismatch', resting !== undefined && resting !== working);
+      'W:' + working +
+      (closes ? ' (' + closes + ' resting close' + (closes > 1 ? 's' : '')
+                + ')' : '') +
+      (disagree ? ' (broker ' + resting + ')' : '');
+    counts.querySelector('.cnt-w').classList.toggle('mismatch', disagree);
+    counts.querySelector('.cnt-w').title = closes
+      ? closes + ' of these are resting CLOSES: the level is held here '
+        + 'and both legs are closed by ticket when the market reaches '
+        + 'it, so nothing of theirs is at the broker and nothing should be.'
+      : 'Our working orders, and the broker\u2019s own count when they '
+        + 'disagree.';
 
     var feed = node.querySelector('.feed');
     feed.textContent = market.feed_badge || DASH;
@@ -2184,6 +2207,13 @@
     (row.quotes || []).forEach(function (quote) {
       (quote.orders || []).forEach(function (id) { quoteFor[id] = quote; });
       if (quote.ticket) { return; }             // really is at the broker
+      // A CLOSING order rests NOTHING at the broker, by design: MT5
+      // ignores `position` on a pending, so a closing limit is an
+      // ordinary one and opens a second position on a hedging account.
+      // The level is held here and fired by ticket. Marking it "not at
+      // the broker" flagged the mode working as a fault — every
+      // resting close came up amber, permanently.
+      if (quote.intent === 'CLOSE') { return; }
       (quote.orders || []).forEach(function (id) {
         heldOff[id] = quote.reason ||
           'not resting at the broker yet';
@@ -3818,6 +3848,7 @@
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
     tidyWindows: tidyWindows, sound: sound,
-    showFairWindow: showFairWindow
+    showFairWindow: showFairWindow,
+    toastOutcome: toastOutcome
   };
 })();

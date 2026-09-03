@@ -42,17 +42,27 @@ class Executor:
 
     def __init__(self, refuse=()):
         self.closed = []
+        self.asked = []
         self.refuse = set(refuse)
 
-    def close_position(self, pair, position, md=None, reason=None):
+    def close_position(self, pair, position, md=None, reason=None,
+                       quantity=None):
+        #: (position_id, spreads asked for) — a part-close is a
+        #: quantity, not a whole ticket, and a test that could not see
+        #: the quantity could not tell the two apart.
         if position.position_id in self.refuse:
             # Shaped like the real `_settle_close`: an 'ok' and the
             # per-leg answers, which is where the broker's words are.
             return {'ok': False, 'legs': {
                 'a': {'ok': False, 'error': '10027 AutoTrading disabled'},
                 'b': {'ok': False, 'error': '10027 AutoTrading disabled'}}}
+        self.asked.append((position.position_id, quantity))
         self.closed.append(position.position_id)
-        position.is_open = False
+        take = position.quantity if quantity is None else float(quantity)
+        if take >= float(position.quantity or 0.0) - 1e-9:
+            position.is_open = False
+        else:
+            position.quantity = float(position.quantity) - take
         return {'ok': True}
 
 
@@ -73,7 +83,7 @@ def test_it_picks_the_OLDEST_opposite_position_first():
                      Position('old', SELL, 1.0, 100),
                      Position('mid', SELL, 1.0, 200))
     picked = book.positions_to_reduce('P', BUY, 2.0)
-    assert [p.position_id for p in picked] == ['old', 'mid']
+    assert [p.position_id for p, _take in picked] == ['old', 'mid']
 
 
 def test_it_never_touches_a_position_on_the_SAME_side():
@@ -84,20 +94,42 @@ def test_it_never_touches_a_position_on_the_SAME_side():
 
 
 def test_it_never_over_closes():
-    """`close_position` closes WHOLE tickets. Taking one bigger than
-    the click would close more than was asked and flip the net the
-    other way, which is worse than not reducing at all."""
+    """The click reaches 1; the ticket is 5. It closes ONE of the five
+    and leaves four. Closing the whole ticket would flip the net the
+    other way, which is the opposite mistake and just as expensive."""
     book = book_with(Position('big', SELL, 5.0, 100))
-    assert book.positions_to_reduce('P', BUY, 1.0) == []
+    assert book.positions_to_reduce('P', BUY, 1.0) == \
+        [(book.position('big'), 1.0)]
 
 
-def test_it_stops_at_the_first_ticket_too_big_to_fit():
+def test_a_ticket_bigger_than_the_click_is_taken_IN_PART():
+    """Live 2026-09-03: short 1207 spreads, BUY 100 clicked, and the
+    answer was "CLOSE 2 position(s), then open 93" — two old tickets of
+    5 and 2 fitted, the 1,200 behind them did not, and 93 of the
+    trader's 100 went the OTHER WAY. A reduce that opens is the exact
+    failure "reduce before you open" exists to prevent; it had only
+    moved from the side to the size."""
+    book = book_with(Position('a', SELL, 5.0, 100),
+                     Position('b', SELL, 2.0, 200),
+                     Position('big', SELL, 1200.0, 300))
+    picked = book.positions_to_reduce('P', BUY, 100.0)
+
+    assert [(p.position_id, take) for p, take in picked] == \
+        [('a', 5.0), ('b', 2.0), ('big', 93.0)]
+    # ...and nothing is left over to open the other way.
+    assert sum(take for _p, take in picked) == 100.0
+
+
+def test_the_queue_is_still_FIFO_and_still_stops_at_the_click(): 
+    """The control: taking part of a ticket must not become taking
+    part of every ticket. It stops the moment the click is covered, and
+    it never jumps the queue."""
     book = book_with(Position('a', SELL, 1.0, 100),
                      Position('big', SELL, 9.0, 200),
                      Position('c', SELL, 1.0, 300))
     picked = book.positions_to_reduce('P', BUY, 3.0)
-    # 'c' would fit, but taking it would jump the queue past 'big'.
-    assert [p.position_id for p in picked] == ['a']
+    assert [(p.position_id, take) for p, take in picked] == \
+        [('a', 1.0), ('big', 2.0)]
 
 
 def test_a_closed_position_is_not_reduced_again():
@@ -105,7 +137,7 @@ def test_a_closed_position_is_not_reduced_again():
     shut.is_open = False
     book = book_with(shut, Position('live', SELL, 1.0, 200))
     picked = book.positions_to_reduce('P', BUY, 5.0)
-    assert [p.position_id for p in picked] == ['live']
+    assert [p.position_id for p, _take in picked] == ['live']
 
 
 def test_a_position_can_be_excluded_from_its_own_reduction():
@@ -114,7 +146,7 @@ def test_a_position_can_be_excluded_from_its_own_reduction():
     book = book_with(Position('mine', BUY, 1.0, 300),
                      Position('old', SELL, 1.0, 100))
     picked = book.positions_to_reduce('P', SELL, 5.0, exclude='mine')
-    assert [p.position_id for p in picked] == []
+    assert picked == []
 
 
 # -- what actually gets closed ----------------------------------------
@@ -205,7 +237,7 @@ def test_a_STRING_side_still_reduces_the_real_opposite(side):
     reduce anything", which passes the test above and breaks the
     feature."""
     book = book_with(Position('long', BUY, 1.0, 100))
-    picked = book.positions_to_reduce('P', side, 5.0)
+    picked = [p for p, _take in book.positions_to_reduce('P', side, 5.0)]
     assert [p.position_id for p in picked] == ['long']
 
 
@@ -257,7 +289,8 @@ def test_a_HALF_closed_position_says_NAKED_LEG_first():
     class HalfClosed:
         closed = []
 
-        def close_position(self, pair, position, md=None, reason=None):
+        def close_position(self, pair, position, md=None, reason=None,
+                           quantity=None):
             return {'ok': False, 'legs': {
                 'a': {'ok': True},
                 'b': {'ok': False, 'error': '10018 market closed'}}}

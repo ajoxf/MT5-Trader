@@ -91,6 +91,11 @@ class Publisher:
         #: too: a default that WAITS is a position nobody is getting
         #: out of.
         self.exit_type = 'MARKET'
+        #: How many of the working orders are resting CLOSES. They put
+        #: nothing at the broker BY DESIGN, so they must not be counted
+        #: against the broker's own number.
+        self.resting_closes = 0
+        self.broker_pendings = None
         #: Which leg LIMIT mode rests its real pending on. The other
         #: leg is crossed at market when it fills, and a broker window
         #: showing nothing on that leg is the mode, not a fault.
@@ -116,7 +121,8 @@ class Publisher:
                            self.quotes, self.working_buys,
                            self.working_sells, self.algo, self.algo_block,
                            self.net_position, self.quoting_leg,
-                           self.exit_type)
+                           self.exit_type, self.resting_closes,
+                           self.broker_pendings)
         if at is not None:
             payload['at'] = at
         # A tmp name of its OWN. The timer thread and the test publish
@@ -164,7 +170,8 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              auto_route=False, auto_route_armed=None,
              auto_route_master=True, show_fair_window=True, orders=None, quotes=None,
              working_buys=0, working_sells=0, algo='NONE', algo_block=None,
-             net_position=0.0, quoting_leg='b', exit_type='MARKET'):
+             net_position=0.0, quoting_leg='b', exit_type='MARKET',
+             resting_closes=0, broker_pendings=None):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -245,6 +252,10 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'fair': fair or {},
                 'working_buys': working_buys,
                 'working_sells': working_sells,
+                'resting_closes': resting_closes,
+                'broker_pendings': (working_buys + working_sells
+                                    - resting_closes)
+                if broker_pendings is None else broker_pendings,
                 'net_position': net_position,
                 'quoting_leg_effective': quoting_leg,
                 'avg_entry': None, 'open_pnl': None, 'last_print': None,
@@ -737,11 +748,17 @@ def test_the_shortcuts_are_on_the_screen_not_in_a_manual(page):
 def test_flatten_asks_once_and_then_goes(page):
     """Flattening is irreversible and it is the button pressed in a
     hurry — so it asks, but with one key and only once."""
-    page.evaluate("""() => {
-        const s = window.MT5Trader.state;
-        s.snapshot.pairs['XAUUSD_|GC1226'].net_position = -2;
-        window.MT5Trader.render();
-    }""")
+    # PUBLISHED, not poked in. The publisher republishes every 200ms
+    # and a snapshot edited in the page is gone by the next one, so a
+    # poked net_position made this test pass or fail on which side of
+    # that it landed — and it landed on the wrong side often enough to
+    # be noticed.
+    publisher = page.paths['publisher']
+    publisher.net_position = -2.0
+    publisher.publish()
+    page.wait_for_function(
+        "() => window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+        ".net_position === -2", timeout=WAIT)
     before = command_count(page)
     page.click('.ladder .flatten')
     page.wait_for_selector('#modal:not(.hidden)')
@@ -750,14 +767,17 @@ def test_flatten_asks_once_and_then_goes(page):
     page.wait_for_timeout(250)
     assert command_count(page) == before + 1
     assert last_command(page)['kind'] == 'flatten_pair'
+    publisher.net_position = 0.0
+    publisher.publish()
 
 
 def test_flatten_says_so_when_there_is_nothing_to_flatten(page):
-    page.evaluate("""() => {
-        const s = window.MT5Trader.state;
-        s.snapshot.pairs['XAUUSD_|GC1226'].net_position = 0;
-        window.MT5Trader.render();
-    }""")
+    publisher = page.paths['publisher']
+    publisher.net_position = 0.0
+    publisher.publish()
+    page.wait_for_function(
+        "() => window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+        ".net_position === 0", timeout=WAIT)
     before = command_count(page)
     page.click('.ladder .flatten')
     page.wait_for_selector('.toast')
@@ -3818,7 +3838,8 @@ def test_the_lots_one_spread_costs_can_be_typed_and_says_what_is_in_force(
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
     assert page.evaluate('() => window.__sent.clip_lots_a') is None
-    page.evaluate("() => { window.fetch = window.__realFetch; }")
+    page.evaluate("() => { window.fetch = window.__realFetch; "
+                  "document.getElementById('toasts').innerHTML = ''; }")
 
 
 def test_the_default_way_out_is_shown_on_the_button_F_will_press(page):
@@ -3870,7 +3891,8 @@ def test_the_exit_type_is_set_where_the_entry_mode_s_twin_is(page):
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
     assert page.evaluate('() => window.__sent.exit_type') == 'LIMIT'
-    page.evaluate("() => { window.fetch = window.__realFetch; }")
+    page.evaluate("() => { window.fetch = window.__realFetch; "
+                  "document.getElementById('toasts').innerHTML = ''; }")
 
 
 def test_how_the_two_legs_are_matched_is_the_traders_to_choose(page):
@@ -3891,4 +3913,95 @@ def test_how_the_two_legs_are_matched_is_the_traders_to_choose(page):
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
     assert page.evaluate('() => window.__sent.sizing_basis') == 'NOTIONAL'
-    page.evaluate("() => { window.fetch = window.__realFetch; }")
+    page.evaluate("() => { window.fetch = window.__realFetch; "
+                  "document.getElementById('toasts').innerHTML = ''; }")
+
+
+def test_a_resting_CLOSE_is_not_reported_as_an_order_that_failed_to_place(
+        page):
+    """A closing order puts NOTHING at the broker, by design: MT5
+    ignores `position` on a pending, so the level is held here and both
+    legs are closed by ticket when the market reaches it.
+
+    Counted against the broker's own number it read as an order that
+    had failed to place — amber in the Work cell and W:3 (broker 1) in
+    red in the footer, permanently, on every reducing click.
+    """
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    level = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows[5].level""")
+    # One ordinary working order AT the broker, and one resting close
+    # that never will be.
+    publisher.orders = [
+        {'order_id': 'OPEN1', 'level': level, 'side': 'SELL', 'quantity': 1,
+         'filled_quantity': 0, 'state': 'WORKING'},
+        {'order_id': 'CLOSE1', 'level': level - 0.05, 'side': 'BUY',
+         'quantity': 2, 'filled_quantity': 0, 'state': 'WORKING',
+         'position_id': 'POS1'}]
+    publisher.quotes = [
+        {'pair_key': 'XAUUSD_|GC1226', 'side': 'SELL', 'level': level,
+         'leg': 'B', 'ticket': 5150, 'price': 4660.4, 'intent': 'OPEN',
+         'orders': ['OPEN1']},
+        {'pair_key': 'XAUUSD_|GC1226', 'side': 'BUY', 'level': level - 0.05,
+         'leg': 'B', 'ticket': None, 'intent': 'CLOSE',
+         'position_id': 'POS1', 'orders': ['CLOSE1']}]
+    publisher.working_buys = 1
+    publisher.working_sells = 1
+    publisher.resting_closes = 1
+    publisher.broker_pendings = 1
+    publisher.publish()
+
+    page.wait_for_function(
+        "() => document.querySelectorAll('.ladder .grid td.work"
+        "[data-order-id]').length === 2", timeout=WAIT)
+
+    # NOT amber, and not "NOT at the broker": it is the mode working.
+    assert page.locator('.ladder .grid td.work.held').count() == 0
+    # ...and the footer says so in words instead of flagging a mismatch.
+    counts = page.text_content('.ladder .counts .cnt-w')
+    assert 'W:2' in counts and '1 resting close' in counts
+    assert 'broker' not in counts
+    assert page.locator('.ladder .counts .cnt-w.mismatch').count() == 0
+
+    # THE CONTROL: a genuine held-off OPENING order is still flagged.
+    publisher.quotes[0]['ticket'] = None
+    publisher.quotes[0]['reason'] = 'the spread is stale — holding off'
+    publisher.broker_pendings = 0
+    publisher.publish()
+    page.wait_for_selector('.ladder .grid td.work.held', timeout=WAIT)
+    assert page.locator('.ladder .grid td.work.held').count() == 1
+    page.wait_for_selector('.ladder .counts .cnt-w.mismatch', timeout=WAIT)
+
+    publisher.orders = None
+    publisher.quotes = None
+    publisher.working_buys = 0
+    publisher.working_sells = 0
+    publisher.resting_closes = 0
+    publisher.broker_pendings = None
+    publisher.publish()
+
+
+def test_an_ordinary_OUTCOME_is_not_toasted_as_an_error(page):
+    """An error toast stays on the screen until it is dismissed, on
+    purpose. "resting at 7.69 to CLOSE 2 position(s)" went out in that
+    style, so a click that did exactly what it was asked read as a
+    fault and sat there until somebody clicked it away."""
+    open_ladder(page)
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    page.evaluate("""() => window.MT5Trader.toastOutcome(
+        {ok: true, data: {reason: 'resting at 7.69 to CLOSE 2 position(s)'}})
+    """)
+    page.wait_for_selector('#toasts .toast', timeout=WAIT)
+    assert page.locator('#toasts .toast.ok').count() == 1
+
+    # THE CONTROL: a refusal still stays, in the style that stays.
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    page.evaluate("""() => window.MT5Trader.toastOutcome(
+        {ok: true, data: {refused: true,
+                          reason: '10027 AutoTrading disabled by client'}})
+    """)
+    page.wait_for_selector('#toasts .toast', timeout=WAIT)
+    assert page.locator('#toasts .toast.ok').count() == 0
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")

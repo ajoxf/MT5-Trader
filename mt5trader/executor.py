@@ -394,18 +394,29 @@ class PairExecutor:
     # -- exit -------------------------------------------------------------
 
     def close_position(self, pair, position, md=None, reason='manual',
-                       disarm=True):
-        """Flatten one spread position, both legs, by ticket.
+                       disarm=True, quantity=None):
+        """Close one spread position, both legs, by ticket.
 
         A guard NEVER prevents a close (spec §8): a trade must always be
         closable, so nothing in here consults the staleness or jump
         state.
+
+        `quantity` in SPREADS closes PART of the position — what an
+        opposite click reaches, when the click is smaller than the
+        ticket it is covering. None means all of it. The volumes go to
+        the broker pro rata on each leg, so a part-close stays hedged;
+        what actually came off is measured from the tickets afterwards
+        by `_closed_fraction`, never assumed from what was asked.
 
         `disarm=False` is for the one caller that OWNS the closing
         orders — the quoter, firing its own resting close. Disarming
         there would mark a close that WORKED as 'cancelled', and would
         delete the level a close that FAILED still has to be watched at.
         """
+        share = 1.0
+        if quantity is not None and position.quantity:
+            share = max(0.0, min(1.0, float(quantity) /
+                                 float(position.quantity)))
         if disarm and self.before_close is not None:
             # Disarm any resting close BEFORE closing. Afterwards is
             # too late: the level it was armed against no longer has a
@@ -426,9 +437,17 @@ class PairExecutor:
                 results[leg] = {'ok': False,
                                 'error': f'no leg runner for {symbol}'}
                 continue
+            # Pro rata on BOTH legs, so a part-close comes off hedged.
+            # None on a full close, which lets `close_tickets` take the
+            # volumes from the broker's own book rather than from what
+            # we think we sent.
+            leg_volume = None
+            if share < 1.0 - 1e-9:
+                leg_volume = float((fill.volume if fill else 0.0) or 0.0) \
+                    * share
             results[leg] = self.close_tickets(
                 runner, symbol, (fill.position_tickets if fill else []),
-                entry_side, comment='CLOSE')
+                entry_side, volume=leg_volume, comment='CLOSE')
 
         return self._settle_close(pair, position, results, md, reason)
 
