@@ -1649,6 +1649,16 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
 }
 /* Darker once a pending is actually AT the broker on that leg. */
 .rail .quoting-note.live { color: var(--frame-text); }
+/* ...and loud when there is an order that reached NEITHER broker. The
+ * ladder draws it exactly like one that is resting, so this line is
+ * the only thing on the screen that can say otherwise. */
+.rail .quoting-note.held {
+  color: #5a3d00;
+  background: #f3e2b8;
+  font-weight: 700;
+  white-space: normal;
+  padding: 1px 2px;
+}
 
 /* Which way out is this ladder's DEFAULT — the one F fires. Both
  * buttons stay on the screen either way; the ring says which one the

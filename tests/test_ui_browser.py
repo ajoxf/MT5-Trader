@@ -4174,3 +4174,61 @@ def test_why_an_opposite_click_closes_something_is_on_the_settings_page(page):
 
     page.click('.window.settings .close')
     page.wait_for_selector('.ladder .grid tbody tr')
+
+
+def test_an_order_that_reached_NEITHER_broker_says_so_without_hovering(page):
+    """An entry whose pending was never placed exists in this process
+    and nowhere else — and the ladder draws it exactly like one that is
+    resting. The reason was in the Work cell's TOOLTIP, which nobody
+    hovers when the thing they are looking at appears to be working,
+    and in "W:1 (broker 0)" at 9px in the footer. Three separate
+    sessions were spent asking why an order was not in MT5."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    level = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows[5].level""")
+    publisher.orders = [{'order_id': 'O1', 'level': level, 'side': 'SELL',
+                         'quantity': 100, 'filled_quantity': 0,
+                         'state': 'WORKING', 'time_in_force': 'DAY'}]
+    publisher.quotes = [{'pair_key': 'XAUUSD_|GC1226', 'side': 'SELL',
+                         'level': level, 'leg': 'B', 'ticket': None,
+                         'intent': 'OPEN',
+                         'reason': 'the hedge for 1 lots on leg A is under '
+                                   "leg B's 0.1-lot minimum",
+                         'orders': ['O1']}]
+    publisher.working_sells = 1
+    publisher.broker_pendings = 0
+    publisher.publish()
+
+    page.wait_for_selector('.ladder .quoting-note.held', timeout=WAIT)
+    note = page.text_content('.ladder .quoting-note')
+    assert 'NOT AT THE BROKER' in note
+    # ...in the ENGINE'S OWN WORDS, never "check the log".
+    assert "under leg B's 0.1-lot minimum" in note
+
+    # THE CONTROL: once it rests, the line goes back to saying which
+    # leg quotes — and does NOT cry wolf.
+    publisher.quotes[0]['ticket'] = 5150
+    publisher.quotes[0]['reason'] = None
+    publisher.broker_pendings = 1
+    publisher.publish()
+    page.wait_for_function(
+        "() => !document.querySelector('.ladder .quoting-note.held')",
+        timeout=WAIT)
+    assert 'LIMIT: quotes leg B' in page.text_content('.ladder .quoting-note')
+
+    # A resting CLOSE has no pending by design and must never light it.
+    publisher.quotes = [{'pair_key': 'XAUUSD_|GC1226', 'side': 'BUY',
+                         'level': level, 'leg': 'BOTH', 'ticket': None,
+                         'intent': 'CLOSE', 'position_id': 'P1',
+                         'orders': ['O1']}]
+    publisher.publish()
+    page.wait_for_timeout(400)
+    assert page.locator('.ladder .quoting-note.held').count() == 0
+
+    publisher.orders = None
+    publisher.quotes = None
+    publisher.working_sells = 0
+    publisher.broker_pendings = None
+    publisher.publish()

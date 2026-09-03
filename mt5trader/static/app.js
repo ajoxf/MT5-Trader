@@ -1550,13 +1550,38 @@
           ? row.quoting_leg_effective.toUpperCase() : '');
       var symbol = (live && live.symbol) ||
         (leg === 'A' ? row.symbol_a : leg === 'B' ? row.symbol_b : '');
-      note.textContent = row.order_type === 'MARKET'
-        ? 'MARKET: both legs cross at once'
-        : (leg
-            ? 'LIMIT: quotes leg ' + leg + (symbol ? ' · ' + symbol : '') +
-              ' · leg ' + (leg === 'A' ? 'B' : 'A') + ' crosses on fill'
-            : 'LIMIT: quoting leg picked from the wider book');
-      note.classList.toggle('live', !!(live && live.ticket));
+      // WHY AN ORDER IS NOT AT THE BROKER, IN WORDS, WITHOUT HOVERING.
+      //
+      // An entry whose pending was never placed says why — but only in
+      // the Work cell's tooltip, which nobody hovers when the thing
+      // they are looking at is an order that appears to be working.
+      // "W:1 (broker 0)" in 9px in the footer was the only other sign.
+      // A trader reading the ladder must be able to see that their
+      // order is in this process and NOWHERE ELSE.
+      var held = null;
+      (row.quotes || []).forEach(function (quote) {
+        if (held || quote.intent === 'CLOSE' || quote.ticket) { return; }
+        held = quote.reason || 'not at the broker yet';
+      });
+      note.textContent = held
+        ? 'NOT AT THE BROKER: ' + held
+        : (row.order_type === 'MARKET'
+            ? 'MARKET: both legs cross at once'
+            : (leg
+                ? 'LIMIT: quotes leg ' + leg + (symbol ? ' · ' + symbol : '') +
+                  ' · leg ' + (leg === 'A' ? 'B' : 'A') + ' crosses on fill'
+                : 'LIMIT: quoting leg picked from the wider book'));
+      note.classList.toggle('live', !!(live && live.ticket) && !held);
+      note.classList.toggle('held', !!held);
+      note.title = held
+        ? 'This ladder has a working order that exists in THIS process '
+          + 'and nowhere else — there is nothing of yours at either '
+          + 'broker for it. It rests as soon as the reason above clears.'
+        : 'LIMIT mode rests a real pending on ONE leg and crosses the '
+          + 'other at market when it fills. Leg A showing no PENDING in '
+          + 'MT5 is the mode working, not a fault: it takes a position '
+          + 'the instant the quoting leg fills, and never an order '
+          + 'before that.';
     }
     var badge = node.querySelector('.mode-badge');
     // The EFFECTIVE state, never the ladder's box alone: with the

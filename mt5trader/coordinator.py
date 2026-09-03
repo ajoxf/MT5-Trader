@@ -413,12 +413,30 @@ class Coordinator:
                 meta_b.get('volume_step') or 0.0,
                 meta_b.get('volume_min') or 0.0,
                 basis=basis, price_a=price_a, price_b=price_b)
-            # 0.0 means the hedge for that leg A is UNDER leg B's
-            # minimum. Leaving it None is the honest state: the clip
-            # plan refuses the click and names the minimum, rather than
-            # this quietly resizing the trader's leg A to something
-            # they did not ask for.
+            # 0.0 means the hedge for that leg A rounds to less than
+            # leg B's minimum. Leaving it None is the honest state:
+            # `clip_plan` then refuses the click and names the smallest
+            # leg A that WOULD work, rather than this quietly resizing
+            # the trader to something many times bigger.
+            #
+            # Said in the log too, because the ladder looks entirely
+            # normal in this state — the clicks land, the orders join
+            # the book, and nothing ever reaches a broker.
             pair.clip_lots_b = hedge or None
+            if pair.clip_lots_b is None:
+                workable, _b = sizing.matched_minimum_lots(
+                    meta_a.get('volume_min'), meta_b.get('volume_min'),
+                    meta_a.get('volume_step'), meta_b.get('volume_step'),
+                    pair.hedge_ratio, meta_a.get('contract_size'),
+                    meta_b.get('contract_size'),
+                    basis=basis, price_a=price_a, price_b=price_b)
+                logging.error(
+                    '%s: one spread of %g lots on leg A cannot be hedged '
+                    'matched %s — nothing will reach a broker until '
+                    'Lots/spread A is %s', pair.key, pair.clip_lots_a,
+                    sizing.SIZING_SHORT.get(basis, basis),
+                    f'{workable:g} or more' if workable
+                    else 'workable on both legs')
             return
         pair.clip_lots_a, pair.clip_lots_b = sizing.matched_minimum_lots(
             meta_a.get('volume_min'), meta_b.get('volume_min'),
@@ -538,6 +556,14 @@ class Coordinator:
             md['feed_badge'] = _badge(md, stale, jumped)
             self._observe_session(key, md, pair)
             self.market[key] = md
+            # A pair that has not been sized yet gets another go now
+            # that there IS a price. `_settle_clip` runs at resolve
+            # time, which is once, at startup — and NOTIONAL sizing
+            # cannot be settled without a mid, so a pair whose market
+            # was closed when the engine came up stayed unsized for the
+            # session and refused every click.
+            if not (pair.clip_lots_a and pair.clip_lots_b):
+                self._settle_clip(pair)
             # LIMIT-mode orders are worked on the SAME pass that priced
             # them: a peg re-priced off a snapshot older than the one on
             # screen is a peg holding a level nobody is showing.

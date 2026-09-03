@@ -307,14 +307,26 @@ class Quoter:
                 events.append(event)
         return events
 
-    def _wanted_volume(self, pair, group):
+    def _wanted_volume(self, pair, group, md=None):
         """Lots on the quoting leg for the spreads still working here.
 
         ENTRY groups only. A closing group rests nothing to size.
+
+        THE PRICES ARE THE LIVE ONES. They used to come from `meta_a`
+        and `meta_b` — the symbol report MT5 handed back when the pair
+        RESOLVED, which is once, at startup. That is harmless while the
+        two sizing bases that ignore price are in force, and wrong the
+        moment NOTIONAL is: equal money a side computed from this
+        morning's prices is not equal money now, and a pair that
+        resolved before its market opened has no mid at all, so it
+        could never size and every click sat in the book unplaced.
         """
         meta_a, meta_b = pair.meta_a or {}, pair.meta_b or {}
-        plan = sizing.clip_plan(pair, meta_a, meta_b, meta_a.get('mid'),
-                                meta_b.get('mid'), group.quantity)
+        md = md or {}
+        plan = sizing.clip_plan(
+            pair, meta_a, meta_b,
+            md.get('leg_a_mid') or meta_a.get('mid'),
+            md.get('leg_b_mid') or meta_b.get('mid'), group.quantity)
         if plan.get('reason'):
             group.reason = plan['reason']
             return 0.0
@@ -337,7 +349,7 @@ class Quoter:
 
         price, order_side = peg_price(pair, md, group.side, group.level,
                                       group.leg)
-        volume = self._wanted_volume(pair, group)
+        volume = self._wanted_volume(pair, group, md)
         if volume <= 0:
             return None
 

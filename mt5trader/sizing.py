@@ -67,6 +67,12 @@ def round_step(volume, step, minimum=0.0, down=False):
 SIZING_BASES = ('AUTO', 'UNITS', 'SAME_LOTS', 'NOTIONAL')
 
 
+#: Each basis in two words, for a sentence that has more to say.
+SIZING_SHORT = {
+    'UNITS': 'by units', 'SAME_LOTS': 'lot for lot',
+    'NOTIONAL': 'by notional',
+}
+
 #: Each basis in the trader's own words, for the screen.
 SIZING_WORDS = {
     'UNITS': 'by units — the spread arithmetic\u2019s own hedge',
@@ -286,15 +292,34 @@ def clip_plan(pair, meta_a, meta_b, price_a, price_b, spreads=1.0):
             basis=basis, price_a=price_a, price_b=price_b)
     elif not unit_b:
         # Leg A IS configured and its hedge did not settle — the hedge
-        # for it is under leg B's minimum. Falling back to the matched
-        # floor here would quietly trade a size the trader did not ask
-        # for, and on this desk's broker that floor is TEN TIMES the
-        # smallest leg A. Refused, with the number that would fix it.
+        # for it rounds to less than leg B's minimum. Falling back to
+        # the matched floor here would quietly trade a size the trader
+        # did not ask for, and it can be many times bigger, so this
+        # refuses instead.
+        #
+        # But a refusal that does not say what to type is a dead
+        # ladder, so it works out the smallest leg A this basis CAN
+        # express on these two symbols and names it. On the desk's oil
+        # pair — WTI against Brent, both 1,000 a lot, matched by
+        # notional at a ratio of 0.919 — a leg A of 0.01 needs 0.0092
+        # of leg B, which is under a 0.01 minimum and rounds to
+        # nothing. 0.11 is the first size that works. Nothing about
+        # that is guessable from "the hedge is under the minimum".
+        workable, _hedged = matched_minimum_lots(
+            min_a, min_b, step_a, step_b, beta, contract_a, contract_b,
+            basis=basis, price_a=price_a, price_b=price_b)
         return {'reason': (
-            f'{pair.clip_lots_a:g} lots of leg A hedges with less than leg '
-            f"B's {min_b:g}-lot minimum, so one spread cannot be built at "
-            f'that size. Raise Lots/spread A, or clear it to go back to '
-            f'the smallest size both legs can do'),
+            f'{pair.clip_lots_a:g} lots of leg A needs '
+            f'{pair.clip_lots_a * hedge_per_lot(basis, contract_a, contract_b, beta, price_a, price_b):.4f} '
+            f"of leg B, which is under its {min_b:g}-lot minimum. Matched "
+            f'{SIZING_SHORT.get(basis, basis)}, no spread can be built that '
+            f'small — set Lots/spread A to {workable:g} or more, or clear it '
+            f'to take that automatically'
+            if workable else
+            f'{pair.clip_lots_a:g} lots of leg A cannot be hedged on leg B '
+            f'at all, matched {SIZING_SHORT.get(basis, basis)}'),
+            'sizing_basis': basis,
+            'workable_lots_a': workable or None,
             'spreads': float(spreads or 0.0),
             'leg_a_lots': 0.0, 'leg_b_lots': 0.0, 'spread_units': 0.0}
 

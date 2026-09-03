@@ -237,3 +237,64 @@ def test_a_fill_on_the_quoting_leg_crosses_the_other_on_the_SAME_basis(
     assert per_lot != pytest.approx(1.0)        # or the test proves nothing
     assert pair.clip_lots_b / pair.clip_lots_a == pytest.approx(
         per_lot, rel=0.05)
+
+
+# -- the size that cannot be hedged at all --------------------------------
+
+def test_a_clip_too_small_for_the_BASIS_names_the_size_that_works():
+    """Live 2026-09-03, the desk's oil pair. WTI against Brent is
+    RELATED, so AUTO matches the legs BY NOTIONAL — and the ratio is
+    0.919, so a leg A of 0.01 needs 0.0092 of leg B. That is under a
+    0.01 minimum and rounds DOWN to nothing.
+
+    Leg B never settled, so `clip_plan` refused every click. The ladder
+    looked entirely normal: the click landed, the order joined the book
+    and the Work cell filled in — and nothing ever reached either
+    broker. W:1 (broker 0), in 9px, was the only sign.
+
+    The refusal must therefore carry the number that fixes it. "the
+    hedge is under the minimum" is true and useless: 0.11 is not
+    guessable from it.
+    """
+    from mt5trader import sizing
+    meta = {'contract_size': 1000.0, 'volume_min': 0.01,
+            'volume_step': 0.01, 'volume_max': 100.0}
+    pair = PairConfig.from_dict('USOILX6|UKOILX6', {
+        'leg_a': {}, 'leg_b': {}, 'pair_type': 'RELATED',
+        'hedge_ratio': 1.0, 'clip_lots_a': 0.01})
+    assert sizing.basis_for(pair.pair_type, pair.sizing_basis) == 'NOTIONAL'
+    # The hedge for the smallest clip rounds away entirely.
+    assert sizing.hedge_lots(0.01, 1000.0, 1000.0, 1.0, 0.01, 0.01,
+                             basis='NOTIONAL', price_a=88.63,
+                             price_b=96.475) == 0.0
+
+    plan = sizing.clip_plan(pair, meta, meta, 88.63, 96.475, 100.0)
+
+    assert plan['leg_a_lots'] == 0.0 and plan['leg_b_lots'] == 0.0
+    assert '0.11' in plan['reason'], plan['reason']
+    assert 'Lots/spread A' in plan['reason']
+    assert plan['workable_lots_a'] == pytest.approx(0.11)
+    # ...and 0.11 really is workable, or the message sends the trader
+    # somewhere that fails again.
+    pair.clip_lots_a = plan['workable_lots_a']
+    pair.clip_lots_b = sizing.hedge_lots(
+        pair.clip_lots_a, 1000.0, 1000.0, 1.0, 0.01, 0.01,
+        basis='NOTIONAL', price_a=88.63, price_b=96.475)
+    assert sizing.clip_plan(pair, meta, meta, 88.63, 96.475,
+                            1.0)['reason'] is None
+
+
+def test_the_same_pair_matched_LOT_FOR_LOT_sizes_at_the_minimum():
+    """The control, and the way out: the ratio is what cannot be
+    expressed at 0.01, not the pair. Lot for lot needs no ratio."""
+    from mt5trader import sizing
+    meta = {'contract_size': 1000.0, 'volume_min': 0.01,
+            'volume_step': 0.01, 'volume_max': 100.0}
+    pair = PairConfig.from_dict('USOILX6|UKOILX6', {
+        'leg_a': {}, 'leg_b': {}, 'pair_type': 'RELATED',
+        'sizing_basis': 'SAME_LOTS', 'hedge_ratio': 1.0,
+        'clip_lots_a': 0.01, 'clip_lots_b': 0.01})
+    plan = sizing.clip_plan(pair, meta, meta, 88.63, 96.475, 100.0)
+    assert plan['reason'] is None
+    assert plan['leg_a_lots'] == pytest.approx(1.0)
+    assert plan['leg_b_lots'] == pytest.approx(1.0)
