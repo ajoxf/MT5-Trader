@@ -1095,6 +1095,11 @@
     // blank, which is how this field was empty on every ladder.
     ['.ls-rows', 'row_count', 'live-number'],
     ['.ls-qty', 'default_quantity', 'live-number'],
+    // What ONE spread means in leg A lots. Blank is a real state and
+    // the useful default: it means "the smallest size both legs can
+    // actually clear", which is what the engine derives. Leg B is
+    // never typed — it is the hedge of this one.
+    ['.ls-clip-a', 'clip_lots_a', 'derived-number'],
     ['.ls-quoting', 'quoting_leg', 'live'],
     ['.ls-auto-route', 'auto_route', 'check'],
     // The Fair Spread window. One tick, and `algo` follows it on the
@@ -1172,6 +1177,14 @@
           if (field === 'quoting_leg' && !input.value) { input.value = ''; }
           return;
         }
+        if (kind === 'derived-number') {
+          // Blank means DERIVED, and the note beside it says what the
+          // engine derived. Pre-filling the derived number would turn
+          // a reading into a setting the moment anybody pressed Apply.
+          input.value = (own === undefined || own === null || own === '')
+            ? '' : own;
+          return;
+        }
         if (kind === 'number' || kind === 'blank-number') {
           // This ladder's own number. A pair that has never been
           // configured starts from the built-in value, shown plainly:
@@ -1191,10 +1204,35 @@
       });
       fairKindFields(pane, {pair_type: saved.pair_type
         || live.pair_type || 'SPOT_FUTURE'});
+      clipNote(pane, live);
       measuredSlippageInto(pane);
     }).catch(function (e) {
       toast('could not read this pair: ' + e);
     });
+  }
+
+  function clipNote(pane, live) {
+    /* What one spread IS, right now, in both legs and in money.
+     *
+     * Leg B is not a field: it is the hedge — leg A x contract A /
+     * (beta x contract B), rounded down — and typing a number into it
+     * independently is how a "hedged" pair ends up net long one leg.
+     * So it is reported instead, beside the leg A box that decides it.
+     */
+    var note = pane.querySelector('.ls-clip-note');
+    if (!note) { return; }
+    if (!live.clip_lots_a || !live.clip_lots_b) {
+      note.textContent = 'one spread is not sized yet — both legs have to '
+        + 'resolve on MT5 first';
+      return;
+    }
+    note.textContent = 'In force: 1 spread = ' + fmt(live.clip_lots_a, 2) +
+      ' lots ' + (live.symbol_a || 'A') + ' against ' +
+      fmt(live.clip_lots_b, 2) + ' ' + (live.symbol_b || 'B') +
+      (live.spread_units
+        ? ' — ' + money(live.spread_units) + ' per 1.00 of spread'
+        : '') +
+      '. Leg B is derived from leg A, the beta and both contract sizes.';
   }
 
   function fairKindFields(pane, saved) {
@@ -1284,7 +1322,7 @@
         // defaults page there is nothing for a null to mean.
         value = raw === '' ? null : parseFloat(raw);
         if (value !== null && isNaN(value)) { return; }
-      } else if (kind === 'blank-number') {
+      } else if (kind === 'blank-number' || kind === 'derived-number') {
         value = raw === '' ? null : parseFloat(raw);
         if (value !== null && isNaN(value)) { return; }
       } else {

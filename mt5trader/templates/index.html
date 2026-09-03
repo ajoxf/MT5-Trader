@@ -317,7 +317,17 @@
           <label class="lsf"><span>Rows</span>
             <input class="ls-rows" type="number" min="5" max="200" step="1"></label>
           <label class="lsf"><span>Default qty</span>
-            <input class="ls-qty" type="number" min="0.01" step="0.01"></label>
+            <input class="ls-qty" type="number" min="0.01" step="0.01"
+                   title="How many SPREADS one click sends. It is not lots — see Lots/spread below for what one spread is worth in each leg."></label>
+          <!-- What ONE spread MEANS. Until this was here it was derived
+               silently: the smallest size at which both legs clear
+               their own minimum volume, which on CFI is 0.01, and
+               there was nowhere to change it. -->
+          <label class="lsf"><span>Lots/spread A</span>
+            <input class="ls-clip-a" type="number" min="0" step="0.01"
+                   placeholder="smallest both legs can do"
+                   title="How many LOTS of leg A one spread is. Leg B is not typed: it is the hedge, and it is derived from this, the beta and both contract sizes. Blank goes back to the smallest size at which both legs clear their own minimum volume."></label>
+          <div class="lsf-note ls-clip-note"></div>
           <label class="lsf"><span>Quoting leg</span>
             <select class="ls-quoting" title="Which leg rests the real pending in LIMIT mode. Default: the wider bid-ask — that is the spread you earn.">
               <option value="">wider book</option>

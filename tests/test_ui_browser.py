@@ -2547,7 +2547,10 @@ def test_the_fair_window_is_ONE_tick_on_the_ladder_it_belongs_to(page):
     # of its own.
     assert page.locator(
         '.ladder .ls-group:has(.ls-pair-type) .ls-algo-window').count() == 1
-    note = ' '.join(page.text_content('.ladder .lsf-note').split())
+    # Scoped to the CARRY group: the Trading group carries a note of
+    # its own now (what one spread means in lots).
+    note = ' '.join(page.text_content(
+        '.ladder .ls-group:has(.ls-pair-type) .lsf-note').split())
     assert 'it does not trade' in note
     page.click('.ladder .ls-close')
 
@@ -3765,3 +3768,42 @@ def test_the_buy_and_sell_buttons_ignore_the_convention(page):
         sides[convention] = last_command(page)['payload']['side']
 
     assert sides == {'TT': 'BUY', 'TOUCH': 'BUY'}, sides
+
+
+def test_the_lots_one_spread_costs_can_be_typed_and_says_what_is_in_force(
+        page):
+    """It was derived and shown nowhere: the smallest size at which
+    both legs clear their own minimum volume, 0.01 on this desk's
+    broker, with no field anywhere to change it. Leg B stays derived —
+    it is the hedge, and a box for it is how a hedged pair ends up net
+    long one leg."""
+    open_ladder(page)
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-clip-a', timeout=WAIT)
+
+    # Blank means DERIVED, and the note says what the engine derived.
+    assert page.input_value('.ladder .ls-clip-a') == ''
+    note = ' '.join(page.text_content('.ladder .ls-clip-note').split())
+    assert '1 spread = 0.10 lots XAUUSD_ against 0.10 GC1226' in note
+    assert 'per 1.00 of spread' in note
+    assert 'Leg B is derived' in note
+    # ...and there is no box for leg B to be typed into.
+    assert page.locator('.ladder .ls-clip-b').count() == 0
+
+    page.evaluate(SPY_ON_PAIR_SAVE)
+    page.fill('.ladder .ls-clip-a', '0.5')
+    page.click('.ladder .ls-save')
+    page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
+    assert page.evaluate('() => window.__sent.clip_lots_a') == 0.5
+
+    # Cleared, it goes back to derived — a null, not the number the
+    # note happened to be showing, which would freeze today's floor
+    # into this pair for ever.
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-clip-a', timeout=WAIT)
+    page.evaluate("() => { window.__sent = null; }")
+    page.fill('.ladder .ls-clip-a', '')
+    page.click('.ladder .ls-save')
+    page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
+    assert page.evaluate('() => window.__sent.clip_lots_a') is None
+    page.evaluate("() => { window.fetch = window.__realFetch; }")

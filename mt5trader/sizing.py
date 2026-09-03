@@ -188,9 +188,24 @@ def clip_plan(pair, meta_a, meta_b, price_a, price_b, spreads=1.0):
                 'leg_a_lots': 0.0, 'leg_b_lots': 0.0, 'spread_units': 0.0}
 
     unit_a, unit_b = pair.clip_lots_a, pair.clip_lots_b
-    if not unit_a or not unit_b:
+    if not unit_a:
+        # Nothing configured at all: the smallest size both legs can
+        # actually clear.
         unit_a, unit_b = matched_minimum_lots(
             min_a, min_b, step_a, step_b, beta, contract_a, contract_b)
+    elif not unit_b:
+        # Leg A IS configured and its hedge did not settle — the hedge
+        # for it is under leg B's minimum. Falling back to the matched
+        # floor here would quietly trade a size the trader did not ask
+        # for, and on this desk's broker that floor is TEN TIMES the
+        # smallest leg A. Refused, with the number that would fix it.
+        return {'reason': (
+            f'{pair.clip_lots_a:g} lots of leg A hedges with less than leg '
+            f"B's {min_b:g}-lot minimum, so one spread cannot be built at "
+            f'that size. Raise Lots/spread A, or clear it to go back to '
+            f'the smallest size both legs can do'),
+            'spreads': float(spreads or 0.0),
+            'leg_a_lots': 0.0, 'leg_b_lots': 0.0, 'spread_units': 0.0}
 
     spreads = float(spreads or 0.0)
     lots_a = round_step(unit_a * spreads, step_a, min_a)

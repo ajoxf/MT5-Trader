@@ -163,6 +163,38 @@ def test_a_pair_with_an_open_position_cannot_be_renamed_or_deleted(client,
     assert client.delete('/api/pairs/A|B').status_code == 200
 
 
+def test_what_one_spread_MEANS_cannot_be_changed_under_a_position(client,
+                                                                  paths):
+    """The exit levels of an open position are computed from the pair's
+    CURRENT lots-per-spread. Move it and a position entered at 0.01
+    silently acquires the take-profit of a 0.10 one — the position
+    would still be there, and the number it was aiming at would not."""
+    cfg.save_raw(paths['config'], {
+        'accounts': {'a': {}},
+        'pairs': {'A|B': {'name': 'A vs B', 'clip_lots_a': 0.01}}})
+    write_status(paths, pairs={'A|B': {'net_position': 2.0}})
+
+    response = client.post('/api/pairs/A|B', json={'clip_lots_a': 0.10})
+    assert response.status_code == 409
+    error = response.get_json()['error']
+    assert 'what one spread MEANS' in error and 'Flatten it first' in error
+    assert json.load(open(paths['config'], encoding='utf-8'))[
+        'pairs']['A|B']['clip_lots_a'] == 0.01
+
+    # The control 1: the SAME value is not a change, so a save of
+    # anything else on the pane still goes through with a position on.
+    assert client.post('/api/pairs/A|B',
+                       json={'clip_lots_a': 0.01,
+                             'increment': 0.02}).status_code == 200
+
+    # The control 2: flat, and it goes through.
+    write_status(paths, pairs={'A|B': {'net_position': 0.0}})
+    assert client.post('/api/pairs/A|B',
+                       json={'clip_lots_a': 0.10}).status_code == 200
+    assert json.load(open(paths['config'], encoding='utf-8'))[
+        'pairs']['A|B']['clip_lots_a'] == 0.10
+
+
 def test_a_pair_key_with_a_slash_is_routable(client, paths):
     """The pair that most needs deleting has a slash in its key."""
     cfg.save_raw(paths['config'], {'accounts': {'a': {}},

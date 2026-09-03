@@ -387,15 +387,36 @@ class Coordinator:
         pair.beta_reason = why
 
     def _settle_clip(self, pair):
-        """What ONE spread means in leg lots, when it was not configured.
+        """What ONE spread means in leg lots.
 
-        The default is the smallest size at which BOTH legs clear their
-        own minimum volume — quoting the click in spreads makes a size
-        that implies a sub-minimum hedge unrepresentable.
+        Three cases, and only the first two involve a choice:
+
+        - NEITHER set: the smallest size at which both legs clear their
+          own minimum volume. Quoting the click in spreads makes a size
+          that implies a sub-minimum hedge unrepresentable, so that
+          floor is the honest default.
+        - LEG A set by the trader: leg B is DERIVED from it. It is the
+          hedge — `L_A x C_A / (beta x C_B)`, rounded DOWN — and a
+          number typed into it independently would be a leg that does
+          not hedge the other.
+        - both already settled: left alone.
         """
         if pair.clip_lots_a and pair.clip_lots_b:
             return
         meta_a, meta_b = pair.meta_a or {}, pair.meta_b or {}
+        if pair.clip_lots_a:
+            hedge = sizing.hedge_lots(
+                pair.clip_lots_a, meta_a.get('contract_size'),
+                meta_b.get('contract_size'), pair.hedge_ratio,
+                meta_b.get('volume_step') or 0.0,
+                meta_b.get('volume_min') or 0.0)
+            # 0.0 means the hedge for that leg A is UNDER leg B's
+            # minimum. Leaving it None is the honest state: the clip
+            # plan refuses the click and names the minimum, rather than
+            # this quietly resizing the trader's leg A to something
+            # they did not ask for.
+            pair.clip_lots_b = hedge or None
+            return
         pair.clip_lots_a, pair.clip_lots_b = sizing.matched_minimum_lots(
             meta_a.get('volume_min'), meta_b.get('volume_min'),
             meta_a.get('volume_step'), meta_b.get('volume_step'),
@@ -442,6 +463,13 @@ class Coordinator:
         moved = []
         for key, pair in self.config.pairs.items():
             changed = pair.apply_hot((raw.get('pairs') or {}).get(key) or {})
+            if 'clip_lots_a' in changed:
+                # apply_hot drops leg B when leg A moves. Re-derive it
+                # HERE, on the same pass — a pair carrying a leg A and
+                # no leg B cannot size a click at all, and waiting for
+                # the next symbol resolve would leave the ladder dead
+                # in the meantime.
+                self._settle_clip(pair)
             if changed:
                 moved.append(f"{key}: {', '.join(changed)}")
         settings = raw.get('settings') or {}

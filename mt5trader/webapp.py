@@ -626,7 +626,9 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             finally:
                 other_leg.close()
             diagnostics.check_pair(checklist, pair, report_a or {},
-                                   report_b or {})
+                                   report_b or {},
+                                   account_currency=(account_info or {})
+                                   .get('currency'))
 
         return jsonify(dict(checklist.result(), account=name,
                             terminal=terminal,
@@ -897,6 +899,24 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         disabling = payload.get('enabled') is False and pair.get('enabled')
         if (renaming or disabling) and open_position:
             return jsonify({'ok': False, 'error': open_position}), 409
+        # Resizing what ONE SPREAD MEANS while spreads are open changes
+        # the unit every open figure is quoted in. The position's own
+        # P&L is anchored to the size it filled at and would survive
+        # it, but the exit maths is not: break-even and the take-profit
+        # are computed from the pair's CURRENT clip, so a position
+        # entered at 0.01 would silently acquire the target of a 0.10
+        # one. It is refused while anything is on.
+        resizing = ('clip_lots_a' in payload
+                    and _changed(payload['clip_lots_a'],
+                                 pair.get('clip_lots_a')))
+        if resizing and open_position:
+            net = ((status().get('pairs') or {}).get(key) or {}).get(
+                'net_position')
+            return jsonify({'ok': False, 'error': (
+                f'{key} has {net:+g} spreads open, so what one spread '
+                f'MEANS cannot be changed now — the exit levels of the '
+                f'open position are computed from it. Flatten it first.'
+            )}), 409
         for field in ('name', 'leg_a', 'leg_b', 'pair_type', 'hedge_ratio',
                       'increment', 'default_quantity', 'order_type',
                       'time_in_force', 'overnight', 'quoting_leg', 'enabled',
@@ -977,6 +997,21 @@ def _mid(report):
 def _width(report):
     bid, ask = report.get('bid'), report.get('ask')
     return (ask - bid) if (bid and ask) else None
+
+
+def _changed(new, old):
+    """Is this field actually being MOVED?
+
+    A save sends the whole form, so every field arrives on every save.
+    Comparing numerically keeps 0.10 and 0.1 the same value, and keeps
+    a guard from refusing a save that changes something else entirely.
+    """
+    if new in (None, '') or old in (None, ''):
+        return bool(new not in (None, '')) != bool(old not in (None, ''))
+    try:
+        return abs(float(new) - float(old)) > 1e-9
+    except (TypeError, ValueError):
+        return new != old
 
 
 def _open_position(snapshot, key):

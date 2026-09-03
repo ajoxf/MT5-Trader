@@ -295,6 +295,48 @@ def check_symbol(checklist, scope, report, role=None):
                       f"{report.get('volume_min')} lots, step "
                       f"{report.get('volume_step')}")
 
+    # Does the money arithmetic hold on THIS instrument?
+    #
+    # Every figure this system prints — the ladder's per-tick value, a
+    # position's P&L, break-even, the take-profit — is
+    # `spread move x lots x contract_size`. That is only what the
+    # TERMINAL will compute if one tick of price on one lot is worth
+    # `contract_size x tick_size` in the account's own currency. MT5
+    # publishes what it actually uses: `trade_tick_value`. Where the
+    # two disagree, every number on the ladder is out by the ratio —
+    # silently, and in the same direction all day.
+    tick_size = report.get('tick_size') or 0.0
+    tick_value = report.get('tick_value')
+    contract = report.get('contract_size') or 0.0
+    if tick_size and tick_value and contract:
+        implied = float(tick_value) / float(tick_size)
+        ratio = implied / contract
+        if abs(ratio - 1.0) <= 0.01:
+            checklist.add(scope, f'{label} money', PASS,
+                          f'one tick on one lot is {tick_value:g} '
+                          f'{report.get("currency") or ""} — the same '
+                          f'{contract:g} per lot the sizing uses'.strip())
+        else:
+            checklist.add(
+                scope, f'{label} money', FAIL,
+                f'MT5 prices one tick of this symbol at {tick_value:g} per '
+                f'lot, which is {implied:,.4f} per lot of price movement — '
+                f'not the {contract:g} contract size every figure on this '
+                f'ladder is computed from. P&L, break-even and the '
+                f'take-profit would all read {ratio:,.3f}x the truth. The '
+                f'usual cause is a symbol whose profit currency '
+                f'({report.get("currency") or "unknown"}) is not the '
+                f'account currency: MT5 converts, this does not',
+                ['Check the symbol specification: contract size, tick '
+                 'size and tick value',
+                 'If the profit currency is not the account currency, this '
+                 'pair is not safe to size here until that is handled'])
+    elif contract and not tick_value:
+        checklist.add(scope, f'{label} money', INFO,
+                      'MT5 reported no tick value, so the contract size '
+                      'cannot be cross-checked against what the terminal '
+                      'actually computes profit from')
+
     if report.get('trade_allowed') is False:
         checklist.add(scope, f'{label} trading', FAIL,
                       'the broker has this symbol closed or close-only',
@@ -319,7 +361,8 @@ def check_symbol(checklist, scope, report, role=None):
     return checklist
 
 
-def check_pair(checklist, pair, report_a, report_b):
+def check_pair(checklist, pair, report_a, report_b,
+               account_currency=None):
     """Do the two legs fit each other?
 
     The checks that only make sense across a pair: a beta stamped for
@@ -367,6 +410,41 @@ def check_pair(checklist, pair, report_a, report_b):
                           f'{price_a:,.4f} and {price_b:,.4f} — with this '
                           f'beta the "spread" is really one leg\'s own price',
                           ['Re-derive the hedge ratio for this pair'])
+
+    # The spread is `P_B - beta x P_A`. Subtracting one price from
+    # another only means anything if the two are quoted in the SAME
+    # money — and the P&L multiplier `k = L_B x C_B` is leg B's units,
+    # so a spread built across two currencies is priced in neither.
+    # Nothing else on the screen would say so: the ladder would draw,
+    # the clicks would fill, and every figure would be wrong by the
+    # exchange rate.
+    currency_a = (report_a.get('currency') or '').upper()
+    currency_b = (report_b.get('currency') or '').upper()
+    if currency_a and currency_b and currency_a != currency_b:
+        checklist.add(scope, 'Currency', FAIL,
+                      f'{pair.symbol_a} is priced in {currency_a} and '
+                      f'{pair.symbol_b} in {currency_b}. The spread '
+                      f'subtracts one from the other, so it is a number in '
+                      f'neither currency — and every figure derived from '
+                      f'it (P&L, break-even, the take-profit) is out by '
+                      f'the exchange rate',
+                      ['Pair two instruments quoted in the same currency',
+                       'This system does not convert between them, and it '
+                       'will not pretend to'])
+    elif currency_a and currency_b:
+        account = (account_currency or '').upper()
+        if account and account != currency_a:
+            checklist.add(scope, 'Currency', WARN,
+                          f'both legs are priced in {currency_a}, but the '
+                          f'account is in {account}. MT5 converts on the '
+                          f'way to your balance; the figures on this '
+                          f'ladder are in {currency_a} and are NOT '
+                          f'converted',
+                          ['Read the ladder\'s money figures as '
+                           f'{currency_a}, and MT5\'s as {account}'])
+        else:
+            checklist.add(scope, 'Currency', PASS,
+                          f'both legs priced in {currency_a}')
 
     contract_a = report_a.get('contract_size') or 0.0
     contract_b = report_b.get('contract_size') or 0.0

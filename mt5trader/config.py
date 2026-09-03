@@ -560,6 +560,9 @@ class PairConfig:
                    'swap_b_long_per_lot', 'swap_b_short_per_lot',
                    'order_type', 'time_in_force', 'overnight', 'increment',
                    'default_quantity', 'quoting_leg', 'rows',
+                   # What ONE spread means in leg A lots. Leg B is
+                   # never typed: it is the hedge, and it is derived.
+                   'clip_lots_a',
                    'algo_window', 'show_fair_window', 'pair_type')
                   + tuple(EXIT_FIELDS))
 
@@ -597,9 +600,19 @@ class PairConfig:
                     continue          # a ladder always has a size
             elif field == 'rows':
                 value = int(value or 30)
+            elif field == 'clip_lots_a':
+                value = _blank_to_none(value)
             if getattr(self, field) != value:
                 setattr(self, field, value)
                 changed.append(field)
+                if field == 'clip_lots_a':
+                    # Leg B is the HEDGE of leg A, never a number in
+                    # its own right. Dropping it makes the coordinator
+                    # re-derive it against this leg A, the beta and
+                    # both contract sizes on the next poll — keeping
+                    # the old one would leave a pair whose two legs no
+                    # longer hedge each other.
+                    self.clip_lots_b = None
         return changed
 
     def to_dict(self):
