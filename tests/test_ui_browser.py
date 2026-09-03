@@ -4260,3 +4260,71 @@ def test_an_order_that_reached_NEITHER_broker_says_so_without_hovering(page):
     publisher.working_sells = 0
     publisher.broker_pendings = None
     publisher.publish()
+
+
+def test_an_order_that_never_reached_the_broker_says_so_across_the_row(page):
+    """The reason has always been in the Working orders table — in the
+    ELEVENTH column, off the right edge of any normal window, behind a
+    sideways scroll nobody makes. So an order that had never been
+    placed read exactly like one that was working, and the desk spent
+    several sessions asking why MT5 showed nothing.
+
+    Its own row, spanning the table, where no scrolling can hide it.
+    """
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    level = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows[5].level""")
+    publisher.orders = [{'order_id': 'O1', 'level': level, 'side': 'SELL',
+                         'quantity': 100, 'filled_quantity': 0,
+                         'state': 'WORKING', 'time_in_force': 'DAY'}]
+    publisher.quotes = [{'pair_key': 'XAUUSD_|GC1226', 'side': 'SELL',
+                         'level': level, 'leg': 'B', 'ticket': None,
+                         'intent': 'OPEN', 'price': None,
+                         'reason': '100 x 1 is 100 lots on leg B, over the '
+                                   "broker's 50-lot maximum",
+                         'orders': ['O1']}]
+    publisher.working_sells = 1
+    publisher.broker_pendings = 0
+    publisher.publish()
+
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.open = ['monitor:'];
+        s.monitorTab = 'orders';
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('.monitor .pane table', timeout=WAIT)
+
+    page.wait_for_selector('.monitor tr.not-placed', timeout=WAIT)
+    said = page.text_content('.monitor tr.not-placed')
+    assert 'NOT AT THE BROKER' in said
+    # ...in the ENGINE'S own words, with the number that explains it.
+    assert "50-lot maximum" in said
+    # It spans the table, so a sideways scroll cannot hide it.
+    assert int(page.get_attribute('.monitor tr.not-placed td', 'colspan')) > 6
+
+    # THE CONTROL: once it rests, the row goes. It must not cry wolf.
+    publisher.quotes[0]['ticket'] = 5150
+    publisher.quotes[0]['reason'] = None
+    publisher.broker_pendings = 1
+    publisher.publish()
+    page.wait_for_function(
+        "() => !document.querySelector('.monitor tr.not-placed')",
+        timeout=WAIT)
+
+    publisher.orders = None
+    publisher.quotes = None
+    publisher.working_sells = 0
+    publisher.broker_pendings = None
+    publisher.publish()
+    # This page is shared with every test after it: put the desk back
+    # to a ladder rather than leaving the monitor over it.
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.open = [window.MT5Trader.panelId(
+            'ladder', 'XAUUSD_|GC1226')];
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('.ladder .grid tbody tr', timeout=WAIT)

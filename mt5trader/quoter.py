@@ -310,7 +310,8 @@ class Quoter:
     def _wanted_volume(self, pair, group, md=None):
         """Lots on the quoting leg for the spreads still working here.
 
-        ENTRY groups only. A closing group rests nothing to size.
+        Returns `(lots, reason)`. ENTRY groups only — a closing group
+        rests nothing to size.
 
         THE PRICES ARE THE LIVE ONES. They used to come from `meta_a`
         and `meta_b` — the symbol report MT5 handed back when the pair
@@ -327,31 +328,59 @@ class Quoter:
             pair, meta_a, meta_b,
             md.get('leg_a_mid') or meta_a.get('mid'),
             md.get('leg_b_mid') or meta_b.get('mid'), group.quantity)
+        # RETURNED, not stashed on the group. Setting `group.reason`
+        # here made `_held_off` see a reason that had not changed, so
+        # the one log line explaining an unplaceable order never fired.
         if plan.get('reason'):
-            group.reason = plan['reason']
-            return 0.0
-        return plan['leg_a_lots'] if group.leg == 'a' else plan['leg_b_lots']
+            return 0.0, plan['reason']
+        return (plan['leg_a_lots'] if group.leg == 'a'
+                else plan['leg_b_lots']), None
+
+    def _held_off(self, pair, group, reason):
+        """An order that cannot rest, SAID OUT LOUD — once.
+
+        This ran silently for the whole life of the module. An entry
+        that could not be placed set `group.reason` and returned, and
+        the reason then existed in exactly two places: the eleventh
+        column of a panel that scrolls sideways, and 9px of ellipsised
+        text on the rail. Nothing reached `coordinator.log`.
+
+        So an order sat in the book looking like one that was working,
+        the footer read `W:1 (broker 0)` in small type, and the answer
+        was on the screen but unreachable. That cost the desk several
+        sessions and it is the reason this method exists.
+
+        Logged on the CHANGE, not on the poll: the level is worked
+        three times a second and a line per pass would bury itself.
+        """
+        if group.reason != reason:
+            logging.warning('%s: %s %g at %s is NOT at the broker — %s',
+                            pair.key, group.side.value, group.quantity,
+                            group.level, reason)
+        group.reason = reason
+        return None
 
     def _rest_or_repeg(self, pair, md, group):
         leg = self.legs.get(pair.account_a if group.leg == 'a'
                             else pair.account_b)
         symbol = pair.symbol_a if group.leg == 'a' else pair.symbol_b
         if leg is None:
-            group.reason = f'no leg runner for {symbol}'
-            return None
+            return self._held_off(pair, group, f'no leg runner for {symbol}')
 
         # A synthetic must not rest on a stale or desynced print: the
         # level is still there when the quote refreshes, and if it is
         # not then it was never offered.
         if md.get('guard_reason'):
-            group.reason = f"{md['guard_reason']} — holding off"
-            return None
+            return self._held_off(pair, group,
+                                  f"{md['guard_reason']} — holding off")
 
         price, order_side = peg_price(pair, md, group.side, group.level,
                                       group.leg)
-        volume = self._wanted_volume(pair, group, md)
+        volume, unsized = self._wanted_volume(pair, group, md)
         if volume <= 0:
-            return None
+            return self._held_off(
+                pair, group,
+                unsized or 'the click could not be sized on either leg')
 
         if group.ticket is None:
             result = leg.place_limit(
@@ -365,6 +394,10 @@ class Quoter:
                         order.reason = result.get('error')
                 return {'group': self.key_for(group.orders[0]),
                         'action': 'rejected', 'reason': result.get('error')}
+            if group.reason:
+                logging.warning('%s: %s %g at %s reached the broker after '
+                                'all — was: %s', pair.key, group.side.value,
+                                group.quantity, group.level, group.reason)
             group.ticket = result['ticket']
             group.price = result.get('price', price)
             group.volume = volume

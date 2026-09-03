@@ -2771,6 +2771,7 @@
       '<th>Peg price</th><th>Resting on</th><th>Re-pegs</th><th>Why</th>' +
       '<th></th>' +
       '</tr></thead><tbody>';
+    var columns = 12;
     var any = false;
     Object.keys(state.snapshot.pairs || {}).forEach(function (key) {
       var row = state.snapshot.pairs[key];
@@ -2813,6 +2814,24 @@
         html += '<td>' + (quote.reason || order.reason || '') + '</td>';
         html += '<td><button class="btn cancel-order">Cancel</button></td>';
         html += '</tr>';
+        // AN ORDER THAT IS NOT AT THE BROKER, ACROSS THE WHOLE ROW.
+        //
+        // The reason was already here, in the eleventh column — which
+        // is off the right edge on any normal window, and the panel
+        // scrolls sideways to reach it. So an order that had never
+        // been placed read exactly like one that was working, and the
+        // one line explaining it was somewhere nobody scrolls to.
+        //
+        // Its own row, spanning the table, so no scrolling can hide it.
+        var whyNot = order.state === 'WORKING' && !quote.ticket &&
+          quote.intent !== 'CLOSE'
+          ? (quote.reason || order.reason ||
+             'not at the broker yet — no reason given')
+          : null;
+        if (whyNot) {
+          html += '<tr class="not-placed"><td colspan="' + columns + '">' +
+            'NOT AT THE BROKER: ' + escapeHtml(whyNot) + '</td></tr>';
+        }
       });
     });
     // What stopped working recently, and why — in the broker's own

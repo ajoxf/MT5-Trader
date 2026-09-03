@@ -21,6 +21,8 @@ brokers receive, on a click and on a fill, and nothing in between
 recomputes it.
 """
 
+import logging
+
 import pytest
 
 from mt5trader.coordinator import Coordinator
@@ -217,3 +219,66 @@ def test_diagnose_names_a_contract_size_that_disagrees_with_the_broker():
     assert check['status'] == WARN
     assert '50' in check['message'] and '100' in check['message']
     assert check['fix']
+
+
+# -- an order that cannot rest says so, in the LOG too --------------------
+
+class Heard(logging.Handler):
+    """What reached the log, without pytest's caplog — which the suite
+    is often run without (`-p no:logging`)."""
+
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+    def __enter__(self):
+        logging.getLogger().addHandler(self)
+        return self
+
+    def __exit__(self, *_):
+        logging.getLogger().removeHandler(self)
+
+
+def test_an_order_that_cannot_be_sized_is_logged_not_only_shown(engine, pair):
+    """It ran silently for the whole life of the module. An entry that
+    could not be placed set `group.reason` and returned, so the reason
+    existed in exactly two places — the eleventh column of a panel that
+    scrolls sideways, and 9px of ellipsised text on the rail. Nothing
+    reached `coordinator.log`, so there was no way to answer "why is
+    there nothing in MT5?" without a screenshot of the right pixels.
+    """
+    coordinator = engine
+    # A size no broker will take: the fixture caps a leg at 100 lots.
+    pair.clip_lots_a, pair.clip_lots_b = 1.0, 1.0
+
+    with Heard() as heard:
+        assert coordinator.click(pair.key, SpreadSide.SELL, 40.0, 500.0)['ok']
+        coordinator.poll_once()
+
+    said = '\n'.join(heard.lines)
+    assert 'NOT at the broker' in said, said
+    assert 'maximum' in said
+    # ...and the order really is in the book with nothing at the broker,
+    # which is the state the log line exists to explain.
+    order = coordinator.book.orders(pair.key)[0]
+    assert order.is_working
+    assert not [q for q in coordinator.quoter.snapshot(pair.key)
+                if q.get('ticket')]
+
+
+def test_it_is_logged_on_the_CHANGE_not_on_every_poll(engine, pair):
+    """The level is worked three times a second. A line per pass buries
+    itself and the one that matters with it."""
+    coordinator = engine
+    pair.clip_lots_a, pair.clip_lots_b = 1.0, 1.0
+    coordinator.click(pair.key, SpreadSide.SELL, 40.0, 500.0)
+
+    with Heard() as heard:
+        for _ in range(5):
+            coordinator.poll_once()
+
+    held = [line for line in heard.lines if 'NOT at the broker' in line]
+    assert len(held) <= 1, f'{len(held)} lines for one unchanged reason'
