@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>MT5-Trader</title>
+<title>Nexus</title>
 <!-- Everything is self-hosted. A blocked CDN has already taken a
      trading UI down once, and the dialog that reports "could not save"
      must work when the network is what failed. -->
@@ -10,6 +10,25 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='ladder.css') }}?v={{ asset_version }}">
 </head>
 <body>
+
+<!-- The name of the system, top left, where a name belongs.
+     The mark is the thing this system does: two nodes — two accounts,
+     two legs, bid blue and ask red — joined into one. It is inline
+     rather than a file: everything here is self-hosted, and a mark
+     that arrives one request later than the page is a mark that
+     flickers on every reload.
+
+     One title-bar height and no more. Every pixel spent here is a
+     pixel off the ladders. -->
+<div id="brand" title="Nexus — spread terminal">
+  <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="6.5" y="10.9" width="11" height="2.2" fill="#1c1c1c"/>
+    <circle cx="7" cy="12" r="3.4" fill="#2f6fb0"/>
+    <circle cx="17" cy="12" r="3.4" fill="#c0342f"/>
+  </svg>
+  <span class="brand-name">NEXUS</span>
+  <span class="brand-note">spread terminal</span>
+</div>
 
 <!-- The engine banner. A dead coordinator must never be mistaken for a
      quiet market: that is the confusion that gets orders clicked into a

@@ -1565,7 +1565,24 @@ def test_a_window_is_freely_expandable_from_its_corner(page):
 
     after = page.locator('.window.ladder').first.bounding_box()
     assert after['width'] - before['width'] == pytest.approx(200, abs=8)
-    assert before['height'] - after['height'] == pytest.approx(150, abs=10)
+    # SHORTER — by what was dragged, or as far as the floor allows.
+    #
+    # It used to be pinned at 150, the exact drag. That is a number
+    # about the desk's height on the day it was written: the window's
+    # floor is MEASURED from its own rail, so anything that changes the
+    # desk or the rail moves how much room there is above it, and the
+    # test failed for a reason it was never about. What it is about is
+    # that the grip shrinks as well as grows, and that it stops at the
+    # floor rather than going through it — which is the same floor
+    # `test_the_ladder_cannot_be_made_shorter_than_its_own_rail` pins.
+    shrunk = before['height'] - after['height']
+    floor = page.evaluate(
+        "() => parseInt(getComputedStyle("
+        "document.querySelector('.window.ladder')).minHeight, 10) || 0")
+    assert shrunk > 0, 'the grip did not shrink the window at all'
+    assert shrunk == pytest.approx(150, abs=10) or \
+        after['height'] == pytest.approx(floor, abs=2), \
+        f'shrank {shrunk} and landed at {after["height"]}, floor {floor}'
 
     page.reload()
     page.wait_for_selector('.ladder .grid tbody tr')
@@ -4005,3 +4022,44 @@ def test_an_ordinary_OUTCOME_is_not_toasted_as_an_error(page):
     page.wait_for_selector('#toasts .toast', timeout=WAIT)
     assert page.locator('#toasts .toast.ok').count() == 0
     page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+
+
+def test_the_system_says_its_own_name_top_left(page):
+    """It is called Nexus, and a screen that a desk sits in front of all
+    day should say what it is. Top left, where a name belongs."""
+    assert page.title() == 'Nexus'
+
+    brand = page.locator('#brand')
+    assert brand.count() == 1
+    assert 'NEXUS' in brand.text_content()
+    # The mark is INLINE, not a second request: a logo that arrives a
+    # round trip after the page is a logo that flickers on every
+    # reload, and everything here is self-hosted anyway.
+    assert brand.locator('svg.brand-mark').count() == 1
+
+    # TOP LEFT, and above the desk rather than over it: a mark sitting
+    # on the first ladder's title bar hides the pair name.
+    box = brand.bounding_box()
+    desk = page.locator('#desktop').bounding_box()
+    assert box['x'] <= 2 and box['y'] <= 2
+    assert box['y'] + box['height'] <= desk['y'] + 1
+
+    # And it costs ONE title-bar height. Every pixel here is a pixel
+    # off the ladders, so this is the number to defend.
+    assert box['height'] <= 22, box
+
+
+def test_the_name_never_pushes_the_desk_off_the_screen(page):
+    """The desk still ends exactly where the taskbar begins — the brand
+    takes its height out of the desk, not out of the viewport."""
+    measured = page.evaluate("""() => {
+        const brand = document.getElementById('brand').getBoundingClientRect();
+        const desk = document.getElementById('desktop').getBoundingClientRect();
+        const bar = document.getElementById('taskbar').getBoundingClientRect();
+        return {brandBottom: brand.bottom, deskTop: desk.top,
+                deskBottom: desk.bottom, barTop: bar.top,
+                barBottom: bar.bottom, viewport: window.innerHeight};
+    }""")
+    assert measured['deskTop'] == pytest.approx(measured['brandBottom'], abs=1)
+    assert measured['deskBottom'] == pytest.approx(measured['barTop'], abs=1)
+    assert measured['barBottom'] == pytest.approx(measured['viewport'], abs=1)

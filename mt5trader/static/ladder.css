@@ -90,6 +90,45 @@ body {
 
 .hidden { display: none !important; }
 
+/* -- the name of the system ----------------------------------------- */
+
+/* One title-bar height, top left. Every pixel here is a pixel off the
+ * ladders, so it takes the height of the chrome it sits above and
+ * nothing more — and it never grows or scrolls: it is a name, not a
+ * panel. */
+#brand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 6px;
+  background: var(--frame-dark);
+  color: var(--frame-text);
+  border-bottom: 1px solid var(--frame-line);
+  user-select: none;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.brand-mark {
+  align-self: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+.brand-name {
+  font: 700 12px/1.25 var(--font);
+  letter-spacing: 1.5px;
+}
+/* The first thing to go when the desk is narrow: the name and the mark
+ * are what identify the screen; this only explains it. */
+.brand-note {
+  font-size: 10px;
+  color: var(--frame-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 700px) { .brand-note { display: none; } }
+
 /* -- banners ------------------------------------------------------- */
 
 .banner {
