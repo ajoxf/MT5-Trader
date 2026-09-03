@@ -88,6 +88,14 @@
     return value.toFixed(digits === undefined ? 4 : digits);
   }
 
+  function escapeHtml(value) {
+    // Symbols, comments and broker refusals are the broker's text, not
+    // ours, and every one of them lands in innerHTML.
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
   function money(value) {
     if (value === null || value === undefined || !isFinite(value)) return DASH;
     var sign = value < 0 ? '-' : '';
@@ -781,6 +789,13 @@
     node.querySelector('.flatten').addEventListener('click', function () {
       flatten(key);
     });
+    node.querySelector('.close-limit-go').addEventListener('click', function () {
+      closeAtLimit(key, node.querySelector('.close-limit').value);
+    });
+    node.querySelector('.close-limit').addEventListener('keydown',
+      function (e) {
+        if (e.key === 'Enter') { closeAtLimit(key, e.target.value); }
+      });
     node.querySelector('.refresh-feed').addEventListener('click', function () {
       // Re-subscribe both legs. The answer to "it is moving in MT5 and
       // stale here" that the trader can act on themselves.
@@ -832,11 +847,24 @@
         clickLevel(key, 'BUY', level);
       } else if (cell.classList.contains('bid')) {
         clickLevel(key, 'SELL', level);
-      } else if (cell.classList.contains('work') && cell.dataset.orderId) {
-        // Click the Work cell to pull ONE of the orders resting there.
-        send('cancel_order', {order_id: cell.dataset.orderId});
+      } else if (cell.classList.contains('work')) {
+        // ADD one more at this level, on the side already resting
+        // there. Clicking your own working order to DESTROY it is the
+        // wrong default on a ladder: the ordinary thing a trader does
+        // to a level they are working is want more of it, and pulling
+        // has three other ways to happen (right-click here, the S / B
+        // / CXL All buttons, and Cancel in the Working orders panel).
+        if (!cell.dataset.side) { return; }
+        clickLevel(key, cell.dataset.side, level);
       }
     });
+    node.querySelector('.grid tbody').addEventListener(
+      'contextmenu', function (e) {
+        var cell = e.target.closest('td.work');
+        if (!cell || !cell.dataset.orderId) { return; }
+        e.preventDefault();
+        send('cancel_order', {order_id: cell.dataset.orderId});
+      });
   }
 
   function setArmed(key, side, value) {
@@ -850,6 +878,26 @@
   function armedFor(key, side) {
     var armed = state.armed[key] || {};
     return armed[String(side).toLowerCase()] || null;
+  }
+
+  function restingOn(quote) {
+    /* WHERE the real pending is. In LIMIT mode one leg rests a pending
+     * and the OTHER is crossed at market when it fills — so leg A
+     * having no order at the broker is not a fault, it is the mode.
+     * Said in words, because "leg a" on one panel was the only place
+     * this appeared and it read as leg A having nothing. */
+    if (!quote) { return ''; }
+    if (!quote.ticket) {
+      return ', not at the broker yet' +
+        (quote.reason ? ' (' + quote.reason + ')' : '');
+    }
+    var leg = String(quote.leg || '').toUpperCase();
+    return ', resting on leg ' + leg +
+      (quote.symbol ? ' (' + quote.symbol + ')' : '') +
+      ' at ' + fmt(quote.price, 5) + ' #' + quote.ticket +
+      (quote.crosses_leg
+        ? ' — leg ' + quote.crosses_leg + ' crosses at market when it fills'
+        : '');
   }
 
   function clickLevel(key, side, level) {
@@ -1215,6 +1263,39 @@
     clickLevel(key, side, level);
   }
 
+  function closeAtLimit(key, value) {
+    /* Close everything on this ladder AT A PRICE, instead of crossing
+     * now. One working order per position, carrying that position's
+     * ticket so it CLOSES — on a hedging account an opposite order
+     * without it opens a second position. A target, and no stop. */
+    var row = state.snapshot.pairs[key] || {};
+    var level = parseFloat(value);
+    if (!isFinite(level)) {
+      toast('type the spread level to close at, beside the button');
+      return;
+    }
+    if (!row.net_position) {
+      toast((row.name || key) + ' is already flat — nothing to close');
+      return;
+    }
+    ask('Rest a closing order at ' + fmt(level, 4) + '?',
+        (row.name || key) + '\n' +
+        (row.net_position > 0 ? '+' : '') + row.net_position +
+        ' spreads open.\n\nOne working order per position, at that ' +
+        'level, by ticket. It WAITS there — nothing crosses now, and ' +
+        'there is no stop. CLOSE ALL is the one that crosses.',
+        'Rest it', function () {
+          send('close_at_limit', {pair: key, level: level},
+               function (result) {
+                 var data = (result || {}).data || {};
+                 if (data.reason) { toast(data.reason, data.ok ? 'ok' : ''); }
+                 else if (data.ok) {
+                   toast('closing order(s) resting at ' + fmt(level, 4), 'ok');
+                 }
+               });
+        });
+  }
+
   function flatten(key) {
     var row = state.snapshot.pairs[key] || {};
     if (!row.net_position) {
@@ -1292,6 +1373,25 @@
     // FILL does, so it is stated where the mode is stated — and where
     // it is visible without opening anything. Ticking the box has to
     // change the screen, or it reads as having done nothing.
+    // Which leg rests the real pending, and which one crosses. Read
+    // from the ENGINE's own groups where there is one working, and
+    // from the pair's setting before that.
+    var note = node.querySelector('.quoting-note');
+    if (note) {
+      var live = (row.quotes || [])[0];
+      var leg = (live && live.leg) ||
+        (row.quoting_leg_effective
+          ? row.quoting_leg_effective.toUpperCase() : '');
+      var symbol = (live && live.symbol) ||
+        (leg === 'A' ? row.symbol_a : leg === 'B' ? row.symbol_b : '');
+      note.textContent = row.order_type === 'MARKET'
+        ? 'MARKET: both legs cross at once'
+        : (leg
+            ? 'LIMIT: quotes leg ' + leg + (symbol ? ' · ' + symbol : '') +
+              ' · leg ' + (leg === 'A' ? 'B' : 'A') + ' crosses on fill'
+            : 'LIMIT: quoting leg picked from the wider book');
+      note.classList.toggle('live', !!(live && live.ticket));
+    }
     var badge = node.querySelector('.mode-badge');
     // The EFFECTIVE state, never the ladder's box alone: with the
     // master switch off the box is ticked and nothing arms, and a
@@ -1907,7 +2007,9 @@
     // else. It looked exactly like one resting at the broker, and the
     // only hint was W:8 (broker 0) in small text in the footer.
     var heldOff = {};
+    var quoteFor = {};
     (row.quotes || []).forEach(function (quote) {
+      (quote.orders || []).forEach(function (id) { quoteFor[id] = quote; });
       if (quote.ticket) { return; }             // really is at the broker
       (quote.orders || []).forEach(function (id) {
         heldOff[id] = quote.reason ||
@@ -1962,15 +2064,19 @@
       orders.forEach(function (order) {
         heldReason = heldReason || heldOff[order.order_id] || null;
       });
+      var workQuote = work ? quoteFor[work.order_id] : null;
       cells += '<td class="work' +
         (work ? ' ' + work.side.toLowerCase() : '') +
         (heldReason ? ' held' : '') +
         (ghosts.length ? ' pending ' + ghostSide : '') + '"' +
-        (work ? ' data-order-id="' + work.order_id + '" title="' +
-          (heldReason
-            ? 'NOT at the broker: ' + heldReason.replace(/"/g, '') +
-              '. Click to pull it.'
-            : orders.length + ' order(s) here — click to pull one') +
+        (work ? ' data-order-id="' + work.order_id + '"' +
+          ' data-side="' + work.side + '" title="' +
+          escapeHtml(heldReason
+            ? 'NOT at the broker: ' + heldReason +
+              '. Click to add another here; right-click to pull one.'
+            : orders.length + ' ' + work.side + ' order(s) here' +
+              restingOn(workQuote) +
+              '. Click to add another; right-click to pull one.') +
           '"' : '') + '>' +
         (workQty ? workQty : '') +
         (ghostQty ? '<span class="ghost" title="sent — waiting for the ' +
@@ -2379,7 +2485,8 @@
   function ordersTable() {
     var html = '<table><thead><tr><th>Pair</th><th>Side</th><th>Level</th>' +
       '<th>Qty</th><th>TIF</th><th>State</th><th>Pending</th>' +
-      '<th>Peg</th><th>Implied</th><th>Re-pegs</th><th>Why</th><th></th>' +
+      '<th>Peg price</th><th>Resting on</th><th>Re-pegs</th><th>Why</th>' +
+      '<th></th>' +
       '</tr></thead><tbody>';
     var any = false;
     Object.keys(state.snapshot.pairs || {}).forEach(function (key) {
@@ -2400,7 +2507,16 @@
         html += '<td>' + order.state + '</td>';
         html += '<td>' + (quote.ticket || DASH) + '</td>';
         html += '<td>' + fmt(quote.price, 2) + '</td>';
-        html += '<td>' + (quote.leg ? 'leg ' + quote.leg : DASH) + '</td>';
+        // WHICH broker will show this order, and which leg crosses
+        // when it fills. 'leg a' alone read as leg A having nothing.
+        html += '<td>' + (quote.leg
+          ? 'leg ' + quote.leg +
+            (quote.symbol ? ' · ' + escapeHtml(quote.symbol) : '') +
+            (quote.crosses_leg
+              ? '<div class="hint">' + quote.crosses_leg +
+                ' crosses on fill</div>'
+              : '')
+          : DASH) + '</td>';
         html += '<td>' + (quote.repegs === undefined ? DASH : quote.repegs) +
           '</td>';
         html += '<td>' + (quote.reason || order.reason || '') + '</td>';

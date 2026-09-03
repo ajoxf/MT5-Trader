@@ -84,6 +84,13 @@ class Publisher:
         #: The counts the cancel buttons are enabled from.
         self.working_buys = 0
         self.working_sells = 0
+        #: What is ON. Close @ Limit refuses on a flat ladder, so a
+        #: test of it has to publish a position first.
+        self.net_position = 0.0
+        #: Which leg LIMIT mode rests its real pending on. The other
+        #: leg is crossed at market when it fills, and a broker window
+        #: showing nothing on that leg is the mode, not a fault.
+        self.quoting_leg = 'b'
         self.live = threading.Event()
         self.live.set()
         self.stop = threading.Event()
@@ -103,7 +110,8 @@ class Publisher:
                            self.auto_route_master,
                            self.show_fair_window, self.orders,
                            self.quotes, self.working_buys,
-                           self.working_sells, self.algo, self.algo_block)
+                           self.working_sells, self.algo, self.algo_block,
+                           self.net_position, self.quoting_leg)
         if at is not None:
             payload['at'] = at
         # A tmp name of its OWN. The timer thread and the test publish
@@ -150,7 +158,8 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              positions=None, unclaimed=None, fair=None,
              auto_route=False, auto_route_armed=None,
              auto_route_master=True, show_fair_window=True, orders=None, quotes=None,
-             working_buys=0, working_sells=0, algo='NONE', algo_block=None):
+             working_buys=0, working_sells=0, algo='NONE', algo_block=None,
+             net_position=0.0, quoting_leg='b'):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -226,7 +235,9 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'exit': exits or {},
                 'fair': fair or {},
                 'working_buys': working_buys,
-                'working_sells': working_sells, 'net_position': 0.0,
+                'working_sells': working_sells,
+                'net_position': net_position,
+                'quoting_leg_effective': quoting_leg,
                 'avg_entry': None, 'open_pnl': None, 'last_print': None,
                 'errors': [],
             }
@@ -427,16 +438,19 @@ def test_a_market_click_fires_on_ONE_click(page):
     page.wait_for_selector('.window.mode-market', timeout=WAIT)
     # Read in ONE evaluate: the ladder repaints on every publish, and a
     # node resolved in Python can be replaced before the style is read.
-    # AT THE TOUCH a market click crosses now and the cursor carries an
-    # M; away from it the same click rests, and the cursor says so
-    # instead of promising a cross.
+    # The M is on every price cell — it names the MODE, and the mode is
+    # the same at the touch and ten rows away. The touch rows are told
+    # apart by their box instead.
     cursors = page.evaluate(
         "() => ({touch: getComputedStyle(document.querySelector("
         "'.window.mode-market .grid tr.in-bid td.bid')).cursor,"
         " away: getComputedStyle(document.querySelector("
-        "'.window.mode-market .grid tbody td.bid')).cursor})")
+        "'.window.mode-market .grid tbody td.bid')).cursor,"
+        " box: getComputedStyle(document.querySelector("
+        "'.window.mode-market .grid tr.market-line td.bid')).boxShadow})")
     assert 'svg+xml' in cursors['touch'] and 'crosshair' in cursors['touch']
-    assert cursors['away'] == 'cell'
+    assert 'svg+xml' in cursors['away']
+    assert cursors['box'] != 'none'
 
     before = command_count(page)
     page.locator('.ladder .grid tbody tr td.bid').nth(6).click()
@@ -2597,7 +2611,11 @@ def test_the_two_columns_say_what_they_are(page):
     work = page.get_attribute('.ladder .grid th.c-work', 'title')
     ltq = page.get_attribute('.ladder .grid th.c-ltq', 'title')
 
-    assert 'resting orders' in work and 'pull one order' in work
+    assert 'resting orders' in work
+    # ...and what the two buttons on it do. Clicking a level you are
+    # working ADDS one; the pull is the right button.
+    assert 'CLICK to add one more' in work
+    assert 'RIGHT-CLICK to pull one' in work
     assert 'most recent FILL' in ltq
     assert 'not an order' in ltq
 
@@ -3183,3 +3201,179 @@ def test_the_pair_type_is_declared_and_the_expiries_follow_it(page):
         "() => document.querySelector('.ladder .ls-pairtype')"
         ".textContent.indexOf('only leg B') >= 0", timeout=WAIT)
     page.click('.ladder .ls-close')
+
+
+# -- the order-execution pass ---------------------------------------------
+
+def test_clicking_a_working_level_ADDS_one_instead_of_pulling_it(page):
+    """A trader who clicks a level they are already working wants MORE
+    of it. Pulling was the wrong default, and the toast that came back
+    ('resting at … to close position') read as an error on an ordinary
+    click.
+
+    Right-click is the pull, and it is in the tooltip.
+    """
+    open_ladder(page)
+    page.wait_for_selector('.ladder .grid tbody tr td.work', timeout=WAIT)
+    publisher = page.paths['publisher']
+    level = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows[5].level""")
+    publisher.orders = [{'order_id': 'O9', 'level': level, 'side': 'SELL',
+                         'quantity': 1, 'filled_quantity': 0,
+                         'state': 'WORKING'}]
+    publisher.quotes = [{'pair_key': 'XAUUSD_|GC1226', 'side': 'SELL',
+                         'level': level, 'leg': 'B', 'ticket': 5150,
+                         'price': 4660.4, 'symbol': 'GC1226',
+                         'crosses_leg': 'A', 'orders': ['O9']}]
+    publisher.publish()
+    page.wait_for_selector('.ladder .grid td.work[data-order-id]',
+                           timeout=WAIT)
+
+    cell = page.locator('.ladder .grid td.work[data-order-id]').first
+    title = cell.get_attribute('title') or ''
+    assert 'Click to add another' in title
+    assert 'right-click to pull one' in title
+
+    before = command_count(page)
+    cell.click()
+    page.wait_for_timeout(250)
+    command = last_command(page)
+    assert command_count(page) == before + 1
+    # ONE MORE ORDER at that level, on the side already resting there —
+    # not a cancel, and not the other side.
+    assert command['kind'] == 'click'
+    assert command['payload']['side'] == 'SELL'
+    assert abs(command['payload']['level'] - level) < 1e-9
+
+    # The control: the pull still exists, on the right button.
+    page.locator('.ladder .grid td.work[data-order-id]').first.click(
+        button='right')
+    page.wait_for_timeout(250)
+    pull = last_command(page)
+    assert pull['kind'] == 'cancel_order'
+    assert pull['payload']['order_id'] == 'O9'
+
+    publisher.orders = None
+    publisher.quotes = None
+    publisher.publish()
+
+
+def test_the_ladder_says_which_leg_the_real_pending_rests_on(page):
+    """LIMIT quotes ONE leg and crosses the other at market on the
+    fill. Leg A showing no order at the broker is the mode working —
+    and nothing on the screen said so, so it read as leg A having
+    failed to place."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    publisher.order_type = 'LIMIT'
+    publisher.quoting_leg = 'b'
+    publisher.publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .quoting-note')"
+        ".textContent.indexOf('leg B') >= 0", timeout=WAIT)
+    note = page.text_content('.ladder .quoting-note')
+    assert 'GC1226' in note                       # the symbol, by name
+    assert 'leg A crosses on fill' in note        # ...and what leg A does
+
+    # The control: in MARKET mode neither leg rests anything, and the
+    # note must not go on naming a quoting leg.
+    publisher.order_type = 'MARKET'
+    publisher.publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .quoting-note')"
+        ".textContent.indexOf('both legs') >= 0", timeout=WAIT)
+    publisher.order_type = 'LIMIT'
+    publisher.publish()
+
+
+def test_MARKET_mode_carries_the_M_over_every_price_cell(page):
+    """The mode is what the M names, and the mode does not change
+    halfway down the ladder. It used to appear on the two touch rows
+    only, so nine rows in ten the cursor said 'cell' while the badge
+    said MARKET."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    publisher.order_type = 'MARKET'
+    publisher.publish()
+    page.wait_for_selector('.window.mode-market', timeout=WAIT)
+
+    def cursor(nth):
+        return page.eval_on_selector_all(
+            '.ladder .grid tbody tr td.bid',
+            "(cells, n) => getComputedStyle(cells[n]).cursor", nth)
+
+    assert 'svg+xml' in cursor(1), 'no M away from the touch'
+    assert 'svg+xml' in cursor(15)
+
+    # The control: LIMIT mode carries no M anywhere.
+    publisher.order_type = 'LIMIT'
+    publisher.publish()
+    page.wait_for_function(
+        "() => !document.querySelector('.window.mode-market')", timeout=WAIT)
+    assert 'svg+xml' not in cursor(1)
+
+
+def test_the_three_cancels_are_labelled_as_what_they_act_on(page):
+    """S / B / CXL All are the WORKING ORDER controls. Unlabelled, three
+    initials sat under a column of size boxes and read as sides."""
+    open_ladder(page)
+    label = page.evaluate("""() => {
+        const row = document.querySelector('.ladder .cxl-row');
+        const previous = row.previousElementSibling;
+        return previous ? previous.textContent.trim() : null;
+    }""")
+    assert label == 'Working orders'
+
+
+def test_a_position_can_be_closed_at_a_PRICE_not_only_at_the_market(page):
+    """CLOSE ALL crosses now. This rests one working order per position
+    at a level the trader names — and it asks first, because it is an
+    exit that WAITS and a trader who thought it crossed is a trader
+    holding a position they believe is closed."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    publisher.net_position = 2.0
+    publisher.publish()
+    page.wait_for_function(
+        "() => (window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+        " || {}).net_position === 2", timeout=WAIT)
+
+    before = command_count(page)
+    page.fill('.ladder .close-limit', '59.40')
+    page.click('.ladder .close-limit-go')
+    page.wait_for_selector('#modal:not(.hidden)')
+    assert command_count(page) == before, 'it sent before it asked'
+    body = page.text_content('#modal')
+    assert 'WAITS' in body and 'no stop' in body
+    page.click('#modal-confirm')
+    page.wait_for_timeout(250)
+
+    command = last_command(page)
+    assert command['kind'] == 'close_at_limit'
+    assert command['payload']['level'] == 59.40
+    assert command['payload']['pair'] == 'XAUUSD_|GC1226'
+
+    publisher.net_position = 0.0
+    publisher.publish()
+
+
+def test_closing_at_a_price_is_refused_on_a_flat_ladder(page):
+    """The control: nothing to close is not an order to place."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    publisher.net_position = 0.0
+    publisher.publish()
+    page.wait_for_function(
+        "() => (window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+        " || {}).net_position === 0", timeout=WAIT)
+
+    before = command_count(page)
+    page.fill('.ladder .close-limit', '59.40')
+    page.click('.ladder .close-limit-go')
+    page.wait_for_selector('#toasts .toast', timeout=WAIT)
+    assert 'already flat' in page.text_content('#toasts .toast')
+    assert command_count(page) == before
+    # An error toast stays until it is dismissed, and this page is
+    # shared with every other test in the file.
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")

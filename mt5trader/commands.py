@@ -222,6 +222,17 @@ class CommandRunner:
         return {'closed': len(results),
                 'failed': [r for r in results if not r['ok']]}
 
+    def _do_close_at_limit(self, payload):
+        """Every position on one ladder, rested at ONE price.
+
+        CLOSE ALL crosses now; this waits at the price the trader
+        named. Both close by TICKET — an opposite market order on a
+        hedging account opens a second position instead.
+        """
+        return self.coordinator.close_at_limit(payload['pair'],
+                                               payload.get('level'),
+                                               payload.get('quantity'))
+
     def _do_kill(self, payload):
         """The global kill: cancel everything, and on confirm flatten
         everything, across every ladder."""

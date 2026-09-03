@@ -87,8 +87,8 @@
       <tr><th>Tab</th><td>focus the next ladder</td></tr>
       <tr><th>Esc</th><td>close this, or any open dialog</td></tr>
       <tr><th>Work</th><td>your RESTING orders — appears when a click is
-        accepted, goes when it fills or is pulled. Click the cell to
-        pull one</td></tr>
+        accepted, goes when it fills or is pulled. Click the cell to add
+        one more at that level; right-click it to pull one</td></tr>
       <tr><th>LTQ</th><td>the last FILL at that price, in green. A
         print, not an order: it means the trade happened, not that
         anything is still working</td></tr>
@@ -216,11 +216,26 @@
           <option value="GTC" title="until cancelled, or until this system stops">GTC</option>
           </select>
         </div>
+        <!-- WHICH LEG the real pending rests on. In LIMIT mode one leg
+             quotes and the other is crossed at market when it fills, so
+             a leg with no order at the broker is the mode working, not
+             a fault. It was nowhere on the screen. -->
+        <div class="quoting-note" title="LIMIT mode rests a real pending on ONE leg and crosses the other at market when it fills. This is the leg your broker will show an order on.">—</div>
         <!-- The three fastest actions on the ladder, without hunting
              for a row: lift the offer, hit the bid, close what is on. -->
         <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY</button>
         <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL</button>
         <button class="quick flatten" title="Close every open position on this pair, at market, by ticket. It does not touch working orders — use Cancel all for those. Asks once (F)">CLOSE ALL</button>
+        <!-- The other way to close: name a price and wait there. Same
+             machinery as an AutoRouting target — one working order per
+             position, carrying that position's ticket so it CLOSES
+             rather than opening a second one. -->
+        <div class="close-lmt-row">
+          <input class="close-limit" type="number" step="0.0001"
+                 placeholder="Close @ limit"
+                 title="The SPREAD level to close every open position at. It rests as a working order per position, carrying that position's ticket, and waits there — CLOSE ALL crosses now.">
+          <button class="quick close-limit-go" title="Rest a closing order for every open position on this pair at the price in the box, instead of crossing now. A target, and no stop.">@ LMT</button>
+        </div>
         <!-- One box per side, each labelled and tinted with the side
              it sends. The keypad sets both; type in one to differ. -->
         <label class="inline-field qty-row"><span class="qty-buy">Qty BUY</span>
@@ -240,6 +255,7 @@
         <!-- One row, not three: the rail is read top to bottom while
              the market moves, and every row it does not need is a row
              between the trader and the price. -->
+        <div class="rail-label">Working orders</div>
         <div class="cxl-row">
           <button class="cxl cxl-s" title="Cancel this ladder's working SELL orders">S<sup class="count-s"></sup></button>
           <button class="cxl cxl-all" title="Cancel every working order on this ladder (X)">CXL All<sup class="count-all"></sup></button>
@@ -257,7 +273,7 @@
         <table>
           <thead>
             <tr>
-              <th class="c-work" title="Work — YOUR resting orders at this level, blue for a buy and red for a sell. It appears the moment the click is accepted and stays until the order fills or is pulled. Click the cell to pull one order from it.">Work</th>
+              <th class="c-work" title="Work — YOUR resting orders at this level, blue for a buy and red for a sell. It appears the moment the click is accepted and stays until the order fills or is pulled. CLICK to add one more at this level; RIGHT-CLICK to pull one.">Work</th>
               <th class="c-bid" title="Bids — the size the two books can do on the SELL side, in spreads. Click here to sell the spread at that level.">Bids</th>
               <th class="c-price" title="The spread, B − β × A, one row per increment.">Price</th>
               <th class="c-ask" title="Asks — the size the two books can do on the BUY side, in spreads. Click here to buy the spread at that level.">Asks</th>

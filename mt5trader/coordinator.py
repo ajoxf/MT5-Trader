@@ -28,6 +28,7 @@ from .database import Store
 from .executor import PairExecutor, mark_position
 from .models import (MAGIC_NUMBER, LegFill, OrderType, SpreadPosition,
                      SpreadSide)
+from . import quoter as quoter_module
 from .quoter import Quoter
 from .reconcile import Reconciler
 from .session import SessionClock, day_orders, overnight_action
@@ -718,9 +719,15 @@ class Coordinator:
               and pair.auto_route)
         if not on:
             for position in self.book.positions(pair.key):
-                if self.book.orders_for_position(position.position_id):
+                # ONLY what AutoRouting armed. An exit the trader rested
+                # by hand (Close @ Limit) is theirs, and pulling it
+                # because an automation they never used is off would
+                # take their exit away without their asking.
+                if self.book.orders_for_position(position.position_id,
+                                                 armed_by='auto'):
                     self.quoter.disarm(position.position_id,
-                                       'AutoRouting was turned off')
+                                       'AutoRouting was turned off',
+                                       armed_by='auto')
                     position.tp_armed = False
                     events.append({'pair': pair.key,
                                    'action': 'auto_route_pulled',
@@ -1056,6 +1063,57 @@ class Coordinator:
             return offer is not None and level < offer - edge
         bid = md.get('short_spread')
         return bid is not None and level > bid + edge
+
+    def close_at_limit(self, pair_key, level, quantity=None):
+        """Rest a CLOSING order for every open position on this pair.
+
+        The counterpart to CLOSE ALL, which crosses at market. Here the
+        trader names the price and waits — the same machinery
+        AutoRouting uses, driven by hand: one working order per
+        position, on the opposite side, carrying that position's ticket
+        so it CLOSES rather than opening a second one on a hedging
+        account.
+
+        It rests a TARGET and no stop. Nothing re-enters, nothing
+        re-prices it but the peg that holds the clicked SPREAD level as
+        the other leg moves.
+        """
+        with self.lock:
+            return self._close_at_limit(pair_key, level, quantity)
+
+    def _close_at_limit(self, pair_key, level, quantity=None):
+        pair = self.config.pairs.get(pair_key)
+        if pair is None:
+            return {'ok': False, 'reason': f'no pair {pair_key}'}
+        try:
+            level = float(level)
+        except (TypeError, ValueError):
+            return {'ok': False, 'reason': 'a limit close needs a price'}
+        positions = self.book.positions(pair_key)
+        if not positions:
+            return {'ok': False, 'reason': f'{pair_key} is already flat — '
+                                           f'nothing to close'}
+        armed, already = [], []
+        for position in positions:
+            existing = self.book.orders_for_position(position.position_id)
+            if existing:
+                already.append(position.position_id)
+                continue
+            order = self.quoter.arm(pair, position, level,
+                                    quantity=quantity, armed_by='trader')
+            if order is None:
+                continue
+            armed.append(order.to_dict())
+            self.session_events.append(
+                {'pair': pair_key, 'action': 'close_at_limit',
+                 'position': position.position_id, 'level': level,
+                 'order': order.order_id})
+        return {'ok': bool(armed), 'armed': armed, 'level': level,
+                'already_working': already,
+                'reason': None if armed else (
+                    f'every position on {pair_key} already has a closing '
+                    f'order working — pull it first to move the price'
+                    if already else 'nothing could be armed')}
 
     def cancel_order(self, order_id):
         with self.lock:
@@ -1524,6 +1582,11 @@ class Coordinator:
                     and self.clock() - o.created_at < DEAD_ORDER_MEMORY_SEC],
                 'quotes': self.quoter.snapshot(key),
                 'quoting_leg': pair.quoting_leg,
+                # The leg that will ACTUALLY rest the pending — the
+                # setting when there is one, otherwise the wider book.
+                # A ladder must be able to say which broker will show
+                # an order, before the first click.
+                'quoting_leg_effective': quoter_module.quoting_leg(pair),
                 'leg_a_width': (pair.meta_a or {}).get('width'),
                 'leg_b_width': (pair.meta_b or {}).get('width'),
                 'working_buys': buys, 'working_sells': sells,

@@ -597,7 +597,8 @@ table.exits td:nth-child(3) { color: #a02722; }
  * a button that reads as the opposite trade. */
 .buy-touch { background: var(--ask-strong); }
 .sell-touch { background: var(--bid-strong); }
-.flatten { background: #444; }
+.flatten,
+.close-limit-go { background: #444; }
 .quick:hover { filter: brightness(1.15); }
 
 .cxl {
@@ -751,14 +752,14 @@ tr.flash-sell > td { animation: flash-sell .35s ease-out; }
 td.bid, td.ask { cursor: pointer; }
 tr:hover td.price { outline: 1px solid #333; }
 
-/* MARKET mode is unmistakable — but only where it is TRUE. A market
- * order crosses at the touch; a click ten rows away cannot cross at any
- * price and rests as a working order instead. Tinting the whole ladder
- * said the opposite: that every row was a market click. So only the two
- * touch rows are marked, and the cursor carries an M wherever a click
- * would cross now. */
-.window.mode-market tr.in-bid td.bid,
-.window.mode-market tr.in-ask td.ask {
+/* MARKET mode is unmistakable: the M rides the cursor over EVERY
+ * clickable price cell, because the mode is what the M names and the
+ * mode does not change halfway down the ladder. The two touch rows
+ * keep their box, so "crosses now" is still visible — a click away
+ * from the touch cannot cross at any price and rests as a working
+ * order, which the toast says when it happens. */
+.window.mode-market td.bid,
+.window.mode-market td.ask {
   cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><text x='2' y='17' font-family='Segoe UI,sans-serif' font-size='15' font-weight='700' fill='%23111' stroke='%23fff' stroke-width='0.7'>M</text></svg>") 4 12, crosshair;
 }
 .window.mode-market tr.market-line td.bid,
@@ -767,10 +768,6 @@ tr:hover td.price { outline: 1px solid #333; }
 .window.mode-market tr.best-ask td.ask {
   box-shadow: inset 0 0 0 2px #6b5a2b;
 }
-/* Away from the touch a market-mode click RESTS, and the cursor says
- * so rather than promising a cross. */
-.window.mode-market td.bid,
-.window.mode-market td.ask { cursor: cell; }
 
 .counts .mismatch { background: var(--ask); padding: 0 3px; }
 .counts {
@@ -1546,6 +1543,38 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
   border-top: 1px solid var(--frame-line);
 }
 .ladder-settings .ls-note { font-size: 10px; }
+
+/* WHICH LEG carries the real pending. Small, quiet, and always there:
+ * in LIMIT mode one leg rests an order and the other crosses at market
+ * when it fills, so a broker window showing nothing on leg A is the
+ * mode working — and until this line existed there was nowhere on the
+ * screen that said so. */
+.rail .quoting-note {
+  margin-top: 2px;
+  font-size: 9px;
+  line-height: 1.25;
+  color: var(--frame-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Darker once a pending is actually AT the broker on that leg. */
+.rail .quoting-note.live { color: var(--frame-text); }
+
+/* Close at a price, on the row under CLOSE ALL. One row, not two: the
+ * rail is read top to bottom while the market moves. */
+.rail .close-lmt-row { display: flex; gap: 2px; margin-top: 2px; }
+.rail .close-lmt-row .close-limit {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 11px var(--mono);
+}
+.rail .close-lmt-row .close-limit-go {
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding: 1px 6px;
+  font-size: 10px;
+}
 
 /* The three cancels on one row. They are read as a group and pressed
  * one at a time, and three stacked rows pushed the exit off the rail. */

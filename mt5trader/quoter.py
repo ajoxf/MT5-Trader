@@ -521,16 +521,20 @@ class Quoter:
         """The pair's last market, for marking a close. Set by `work`."""
         return self._markets.get(pair.key)
 
-    def arm(self, pair, position, level, quantity=None):
+    def arm(self, pair, position, level, quantity=None, armed_by='auto'):
         """Rest a working order to CLOSE `position` at `level`.
 
-        This is what AutoRouting does on a fill, and it is not a
-        strategy: it places the exit order the trader would otherwise
-        place by hand, at a level derived from settings they typed. No
-        signal, no re-entry, no loop.
+        This is what AutoRouting does on a fill, and what the trader
+        does by hand with Close @ Limit. Neither is a strategy: it
+        places the exit order the trader would otherwise place a click
+        at a time. No signal, no re-entry, no loop.
 
         It arms a TARGET and NO STOP — the position runs until the
         target, the overnight rule, or the trader.
+
+        `armed_by` is WHO asked. It decides one thing only, and it
+        matters: switching AutoRouting off sweeps what AutoRouting
+        armed, and must not touch an exit the trader rested by hand.
         """
         if level is None:
             return None
@@ -541,14 +545,16 @@ class Quoter:
             pair, position.side.opposite, level,
             quantity if quantity is not None else position.quantity,
             order_type=OrderType.LIMIT,
-            position_id=position.position_id)
+            position_id=position.position_id, armed_by=armed_by)
         self.group_for(pair, order)
-        logging.info('%s: AutoRouting armed a %s to close %s at %s',
-                     pair.key, position.side.opposite.value,
+        logging.info('%s: %s armed a %s to close %s at %s', pair.key,
+                     'AutoRouting' if armed_by == 'auto' else 'the trader',
+                     position.side.opposite.value,
                      position.position_id, level)
         return order
 
-    def disarm(self, position_id, reason='its position is gone'):
+    def disarm(self, position_id, reason='its position is gone',
+               armed_by=None):
         """Pull every closing order armed against one position.
 
         Called BEFORE the close, never after: an auto-TP left resting
@@ -557,11 +563,20 @@ class Quoter:
         opens a naked position instead.
         """
         pulled = []
-        for order in self.book.orders_for_position(position_id):
+        for order in self.book.orders_for_position(position_id,
+                                                   armed_by=armed_by):
             self.book.cancel(order.order_id, reason)
             pulled.append(order)
+        if armed_by is not None and not pulled:
+            return pulled
         for key, group in list(self.groups.items()):
             if group.position_id != position_id:
+                continue
+            if armed_by is not None and any(
+                    o.is_working for o in group.orders):
+                # Something the caller was not asked to pull is still
+                # working here: the real pending stays, re-sized on the
+                # next pass to what is left.
                 continue
             pair = self.config.pairs.get(group.pair_key)
             if pair is not None:
@@ -635,5 +650,25 @@ class Quoter:
     # -- what the monitor renders -------------------------------------------
 
     def snapshot(self, pair_key=None):
-        return [group.to_dict() for group in self.groups.values()
-                if pair_key is None or group.pair_key == pair_key]
+        """Every group, with the leg its real pending is ON named.
+
+        In LIMIT mode the pending rests on ONE leg and the other is
+        crossed at market when it fills. Which leg that is, and at what
+        price, is the difference between "my order is at the broker"
+        and "half of it is" — and it was only ever a bare 'a'/'b' on
+        one panel, so leg A looked like it had no order at all.
+        """
+        out = []
+        for group in self.groups.values():
+            if pair_key is not None and group.pair_key != pair_key:
+                continue
+            row = group.to_dict()
+            pair = self.config.pairs.get(group.pair_key)
+            if pair is not None:
+                on_a = group.leg == 'a'
+                row['account'] = pair.account_a if on_a else pair.account_b
+                row['symbol'] = pair.symbol_a if on_a else pair.symbol_b
+                row['crosses'] = pair.symbol_b if on_a else pair.symbol_a
+                row['crosses_leg'] = 'B' if on_a else 'A'
+            out.append(row)
+        return out

@@ -257,16 +257,17 @@ def test_market_mode_changes_the_click_columns():
     """The expensive misclick on any ladder is a market order the trader
     thought was a working order.
 
-    Marked only where it is TRUE, though: a market order crosses at the
-    touch, and a click ten rows away rests instead. So the two touch
-    rows carry the M cursor and the yellow rule, and the rest of the
-    ladder carries the resting cursor rather than a promise to cross.
+    The M rides the cursor over EVERY price cell while the mode is
+    MARKET — the mode is what it names, and the mode does not change
+    halfway down the ladder. The two touch rows keep a box of their
+    own, because they are the only ones that can cross NOW; a click
+    away from them rests, and the toast says so when it happens.
     """
     css = (STATIC / 'ladder.css').read_text(encoding='utf-8')
     assert '.window.mode-market td.bid' in css
-    assert '.window.mode-market tr.in-bid td.bid' in css
     assert "font-size='15' font-weight='700'" in css      # the M cursor
-    assert 'cursor: cell' in css                          # away = rests
+    # ...and the touch rows are still marked out from the rest.
+    assert '.window.mode-market tr.market-line td.bid' in css
 
 
 # -- the settings endpoints: they must work with the ENGINE down --------

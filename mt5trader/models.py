@@ -102,8 +102,15 @@ class SyntheticOrder:
     """
 
     def __init__(self, pair_key, side, level, quantity, order_type,
-                 time_in_force, clock=time.time, position_id=None):
+                 time_in_force, clock=time.time, position_id=None,
+                 armed_by='trader'):
         self.order_id = new_id('SO')
+        #: WHO placed it: the trader, or AutoRouting. Only what
+        #: AutoRouting armed is swept when AutoRouting is switched off —
+        #: a closing order the trader rested by hand is theirs, and
+        #: pulling it because an automation they never used was turned
+        #: off would take their exit away without their asking.
+        self.armed_by = armed_by
         #: The position this order CLOSES, when it is a closing order.
         #: None on an ordinary click. It is what makes an AutoRouting
         #: take-profit a different order from an entry at the same
@@ -149,6 +156,7 @@ class SyntheticOrder:
             'pending_ticket': self.pending_ticket,
             'position_id': self.position_id,
             'intent': 'CLOSE' if self.position_id else 'OPEN',
+            'armed_by': self.armed_by,
             'reason': self.reason,
         }
 
