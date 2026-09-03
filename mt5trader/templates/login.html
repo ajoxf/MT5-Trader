@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexus</title>
+<!-- Self-hosted, like everything else. The screen that says "could not
+     sign in" has to work when the network is what failed. -->
+<link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='login.css') }}?v={{ asset_version }}">
+</head>
+<body>
+
+<main class="card" role="main">
+
+  <!-- The same mark as the terminal: two nodes, two accounts, one
+       spread. Inline so it never arrives a request late. -->
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="6.5" y="10.9" width="11" height="2.2" fill="#1c1c1c"/>
+      <circle cx="7" cy="12" r="3.4" fill="#2f6fb0"/>
+      <circle cx="17" cy="12" r="3.4" fill="#c0342f"/>
+    </svg>
+    <div class="brand-words">
+      <span class="brand-name">NEXUS</span>
+      <span class="brand-note">spread terminal</span>
+    </div>
+  </div>
+
+  {% if error %}
+  <!-- The refusal carries its own words. Never "check the log": the
+       person reading this owns the machine, and the reason they cannot
+       get in is the whole content of the message. -->
+  <p class="refusal" role="alert">{{ error }}</p>
+  {% endif %}
+
+  {% if mode == 'setup' %}
+  <h1>Set up this terminal</h1>
+  <p class="lede">Nobody has an account on this machine yet. Choose the
+    username and password you will sign in with. They stay here — there is
+    no server to send them to.</p>
+  <form method="post" action="{{ url_for('setup') }}" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username"
+           required autofocus>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password"
+           autocomplete="new-password" required
+           minlength="{{ min_password }}">
+    <label for="confirm">Password again</label>
+    <input id="confirm" name="confirm" type="password"
+           autocomplete="new-password" required
+           minlength="{{ min_password }}">
+    <p class="hint">{{ min_password }} characters or more. This terminal
+      places live orders.</p>
+    <button type="submit">Create account</button>
+  </form>
+
+  {% elif mode == 'change' %}
+  <h1>Choose a new password</h1>
+  <p class="lede">Signed in as <strong>{{ user }}</strong>. This password has
+    to be changed before the ladders open.</p>
+  <form method="post" action="{{ url_for('password') }}" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="current">Current password</label>
+    <input id="current" name="current" type="password"
+           autocomplete="current-password" required autofocus>
+    <label for="password">New password</label>
+    <input id="password" name="password" type="password"
+           autocomplete="new-password" required
+           minlength="{{ min_password }}">
+    <label for="confirm">New password again</label>
+    <input id="confirm" name="confirm" type="password"
+           autocomplete="new-password" required
+           minlength="{{ min_password }}">
+    <button type="submit">Change password</button>
+  </form>
+
+  {% else %}
+  <h1>Sign in</h1>
+  <form method="post" action="{{ url_for('login') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username"
+           required autofocus>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password"
+           autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+  {% endif %}
+
+  <p class="foot">This terminal runs on this machine. Your broker credentials
+    never leave it.</p>
+</main>
+
+</body>
+</html>

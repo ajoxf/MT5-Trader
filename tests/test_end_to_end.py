@@ -34,6 +34,7 @@ from mt5trader.database import Store                             # noqa: E402
 from mt5trader.leg_runner import LegServer                       # noqa: E402
 from mt5trader.legs import RemoteLeg                             # noqa: E402
 from mt5trader.models import OrderSide                           # noqa: E402
+from conftest import sign_in_browser, signed_in                  # noqa: E402
 from mt5trader.webapp import create_app                          # noqa: E402
 from test_ui_browser import chromium_path                        # noqa: E402
 
@@ -49,6 +50,7 @@ class Desk:
             'results': str(tmp / 'results.json'),
             'config': str(tmp / 'config.json'),
             'db': str(tmp / 'trader.db'),
+            'auth': str(tmp / 'auth.json'),
         }
         self.spot = FakeSymbol('XAUUSD_', 4292.00, 4292.20, contract_size=100.0,
                                volume_min=0.01, volume_step=0.01)
@@ -174,7 +176,7 @@ class Desk:
         from werkzeug.serving import make_server
         app = create_app(self.paths['status'], self.paths['commands'],
                          self.paths['results'], self.paths['config'],
-                         self.paths['db'])
+                         self.paths['db'], self.paths['auth'])
         self.httpd = make_server('127.0.0.1', 0, app, threaded=True)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         return f'http://127.0.0.1:{self.httpd.server_port}'
@@ -246,7 +248,7 @@ def browser_page(desk):
         page = browser.new_page(viewport={'width': 1400, 'height': 900})
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
-        page.goto(url)
+        sign_in_browser(page, url)
         page.wait_for_selector('.ladder .grid tbody tr', timeout=15000)
         page.errors = errors
         yield page
@@ -490,10 +492,10 @@ def test_the_slippage_report_covers_the_session_that_was_just_traded(
     """
     app = create_app(desk.paths['status'], desk.paths['commands'],
                      desk.paths['results'], desk.paths['config'],
-                     desk.paths['db'])
+                     desk.paths['db'], desk.paths['auth'])
     app.config.update(TESTING=True)
 
-    body = app.test_client().get('/api/slippage').get_json()
+    body = signed_in(app).get('/api/slippage').get_json()
 
     assert body['ok']
     assert body['counts']['positions'] == 1
@@ -538,10 +540,10 @@ def test_a_session_with_nothing_traded_is_not_a_slippage_of_zero(desk,
     reads as a session of perfect fills."""
     paths = dict(desk.paths, db=str(tmp_path / 'empty.db'))
     app = create_app(paths['status'], paths['commands'], paths['results'],
-                     paths['config'], paths['db'])
+                     paths['config'], paths['db'], paths['auth'])
     app.config.update(TESTING=True)
 
-    body = app.test_client().get('/api/slippage').get_json()
+    body = signed_in(app).get('/api/slippage').get_json()
 
     assert body['ok'] and body['counts']['positions'] == 0
     assert body['overall']['entry']['measured'] == 0

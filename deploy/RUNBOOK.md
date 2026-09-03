@@ -278,9 +278,12 @@ orphan, and it will refuse to clean up rather than guess.
 
 ## Reaching the screen from your own laptop
 
-The web page has **no password** and it can place orders, so it is
-never exposed to the internet. Reach it through an AWS Session Manager
-port forward:
+The web page is behind a login now — a username, a password, and a
+CSRF token on every write. That is not the same as being safe on the
+internet: the page speaks plain HTTP, so anything between you and it
+reads the session cookie. It stays bound to localhost, and you reach it
+through an AWS Session Manager port forward, which supplies the
+encryption:
 
 ```
 aws ssm start-session --target i-XXXXXXXX ^
@@ -290,3 +293,10 @@ aws ssm start-session --target i-XXXXXXXX ^
 
 then open `http://localhost:8000` in your browser. Nothing inbound has
 to be open on the instance for this to work.
+
+The first person to open it is asked to choose a username and password.
+There is no default account and no default password — a terminal that
+ships with one is a terminal that runs with one. Those credentials are
+stored as a scrypt hash in `auth.json` beside the config; back that file
+up with the other four, or the next start will offer first-run setup to
+whoever opens the page.

@@ -214,10 +214,12 @@ def main():
     parser.add_argument('--commands', default='commands.jsonl')
     parser.add_argument('--results', default='results.json')
     parser.add_argument('--db', default='mt5trader.db')
+    parser.add_argument('--auth', default='auth.json')
     parser.add_argument('--web-port', type=int, default=8000)
     parser.add_argument('--host', default='127.0.0.1',
-                        help='the UI has no password — leave this on '
-                             'localhost and reach it through a tunnel')
+                        help='the UI is behind a login, but a login is not '
+                             'TLS — leave this on localhost and reach it '
+                             'through a tunnel')
     parser.add_argument('--no-web', action='store_true',
                         help='engine only, no browser UI')
     parser.add_argument('--print-shortcut', action='store_true',
@@ -263,7 +265,7 @@ def main():
                             '--config', args.config, '--status', args.status,
                             '--commands', args.commands,
                             '--results', args.results, '--db', args.db,
-                            '--host', args.host,
+                            '--auth', args.auth, '--host', args.host,
                             '--port', str(args.web_port)])
         web.start()
         print(f'[launcher] the screen is at {url}')

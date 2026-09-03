@@ -4,6 +4,12 @@ config.json.bak
 config.json.tmp
 status.json
 status.json.tmp
+
+# Who may work this terminal: password hashes and the cookie signing
+# key for THIS machine. Never committed — a signing key in the
+# repository signs a session on every installation.
+auth.json
+auth.json.tmp
 *.log
 __pycache__/
 *.pyc

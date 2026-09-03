@@ -16,6 +16,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from flask.testing import FlaskClient                            # noqa: E402
+
+from mt5trader import auth                                      # noqa: E402
 from mt5trader.broker import OrderResult                        # noqa: E402
 from mt5trader.config import PairConfig, TraderConfig           # noqa: E402
 from mt5trader.legs import LocalLeg                             # noqa: E402
@@ -516,3 +519,70 @@ def config(pair):
     cfg = TraderConfig(pairs={pair.key: pair})
     cfg.settings['LEG_DEADLINE_SEC'] = 0.05     # tests do not wait 2s
     return cfg
+
+
+# -- the terminal is behind a login now ------------------------------------
+#
+# The screen the trader uses carries its CSRF token on every write,
+# added once in the page rather than at each call site. A test client
+# has no page, so it does the same thing here — otherwise every test
+# would be asserting about the token instead of about the ladder.
+
+#: The password the test fixtures sign in with. It is a fixture value,
+#: not a default: the product ships with NO account at all, and the
+#: first-run screen is what makes one.
+TEST_PASSWORD = 'ladder-pass-2026'
+
+
+class TokenClient(FlaskClient):
+    """A test client that carries the session's CSRF token, as the page
+    does."""
+
+    csrf_token = None
+
+    def open(self, *args, **kwargs):
+        if self.csrf_token and kwargs.get('method', 'GET').upper() \
+                not in ('GET', 'HEAD', 'OPTIONS'):
+            headers = dict(kwargs.get('headers') or {})
+            headers.setdefault('X-CSRF-Token', self.csrf_token)
+            kwargs['headers'] = headers
+        return super().open(*args, **kwargs)
+
+
+def signed_in(app, username='trader', password=TEST_PASSWORD):
+    """A client that has signed in — through the real login endpoint.
+
+    Not a session poked into a cookie: the fixture goes through the same
+    door the trader does, so a login that breaks breaks the suite.
+    """
+    store = auth.Store(app.config['AUTH_PATH'])
+    if username not in store.usernames():
+        store.create_user(username, password)
+    app.test_client_class = TokenClient
+    client = app.test_client()
+    with client.session_transaction() as session:
+        token = auth.csrf_token(session)
+    response = client.post('/login', data={'username': username,
+                                           'password': password,
+                                           'csrf_token': token})
+    assert response.status_code in (302, 303), response.data
+    with client.session_transaction() as session:
+        client.csrf_token = session['csrf']
+    return client
+
+
+def sign_in_browser(page, url, username='trader', password=TEST_PASSWORD):
+    """Get a real browser past the login page and onto the ladder.
+
+    The store starts empty in every fixture, so what the browser meets
+    first is the FIRST-RUN screen — which means the tests that drive the
+    ladder also prove that a fresh install can be set up and signed into
+    with a keyboard, without anyone having created an account by hand.
+    """
+    page.goto(url.rstrip('/') + '/login')
+    page.fill('#username', username)
+    page.fill('#password', password)
+    if page.locator('#confirm').count():
+        page.fill('#confirm', password)
+    page.click('button[type="submit"]')
+    page.wait_for_selector('#brand', timeout=15000)

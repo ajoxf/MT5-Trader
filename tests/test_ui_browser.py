@@ -22,6 +22,7 @@ import pytest
 
 playwright_api = pytest.importorskip('playwright.sync_api')
 
+from conftest import sign_in_browser                            # noqa: E402
 from mt5trader.webapp import create_app                        # noqa: E402
 
 
@@ -143,7 +144,7 @@ def server(tmp_path_factory):
     """The real Flask app, on a real port, over a published snapshot."""
     tmp = tmp_path_factory.mktemp('ui')
     paths = {name: str(tmp / f'{name}.json') for name in
-             ('status', 'results', 'config')}
+             ('status', 'results', 'config', 'auth')}
     paths['commands'] = str(tmp / 'commands.jsonl')
 
     publisher = Publisher(paths['status'])
@@ -154,7 +155,7 @@ def server(tmp_path_factory):
         json.dump({'accounts': {}, 'pairs': {}}, f)
 
     app = create_app(paths['status'], paths['commands'], paths['results'],
-                     paths['config'])
+                     paths['config'], auth_path=paths['auth'])
     from werkzeug.serving import make_server
     httpd = make_server('127.0.0.1', 0, app, threaded=True)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -308,7 +309,7 @@ def page(server):
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.on('console', lambda message: errors.append(message.text)
                 if message.type == 'error' else None)
-        page.goto(url)
+        sign_in_browser(page, url)
         page.wait_for_selector('.ladder .grid tbody tr')
         page.errors = errors
         page.paths = paths

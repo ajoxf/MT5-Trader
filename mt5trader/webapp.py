@@ -25,9 +25,10 @@ import re
 import time
 from datetime import date
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, \
+    session, url_for
 
-from . import config as cfg, diagnostics, fairvalue, hedgeratio, \
+from . import auth, config as cfg, diagnostics, fairvalue, hedgeratio, \
     sizing, slippage
 from .commands import CommandLog
 from .legs import RemoteLeg
@@ -42,7 +43,7 @@ STATUS_STALE_SEC = 2.0
 
 def create_app(status_path='status.json', command_path='commands.jsonl',
                results_path='results.json', config_path='config.json',
-               db_path='mt5trader.db'):
+               db_path='mt5trader.db', auth_path='auth.json'):
     app = Flask(__name__)
     # The TEMPLATE is compiled once and cached for the life of the
     # process unless this is on. A `git pull` therefore updated the CSS
@@ -54,6 +55,157 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
     app.config['TEMPLATES_AUTO_RELOAD'] = True
     app.jinja_env.auto_reload = True
     commands = CommandLog(command_path)
+
+    # -- who is at the keyboard -------------------------------------------
+    #
+    # Loopback is not a login. It keeps the terminal off the network; it
+    # does nothing about the person who sits down at a machine that is
+    # already on. Every endpoint below is behind a session, and every
+    # write is behind a CSRF token, because `/api/command` is the button
+    # that sends orders.
+    accounts = auth.Store(auth_path)
+    app.config['AUTH_PATH'] = auth_path
+    app.secret_key = accounts.secret_key()
+    app.config.update(
+        SESSION_COOKIE_NAME='nexus_session',
+        SESSION_COOKIE_HTTPONLY=True,      # no script reads the cookie
+        SESSION_COOKIE_SAMESITE='Lax',     # no other site posts with it
+    )
+
+    #: Reachable without being signed in. `static` is on the list so the
+    #: login page has its stylesheet; nothing on it says anything about
+    #: the account or the market.
+    OPEN = {'login', 'sign_in', 'setup', 'static'}
+
+    def wants_json():
+        return request.path.startswith('/api/')
+
+    @app.before_request
+    def require_login():
+        endpoint = request.endpoint
+        if endpoint in OPEN:
+            return None
+        if not auth.session_is_live(session):
+            session.clear()
+            if wants_json():
+                return jsonify({'ok': False, 'login_required': True,
+                                'error': 'this session has expired — sign in '
+                                         'again'}), 401
+            return redirect(url_for('login', next=request.path))
+        if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+            presented = (request.headers.get('X-CSRF-Token')
+                         or (request.form.get('csrf_token') if request.form
+                             else None))
+            if not auth.csrf_ok(session, presented):
+                # Not a redirect: a write that arrives without the token
+                # is either a stale page or another site, and neither is
+                # helped by being sent somewhere to try again.
+                return jsonify({'ok': False,
+                                'error': 'this page is out of date — '
+                                         'reload it and try again'}), 403
+        if endpoint not in ('password', 'password_form', 'logout') \
+                and accounts.must_change(session['user']):
+            if wants_json():
+                return jsonify({'ok': False,
+                                'error': 'change your password first'}), 403
+            return redirect(url_for('password'))
+        auth.touch(session)
+        return None
+
+    def login_page(mode, error=None, status=200, **fields):
+        body = render_template('login.html', mode=mode, error=error,
+                               csrf_token=auth.csrf_token(session),
+                               min_password=auth.MIN_PASSWORD,
+                               asset_version=asset_version(), **fields)
+        response = app.make_response(body)
+        response.status_code = status
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
+    @app.get('/login')
+    def login():
+        if accounts.needs_setup():
+            return login_page('setup')
+        if auth.session_is_live(session):
+            return redirect(url_for('index'))
+        return login_page('login', next_url=_local(request.args.get('next')))
+
+    @app.post('/login')
+    def sign_in():
+        if not auth.csrf_ok(session, request.form.get('csrf_token')):
+            return login_page('login', 'that form was stale — try again',
+                              status=400, next_url='/')
+        try:
+            user = accounts.authenticate(request.form.get('username'),
+                                         request.form.get('password'))
+        except auth.AuthError as e:
+            logging.warning('sign-in refused: %s', e)
+            return login_page('login', str(e), status=401,
+                              next_url=_local(request.form.get('next')))
+        auth.start_session(session, user)
+        if accounts.must_change(user):
+            return redirect(url_for('password'))
+        return redirect(_local(request.form.get('next')))
+
+    @app.post('/setup')
+    def setup():
+        """The first account, and only the first.
+
+        Guarded on the store rather than on a flag: the moment one
+        account exists this endpoint stops making them, whoever asks.
+        """
+        if not accounts.needs_setup():
+            return login_page('login', 'this terminal already has an '
+                                       'account', status=409, next_url='/')
+        if not auth.csrf_ok(session, request.form.get('csrf_token')):
+            return login_page('setup', 'that form was stale — try again',
+                              status=400)
+        username = request.form.get('username')
+        password = request.form.get('password') or ''
+        if password != (request.form.get('confirm') or ''):
+            return login_page('setup', 'those two passwords are not the '
+                                       'same', status=400)
+        try:
+            user = accounts.create_user(username, password)
+        except auth.AuthError as e:
+            return login_page('setup', str(e), status=400)
+        auth.start_session(session, user)
+        return redirect(url_for('index'))
+
+    @app.get('/password')
+    def password_form():
+        return login_page('change', user=session.get('user'))
+
+    @app.post('/password')
+    def password():
+        user = session.get('user')
+        password = request.form.get('password') or ''
+        if password != (request.form.get('confirm') or ''):
+            return login_page('change', 'those two passwords are not the '
+                                        'same', status=400, user=user)
+        try:
+            accounts.authenticate(user, request.form.get('current'))
+        except auth.AuthError as e:
+            return login_page('change', str(e), status=401, user=user)
+        try:
+            accounts.set_password(user, password)
+        except auth.AuthError as e:
+            return login_page('change', str(e), status=400, user=user)
+        # A new password starts a new session: the old cookie was minted
+        # before the change and should not outlive it.
+        auth.start_session(session, user)
+        return redirect(url_for('index'))
+
+    @app.post('/logout')
+    def logout():
+        session.clear()
+        return redirect(url_for('login'))
+
+    @app.get('/api/whoami')
+    def api_whoami():
+        return jsonify({'user': session.get('user'),
+                        'csrf_token': auth.csrf_token(session)})
+
 
     def store():
         """A read-only view of the coordinator's database.
@@ -131,7 +283,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         """
         newest = 0.0
         for name in ('static/app.js', 'static/settings.js',
-                     'static/ladder.css', 'templates/index.html'):
+                     'static/ladder.css', 'static/login.css',
+                     'templates/index.html', 'templates/login.html'):
             path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 name)
             try:
@@ -143,7 +296,9 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
     @app.get('/')
     def index():
         response = app.make_response(
-            render_template('index.html', asset_version=asset_version()))
+            render_template('index.html', asset_version=asset_version(),
+                            csrf_token=auth.csrf_token(session),
+                            user=session.get('user')))
         # The PAGE itself is never cached: it carries the stamp that
         # tells the browser whether its cached CSS and JS are current.
         response.headers['Cache-Control'] = 'no-store'
@@ -984,6 +1139,20 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
     return app
 
 
+def _local(target):
+    """Where to go after signing in, and it has to be HERE.
+
+    A `next` parameter that leaves this machine turns the login page
+    into an open redirect, so anything that is not a plain path on this
+    origin becomes the ladder.
+    """
+    target = str(target or '')
+    if target.startswith('/') and not target.startswith('//') \
+            and '\\' not in target:
+        return target
+    return '/'
+
+
 def _tidy_key(key):
     """A pair key as everything else writes it: no stray whitespace, and
     one spelling of the separator."""
@@ -1039,11 +1208,12 @@ def main():
     parser.add_argument('--commands', default='commands.jsonl')
     parser.add_argument('--results', default='results.json')
     parser.add_argument('--db', default='mt5trader.db')
+    parser.add_argument('--auth', default='auth.json')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8000)
     args = parser.parse_args()
     app = create_app(args.status, args.commands, args.results, args.config,
-                     args.db)
+                     args.db, args.auth)
     app.run(host=args.host, port=args.port, threaded=True)
 
 
