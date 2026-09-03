@@ -25,12 +25,12 @@
   /* Light grey, and softer than the reference screen's: this is looked
    * at for eight hours at a time, and the mid grey that photographs
    * well is tiring to sit in front of. */
-  --frame: #dcdcdc;
-  --frame-dark: #cccccc;
-  --frame-line: #b2b2b2;
+  --frame: #cfcfcf;
+  --frame-dark: #c4c4c4;
+  --frame-line: #9d9d9d;
   --frame-text: #1c1c1c;
-  --frame-muted: #5a5a5a;
-  --price-cell: #eeeeee;      /* the price column */
+  --frame-muted: #4c4c4c;
+  --price-cell: #f2f2f2;      /* the price column */
   --price-line: #ffffff;
 
   /* Softened, deliberately. The saturated pair was right for a dark
@@ -46,15 +46,25 @@
    * reads as "old" beside a blue that is plainly blue, and on a screen
    * where the two sides must be told apart at a glance the pair has to
    * be the same KIND of colour. */
-  --bid: #2f6fb0;             /* the solid blue bid band */
-  --bid-cell: #6ba3d8;        /* a quantity inside it */
-  --ask: #c0342f;             /* the solid red ask band */
-  --ask-cell: #e07a76;
+  /* TT's own pair, taken from the desk's screenshot of CL-BZ and the
+   * HO-CL crack. Deeper and more saturated than the softened set this
+   * replaces: on TT the bands are furniture the eye stops seeing, and
+   * the SIZE inside them is white, which is what makes a saturated
+   * band work where a pale one needs dark text. */
+  --bid: #0f63a8;             /* the solid blue bid band */
+  --bid-cell: #2ba6de;        /* a quantity inside it — a step brighter */
+  --ask: #9c2222;             /* the solid red ask band */
+  --ask-cell: #c53a3a;
+  /* The size printed IN a band, and the two pale tints TT uses for an
+   * order of your own sitting at a price. */
+  --band-text: #ffffff;
+  --work-buy: #a8d4f0;
+  --work-sell: #f0b4b4;
   /* One step deeper, for BUTTONS only. A band is data and gets out of
    * the way; a button is an action and has white text on it, which
    * needs the contrast. */
-  --bid-strong: #24558a;
-  --ask-strong: #a02722;
+  --bid-strong: #0d5794;
+  --ask-strong: #8f1f1f;
   --traded: #4a9c5d;          /* LTQ print, positive change */
   --down: #c0504d;
   --last-trade: #e6e0f5;      /* the tinted last-traded price cell */
@@ -652,8 +662,10 @@ table.exits td:nth-child(3) { color: #a02722; }
 }
 /* Tinted with the side they pull, as on the reference screen: the sell
  * button carries the ask's red, the buy button the bid's blue. */
-.cxl-s { background: linear-gradient(#f0b9bb, #dd8f92); }
-.cxl-b { background: linear-gradient(#9fd3f0, #6fb2dc); }
+/* Flat, as TT draws them: pink pulls the sells, blue pulls the buys,
+ * and the grey one in the middle pulls everything. */
+.cxl-s { background: #e9a6aa; }
+.cxl-b { background: #93c6e9; }
 /* The count of orders the button would pull — how the trader knows it
  * will do something before pressing it. */
 .cxl sup { font-size: 9px; margin-left: 2px; }
@@ -716,6 +728,11 @@ table.exits td:nth-child(3) { color: #a02722; }
  * takes what is left, which is right: it is the one being read. */
 .c-work, .c-ltq { width: 15%; }
 .c-bid, .c-ask { width: 18%; }
+/* Which side each column is, said in the header as well as the band —
+ * TT underlines Bids in blue and Asks in red, and it is the one place
+ * the two names sit side by side. */
+.grid th.c-bid { box-shadow: inset 0 -3px 0 var(--bid); }
+.grid th.c-ask { box-shadow: inset 0 -3px 0 var(--ask); }
 
 /* The solid bands. Everything at or below the best bid is the bid side;
  * everything at or above the best ask is the ask side. */
@@ -744,19 +761,33 @@ table.exits td:nth-child(3) { color: #a02722; }
  * every row also stops the uncoloured rows looking inert. Where the
  * market IS gets said by the things that say it without moving a block
  * of colour: the touch markers, the sizes, and the heavy rule. */
-td.bid { background: var(--bid); color: #06182a; }
-td.ask { background: var(--ask); color: #2b0605; }
+/* ONE CONTINUOUS BAND, not a stack of cells.
+ *
+ * On TT the Bids column is a single unbroken block of blue from the
+ * top of the window to the bottom, and the Asks a single block of red.
+ * Drawing a white rule between every row cut them into forty separate
+ * tiles, which is what made the columns read as a list rather than as
+ * furniture. The rules stay on the price and the two outer columns,
+ * where they separate things that ARE separate. */
+td.bid, td.ask {
+  border-top: 0;
+  border-bottom: 0;
+  color: var(--band-text);
+  font-weight: 600;
+}
+td.bid { background: var(--bid); }
+td.ask { background: var(--ask); }
 /* Kept, and deliberately the same colour. The classes still carry
  * "which side of the touch is this row", which MARKET mode and the
  * Filter both read — they just no longer decide whether there is any
  * colour here. */
-tr.in-bid td.bid { background: var(--bid); color: #06182a; }
-tr.in-ask td.ask { background: var(--ask); color: #2b0605; }
+tr.in-bid td.bid { background: var(--bid); }
+tr.in-ask td.ask { background: var(--ask); }
 /* The touch itself: ONE row, a shade lighter, carrying the size and
  * the arrow. A single row changing shade is not a block of colour
  * sliding down the screen. */
-td.bid.has-qty { background: var(--bid-cell); color: #10263a; }
-td.ask.has-qty { background: var(--ask-cell); color: #3a0d0b; }
+td.bid.has-qty { background: var(--bid-cell); }
+td.ask.has-qty { background: var(--ask-cell); }
 
 /* The inside market is drawn by the two BANDS meeting — the blue ends
  * where the bids end and the red begins at the offers, which is the
@@ -769,8 +800,8 @@ td.ask.has-qty { background: var(--ask-cell); color: #3a0d0b; }
  * cannot answer — so the mid, which is also the row the ladder centres
  * on, carries a heavier rule of its own. */
 tr.mid-line > td {
-  border-top: 3px solid #111;
-  border-bottom: 3px solid #111;
+  border-top: 2px solid #111;
+  border-bottom: 2px solid #111;
 }
 tr.mid-line > td.price { background: #dcdcdc; font-weight: 700; }
 
@@ -782,8 +813,10 @@ td.price {
 td.price.last-trade { background: var(--last-trade); }
 td.ltq.print { background: var(--traded); color: #fff; }
 
-td.work.buy { background: var(--bid-cell); color: #fff; cursor: pointer; }
-td.work.sell { background: var(--ask-cell); color: #fff; cursor: pointer; }
+/* An order of YOURS at a price. TT tints it pale rather than solid —
+ * it is not the market, it is you, and the two must not look alike. */
+td.work.buy { background: var(--work-buy); color: #0b3a5c; cursor: pointer; }
+td.work.sell { background: var(--work-sell); color: #5c1414; cursor: pointer; }
 
 /* A click that has been SENT but is not in a snapshot yet. Hatched, and
  * never added into the working total — a ghost is not an order yet, and

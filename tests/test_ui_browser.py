@@ -339,7 +339,7 @@ def test_one_rule_marks_the_market_and_it_is_at_the_mid(page):
     assert line.count() == 1
     assert page.evaluate(
         "() => getComputedStyle(document.querySelector("
-        "'.ladder tr.mid-line td')).borderTopWidth") == '3px'
+        "'.ladder tr.mid-line td')).borderTopWidth") == '2px'
     # The inside market is still marked — by the two bands meeting, not
     # by a second line: the best-bid row carries the ordinary 1px grid
     # rule and nothing heavier.
@@ -2155,7 +2155,7 @@ def test_the_mid_carries_a_rule_of_its_own(page):
     border = page.evaluate(
         "() => getComputedStyle(document.querySelector("
         "'.ladder tr.mid-line td')).borderTopWidth")
-    assert border == '3px'
+    assert border == '2px'
     assert page.locator('.ladder tr.mid-line').count() == 1
 
 

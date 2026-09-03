@@ -279,7 +279,7 @@ def test_the_market_is_marked_by_ONE_rule_and_it_is_the_mid():
     meeting, which carries the same information."""
     css = (STATIC / 'ladder.css').read_text(encoding='utf-8')
     assert re.search(r'tr\.mid-line\s*>\s*td\s*\{\s*\n?\s*'
-                     r'border-top:\s*3px solid', css)
+                     r'border-top:\s*2px solid', css)
     assert not re.search(r'tr\.market-line\s*>\s*td\s*\{\s*border-top',
                          css)
     assert '--inside: #000000' in css
