@@ -356,6 +356,17 @@
           <label class="lsf"><span>Leg B lots</span>
             <input class="ls-clip-b" type="number" min="0" step="0.01"
                    title="How many LOTS of leg B one unit of Qty is. Set it different from leg A for a ratio — 1 and 2 sends twice as many lots of B as of A. Blank reads as 1."></label>
+          <!-- The contract size is MT5's, read on every resolve. This
+               overrides it, for the one case where the broker's own
+               number is wrong — and it is loud when it is set. -->
+          <label class="lsf"><span>Contract A</span>
+            <input class="ls-contract-a" type="number" min="0" step="1"
+                   placeholder="from MT5"
+                   title="What ONE LOT of leg A is, in the instrument's own units — 100 oz of gold, 1,000 barrels of oil. Leave it blank: MT5 reports this and it is right almost always. Set it only when the broker's own number is wrong, because every money figure on this ladder runs through it."></label>
+          <label class="lsf"><span>Contract B</span>
+            <input class="ls-contract-b" type="number" min="0" step="1"
+                   placeholder="from MT5"
+                   title="What ONE LOT of leg B is, in the instrument's own units. Leave it blank to use MT5's."></label>
           <div class="lsf-note ls-clip-note"></div>
           <label class="lsf"><span>Quoting leg</span>
             <select class="ls-quoting" title="Which leg rests the real pending in LIMIT mode. Default: the wider bid-ask — that is the spread you earn.">

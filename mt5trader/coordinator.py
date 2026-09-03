@@ -359,7 +359,17 @@ class Coordinator:
                             f"Nothing there resembles it — this is probably "
                             f"the wrong account for this leg."))
                     continue
-                setattr(pair, meta_attr, _meta_from_report(report))
+                meta = _meta_from_report(report)
+                # The trader's OWN contract size, where they set one.
+                # MT5's is kept beside it so the ladder and Diagnose
+                # can name the disagreement rather than quietly
+                # trading on a number nobody checked.
+                override = (pair.contract_size_a if leg_key == 'a'
+                            else pair.contract_size_b)
+                meta['contract_size_mt5'] = meta.get('contract_size')
+                if override:
+                    meta['contract_size'] = float(override)
+                setattr(pair, meta_attr, meta)
             self.errors[key] = problems
             if not problems:
                 self._settle_beta(pair)
@@ -1797,6 +1807,10 @@ class Coordinator:
                 # contract size that can be wrong.
                 'contract_a': (pair.meta_a or {}).get('contract_size'),
                 'contract_b': (pair.meta_b or {}).get('contract_size'),
+                # What MT5 itself said, so an override is visible as an
+                # override and not merely as a number.
+                'contract_a_mt5': (pair.meta_a or {}).get('contract_size_mt5'),
+                'contract_b_mt5': (pair.meta_b or {}).get('contract_size_mt5'),
                 'spread_units': sizing.spread_units(
                     pair.clip_lots_b, (pair.meta_b or {}).get('contract_size')),
                 'market': md,

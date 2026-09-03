@@ -454,6 +454,26 @@ def check_pair(checklist, pair, report_a, report_b,
     floor = sizing.minimum_notional(contract_a, contract_b, price_a, price_b,
                                     beta, report_a.get('volume_min'),
                                     report_b.get('volume_min'))
+    # AN OVERRIDDEN CONTRACT SIZE, named. Every money figure on the
+    # ladder runs through it, so a number that disagrees with the
+    # broker's own is worth a person looking at once.
+    for override, report, role, symbol in (
+            (getattr(pair, 'contract_size_a', None), report_a, 'A',
+             pair.symbol_a),
+            (getattr(pair, 'contract_size_b', None), report_b, 'B',
+             pair.symbol_b)):
+        theirs = report.get('contract_size')
+        if override and theirs and abs(float(override) - theirs) > 1e-9:
+            checklist.add(
+                scope, f'Leg {role} contract size', WARN,
+                f'{symbol} is set to {float(override):g} per lot by hand, '
+                f'but MT5 reports {theirs:g}. Every money figure on this '
+                f'ladder — P&L, break-even, the take-profit — is computed '
+                f'from the {float(override):g}',
+                ['Clear the Contract override on the ladder to use MT5\'s',
+                 'If the broker really is wrong, check the symbol spec '
+                 'sheet and leave it set'])
+
     k = sizing.spread_units(clip_b, contract_b)
     checklist.add(scope, 'One Qty', PASS,
                   f'{clip_a:g} lots of {pair.symbol_a} against '

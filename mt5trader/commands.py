@@ -164,6 +164,10 @@ class CommandRunner:
         #: blank reads as 1.
         'clip_lots_a': lambda v: float(v or 1.0),
         'clip_lots_b': lambda v: float(v or 1.0),
+        #: What one LOT is, in the instrument's units. Blank is MT5's
+        #: own, which is the right answer almost always.
+        'contract_size_a': lambda v: float(v) if v not in (None, '') else None,
+        'contract_size_b': lambda v: float(v) if v not in (None, '') else None,
         #: AutoRouting: on a fill, rest a working order to close at the
         #: take-profit. Default OFF, and it arms a target and NO STOP.
         'auto_route': bool,

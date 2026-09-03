@@ -356,6 +356,7 @@ class PairConfig:
     def __init__(self, key, name=None, leg_a=None, leg_b=None,
                  hedge_ratio=1.0, hedge_ratio_for=None, pair_type='SPOT_FUTURE',
                  increment=None, clip_lots_a=1.0, clip_lots_b=1.0,
+                 contract_size_a=None, contract_size_b=None,
                  default_quantity=1.0, order_type=OrderType.LIMIT.value,
                  exit_type=OrderType.MARKET.value,
                  time_in_force=TimeInForce.DAY.value,
@@ -390,6 +391,20 @@ class PairConfig:
         #: typed into a box can do neither.
         self.clip_lots_a = float(clip_lots_a or 1.0)
         self.clip_lots_b = float(clip_lots_b or 1.0)
+        #: What ONE LOT is, in the instrument's own units — 100 oz of
+        #: gold, 5,000 of silver, 1,000 barrels of oil.
+        #:
+        #: None, and normally None: it is READ FROM MT5
+        #: (`trade_contract_size`) on every resolve, because a contract
+        #: size somebody typed is a contract size that can be wrong,
+        #: and every money figure on the screen runs through it.
+        #:
+        #: An override exists for the case MT5 gets it wrong or the
+        #: desk's broker reports something the spec sheet contradicts.
+        #: It is loud when it is set: the ladder says so and Diagnose
+        #: names the disagreement.
+        self.contract_size_a = _blank_to_none(contract_size_a)
+        self.contract_size_b = _blank_to_none(contract_size_b)
         self.default_quantity = float(default_quantity or 1.0)
         # Blank is the DEFAULT, never an exception: see `_choice`.
         self.order_type = _choice(OrderType, order_type,
@@ -602,6 +617,7 @@ class PairConfig:
                    # What ONE spread means in leg A lots. Leg B is
                    # never typed: it is the hedge, and it is derived.
                    'clip_lots_a', 'clip_lots_b',
+                   'contract_size_a', 'contract_size_b',
                    'algo_window', 'show_fair_window', 'pair_type')
                   + tuple(EXIT_FIELDS))
 
@@ -642,6 +658,12 @@ class PairConfig:
                     continue          # a ladder always has a size
             elif field == 'rows':
                 value = int(value or 30)
+            elif field in ('contract_size_a', 'contract_size_b'):
+                # Blank is MT5's own, which is the right answer almost
+                # always. Never 1: a contract size of 1 would price
+                # every figure on the ladder at a hundredth of the
+                # truth on gold, silently.
+                value = _blank_to_none(value)
             elif field in ('clip_lots_a', 'clip_lots_b'):
                 # Blank is 1, never None: with nothing left to derive,
                 # an unset leg has no other honest reading.
@@ -658,6 +680,8 @@ class PairConfig:
             'hedge_ratio_for': self.hedge_ratio_for,
             'pair_type': self.pair_type, 'increment': self.increment,
             'clip_lots_a': self.clip_lots_a, 'clip_lots_b': self.clip_lots_b,
+            'contract_size_a': self.contract_size_a,
+            'contract_size_b': self.contract_size_b,
             'default_quantity': self.default_quantity,
             'order_type': self.order_type.value,
             'exit_type': self.exit_type.value,

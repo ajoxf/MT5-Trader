@@ -150,3 +150,70 @@ def test_both_legs_apply_without_a_restart(pair):
     changed = pair.apply_hot({'clip_lots_a': 1.0, 'clip_lots_b': 2.0})
     assert set(changed) >= {'clip_lots_a', 'clip_lots_b'}
     assert (pair.clip_lots_a, pair.clip_lots_b) == (1.0, 2.0)
+
+
+# -- the contract size, and the one case for overriding it ----------------
+
+def test_the_contract_size_comes_from_MT5_and_is_not_configured(engine, pair):
+    """100 oz of gold, 5,000 of silver, 1,000 barrels of oil — MT5
+    publishes all three as `trade_contract_size`. A contract size
+    somebody typed is a contract size that can be wrong, and every
+    money figure on the screen runs through it."""
+    assert pair.contract_size_a is None and pair.contract_size_b is None
+    assert pair.meta_a['contract_size'] == pytest.approx(100.0)
+    # ...and what MT5 said is kept beside it, so an override is
+    # visible AS an override rather than merely as a number.
+    assert pair.meta_a['contract_size_mt5'] == pytest.approx(100.0)
+
+
+def test_an_override_is_used_and_MT5s_own_is_kept_beside_it(config, legs):
+    """The one case: the broker's number is wrong. It is the trader's
+    to set, and it is loud."""
+    pair = config.pairs['XAUUSD_|GC1226']
+    pair.contract_size_a = 50.0
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+
+    assert pair.meta_a['contract_size'] == pytest.approx(50.0)
+    assert pair.meta_a['contract_size_mt5'] == pytest.approx(100.0)
+    row = coordinator.snapshot()['pairs'][pair.key]
+    assert row['contract_a'] == 50.0 and row['contract_a_mt5'] == 100.0
+    # ...and the MONEY follows the override, which is the whole point
+    # and the whole danger: `k` is leg B's units, so leg A's override
+    # moves what a lot of A is worth everywhere it is priced.
+    pair.contract_size_b = 50.0
+    coordinator.resolve_symbols()
+    row = coordinator.snapshot()['pairs'][pair.key]
+    assert row['spread_units'] == pytest.approx(pair.clip_lots_b * 50.0)
+
+
+def test_clearing_the_override_goes_back_to_MT5(pair):
+    pair.apply_hot({'contract_size_a': 50.0})
+    assert pair.contract_size_a == 50.0
+    pair.apply_hot({'contract_size_a': ''})
+    assert pair.contract_size_a is None, 'blank must be MT5\'s, never 1'
+
+
+def test_diagnose_names_a_contract_size_that_disagrees_with_the_broker():
+    from mt5trader import diagnostics
+    from mt5trader.diagnostics import WARN
+
+    class Pair:
+        key = 'K'
+        symbol_a, symbol_b = 'XAUUSD', 'GC1226'
+        hedge_ratio, hedge_ratio_for = 1.0, 'XAUUSD|GC1226'
+        pair_type = 'SPOT_FUTURE'
+        clip_lots_a = clip_lots_b = 1.0
+        contract_size_a, contract_size_b = 50.0, None
+
+    report = {'symbol': 'X', 'found': True, 'bid': 100.0, 'ask': 100.2,
+              'contract_size': 100.0, 'volume_min': 0.01,
+              'volume_step': 0.01, 'volume_max': 100.0, 'currency': 'USD'}
+    checklist = diagnostics.Checklist()
+    diagnostics.check_pair(checklist, Pair(), dict(report), dict(report))
+
+    check = [c for c in checklist.checks
+             if c['name'] == 'Leg A contract size'][0]
+    assert check['status'] == WARN
+    assert '50' in check['message'] and '100' in check['message']
+    assert check['fix']

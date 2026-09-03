@@ -1117,6 +1117,9 @@
     // the next Apply — a ten-fold resize nobody typed.
     ['.ls-clip-a', 'clip_lots_a', 'live-number'],
     ['.ls-clip-b', 'clip_lots_b', 'live-number'],
+    // Blank is a REAL state here and the normal one: it means MT5's.
+    ['.ls-contract-a', 'contract_size_a', 'blank-number'],
+    ['.ls-contract-b', 'contract_size_b', 'blank-number'],
     ['.ls-quoting', 'quoting_leg', 'live'],
     ['.ls-auto-route', 'auto_route', 'check'],
     // The Fair Spread window. One tick, and `algo` follows it on the
@@ -1246,6 +1249,11 @@
     // in the backend it places 100 oz". The contract size comes from
     // MT5 and is never typed, so this is the one place the two
     // readings meet.
+    function overridden(used, fromMt5, symbol) {
+      if (!used || !fromMt5 || Math.abs(used - fromMt5) < 1e-9) { return ''; }
+      return (symbol || '') + ' set to ' + fmt(used, 2) +
+        ', MT5 says ' + fmt(fromMt5, 2);
+    }
     function inUnits(lots, contract) {
       return contract ? ' = ' + fmt(lots * contract, 2) + ' units' : '';
     }
@@ -1258,7 +1266,16 @@
       '. Qty ' + fmt(qty, 2) + ' sends ' + fmt(lotsA * qty, 2) + ' / ' +
       fmt(lotsB * qty, 2) + ' lots' +
       (perQty ? ', ' + money(perQty * qty) + ' per 1.00' : '') +
-      '. Contract sizes come from MT5 and are never typed in.';
+      // WHERE THE CONTRACT SIZE CAME FROM. Normally MT5's, and said so.
+      // An override is stated as an override, with MT5's own number
+      // beside it: every money figure on this ladder runs through it.
+      (overridden(live.contract_a, live.contract_a_mt5, live.symbol_a) ||
+       overridden(live.contract_b, live.contract_b_mt5, live.symbol_b)
+        ? ' CONTRACT SIZE OVERRIDDEN — ' +
+          [overridden(live.contract_a, live.contract_a_mt5, live.symbol_a),
+           overridden(live.contract_b, live.contract_b_mt5, live.symbol_b)]
+            .filter(Boolean).join('; ') + '.'
+        : ' Contract sizes come from MT5 and are never typed in.');
   }
 
   function fairKindFields(pane, saved) {
