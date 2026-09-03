@@ -357,6 +357,7 @@ class PairConfig:
                  hedge_ratio=1.0, hedge_ratio_for=None, pair_type='SPOT_FUTURE',
                  increment=None, clip_lots_a=1.0, clip_lots_b=1.0,
                  contract_size_a=None, contract_size_b=None,
+                 max_quote_age_sec=None,
                  default_quantity=1.0, order_type=OrderType.LIMIT.value,
                  exit_type=OrderType.MARKET.value,
                  time_in_force=TimeInForce.DAY.value,
@@ -405,6 +406,19 @@ class PairConfig:
         #: names the disagreement.
         self.contract_size_a = _blank_to_none(contract_size_a)
         self.contract_size_b = _blank_to_none(contract_size_b)
+        #: How long THIS pair's legs may go unchanged before the spread
+        #: is called stale and orders are withheld. None = the global
+        #: MAX_QUOTE_AGE_SEC.
+        #:
+        #: It has to be per pair. The global was raised from 5s to 15s
+        #: once already for this exact reason, and 15s is still short
+        #: for a dated oil future that trades a few times a minute
+        #: while gold spot ticks several times a second. One number
+        #: cannot serve both: too high and a leg that has genuinely
+        #: STOPPED goes unnoticed on the fast pair; too low and the
+        #: slow pair refuses every order all day on a market that is
+        #: merely quiet.
+        self.max_quote_age_sec = _blank_to_none(max_quote_age_sec)
         self.default_quantity = float(default_quantity or 1.0)
         # Blank is the DEFAULT, never an exception: see `_choice`.
         self.order_type = _choice(OrderType, order_type,
@@ -618,6 +632,7 @@ class PairConfig:
                    # never typed: it is the hedge, and it is derived.
                    'clip_lots_a', 'clip_lots_b',
                    'contract_size_a', 'contract_size_b',
+                   'max_quote_age_sec',
                    'algo_window', 'show_fair_window', 'pair_type')
                   + tuple(EXIT_FIELDS))
 
@@ -658,6 +673,8 @@ class PairConfig:
                     continue          # a ladder always has a size
             elif field == 'rows':
                 value = int(value or 30)
+            elif field == 'max_quote_age_sec':
+                value = _blank_to_none(value)
             elif field in ('contract_size_a', 'contract_size_b'):
                 # Blank is MT5's own, which is the right answer almost
                 # always. Never 1: a contract size of 1 would price
@@ -682,6 +699,7 @@ class PairConfig:
             'clip_lots_a': self.clip_lots_a, 'clip_lots_b': self.clip_lots_b,
             'contract_size_a': self.contract_size_a,
             'contract_size_b': self.contract_size_b,
+            'max_quote_age_sec': self.max_quote_age_sec,
             'default_quantity': self.default_quantity,
             'order_type': self.order_type.value,
             'exit_type': self.exit_type.value,

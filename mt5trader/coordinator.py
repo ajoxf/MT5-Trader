@@ -469,7 +469,14 @@ class Coordinator:
             sigma.observe(md)
             md['spread_sigma'] = sigma.sigma
 
-            stale = stale_quote(md, self.config.get('MAX_QUOTE_AGE_SEC'))
+            # THIS PAIR'S OWN patience, falling back to the desk's.
+            # A dated oil future that trades a few times a minute and a
+            # gold spot that ticks several times a second cannot share
+            # one threshold — and sharing it is what withheld every
+            # order on the oil ladder while the ladder looked fine.
+            stale = stale_quote(md, pair.max_quote_age_sec
+                                if pair.max_quote_age_sec is not None
+                                else self.config.get('MAX_QUOTE_AGE_SEC'))
             jumped = self.jumps.observe(
                 key, md, sigma.sigma,
                 self.config.get('MAX_SPREAD_JUMP_SIGMA'),
@@ -1811,6 +1818,11 @@ class Coordinator:
                 # override and not merely as a number.
                 'contract_a_mt5': (pair.meta_a or {}).get('contract_size_mt5'),
                 'contract_b_mt5': (pair.meta_b or {}).get('contract_size_mt5'),
+                'max_quote_age_sec': pair.max_quote_age_sec,
+                'max_quote_age_effective': (
+                    pair.max_quote_age_sec
+                    if pair.max_quote_age_sec is not None
+                    else self.config.get('MAX_QUOTE_AGE_SEC')),
                 'spread_units': sizing.spread_units(
                     pair.clip_lots_b, (pair.meta_b or {}).get('contract_size')),
                 'market': md,

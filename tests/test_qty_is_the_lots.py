@@ -282,3 +282,62 @@ def test_it_is_logged_on_the_CHANGE_not_on_every_poll(engine, pair):
 
     held = [line for line in heard.lines if 'NOT at the broker' in line]
     assert len(held) <= 1, f'{len(held)} lines for one unchanged reason'
+
+
+# -- a pair that is merely QUIET is not a dead feed ------------------------
+
+def test_a_slow_pair_can_have_its_own_staleness_threshold(config, legs):
+    """From the desk's log, 2026-09-03 19:37:
+
+        leg B (UKOILX6.s): visible=True ... last change 15.1s ago
+        USOILX6.c|UKOILX6.s: stale — re-subscribed both legs
+
+    15.1s against a 15s limit. Every order on that ladder was withheld
+    — correctly, by a guard doing exactly what it says — because a
+    dated oil future trades a few times a minute while the threshold
+    was tuned on a leg that ticks several times a second.
+
+    The global was already raised from 5s to 15s once for this. One
+    number cannot serve both pairs, so it is per pair now.
+    """
+    pair = config.pairs['XAUUSD_|GC1226']
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+
+    # The desk-wide default, when the pair says nothing.
+    assert pair.max_quote_age_sec is None
+    row = coordinator.snapshot()['pairs'][pair.key]
+    assert row['max_quote_age_effective'] == \
+        config.get('MAX_QUOTE_AGE_SEC')
+
+    # ...and this pair's own, when it does.
+    pair.max_quote_age_sec = 60.0
+    row = coordinator.snapshot()['pairs'][pair.key]
+    assert row['max_quote_age_effective'] == 60.0
+
+
+def test_the_quiet_pair_still_prices_orders_while_the_fast_one_guards(
+        config, legs, gold_symbols):
+    """The control that matters: raising it for one pair must actually
+    let that pair rest an order, and a leg that has genuinely stopped
+    must still be caught."""
+    from mt5trader.spread import stale_quote
+    md = {'leg_a_quote_age_sec': 2.0, 'leg_b_quote_age_sec': 20.0}
+
+    # At the desk-wide 15s this pair is stale and every order is held.
+    held = stale_quote(md, 15.0)
+    assert held and 'Leg B' in held and '20.0s' in held
+    # Given its own 60s, it prices normally.
+    assert stale_quote(md, 60.0) is None
+    # ...and a leg that really has stopped is still caught at 60s.
+    assert stale_quote({'leg_a_quote_age_sec': 2.0,
+                        'leg_b_quote_age_sec': 300.0}, 60.0)
+
+
+def test_the_stale_reason_names_the_limit_it_broke():
+    """So the NOT AT THE BROKER row is the whole answer: which leg, how
+    long, and the number it was measured against."""
+    from mt5trader.spread import stale_quote
+    said = stale_quote({'leg_a_quote_age_sec': 1.0,
+                        'leg_b_quote_age_sec': 15.1}, 15.0)
+    assert 'Leg B' in said and '15.1s' in said and 'limit 15s' in said

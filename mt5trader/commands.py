@@ -168,6 +168,10 @@ class CommandRunner:
         #: own, which is the right answer almost always.
         'contract_size_a': lambda v: float(v) if v not in (None, '') else None,
         'contract_size_b': lambda v: float(v) if v not in (None, '') else None,
+        #: How long THIS pair may go unchanged before orders are
+        #: withheld. Blank = the desk-wide MAX_QUOTE_AGE_SEC.
+        'max_quote_age_sec': (
+            lambda v: float(v) if v not in (None, '') else None),
         #: AutoRouting: on a fill, rest a working order to close at the
         #: take-profit. Default OFF, and it arms a target and NO STOP.
         'auto_route': bool,

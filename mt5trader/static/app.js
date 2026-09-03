@@ -1128,6 +1128,8 @@
     ['.ls-algo-window', 'algo_window', 'check'],
     ['.ls-comm-a', 'commission_per_lot_a', 'number', 'COMMISSION_PER_LOT_A'],
     ['.ls-comm-b', 'commission_per_lot_b', 'number', 'COMMISSION_PER_LOT_B'],
+    // Blank is a REAL state: it means the desk-wide threshold.
+    ['.ls-stale', 'max_quote_age_sec', 'blank-number'],
     ['.ls-slip', 'slippage_allowance', 'number', 'SLIPPAGE_ALLOWANCE'],
     ['.ls-nights', 'break_even_nights', 'number', 'BREAK_EVEN_NIGHTS'],
     ['.ls-tp', 'tp_target_pct_of_margin', 'number', 'TP_TARGET_PCT_OF_MARGIN'],
