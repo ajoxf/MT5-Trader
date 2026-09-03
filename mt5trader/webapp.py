@@ -830,11 +830,14 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         suggested, why = hedgeratio.suggest(
             pair.get('pair_type', 'SPOT_FUTURE'), price_a, price_b)
         beta = float(pair.get('hedge_ratio') or suggested or 1.0)
+        basis = sizing.basis_for(pair.get('pair_type'),
+                                 pair.get('sizing_basis'))
         clip_a, clip_b = sizing.matched_minimum_lots(
             specs['a'].get('volume_min'), specs['b'].get('volume_min'),
             specs['a'].get('volume_step'), specs['b'].get('volume_step'),
             beta, specs['a'].get('contract_size'),
-            specs['b'].get('contract_size'))
+            specs['b'].get('contract_size'),
+            basis=basis, price_a=price_a, price_b=price_b)
         tick_a = specs['a'].get('tick_size') or 0.0
         tick_b = specs['b'].get('tick_size') or 0.0
         increment = max(tick_b, beta * tick_a) if (tick_a and tick_b) else None
@@ -857,11 +860,13 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                 f'max(tick B {tick_b:g}, beta {beta:g} x tick A {tick_a:g})'
                 if increment else 'both legs need a tick size from MT5'),
             'clip_lots_a': clip_a, 'clip_lots_b': clip_b,
+            'sizing_basis': basis,
             'clip_derivation': (
                 f'1 spread = {clip_a:g} A / {clip_b:g} B — the smallest size '
                 f'at which BOTH legs clear their own minimum volume '
                 f'({specs["a"].get("volume_min")} and '
-                f'{specs["b"].get("volume_min")} lots)'),
+                f'{specs["b"].get("volume_min")} lots), matched '
+                f'{sizing.SIZING_WORDS.get(basis, basis)}'),
             'spread_units': sizing.spread_units(
                 clip_b, specs['b'].get('contract_size')),
             'min_notional_usd': floor,
@@ -921,7 +926,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                       'increment', 'default_quantity', 'order_type',
                       'exit_type',
                       'time_in_force', 'overnight', 'quoting_leg', 'enabled',
-                      'rows', 'clip_lots_a', 'clip_lots_b',
+                      'rows', 'clip_lots_a', 'clip_lots_b', 'sizing_basis',
                       'expiry', 'expiry_a', 'auto_route',
                       'swap_a_long_per_lot', 'swap_a_short_per_lot',
                       'swap_b_long_per_lot', 'swap_b_short_per_lot',

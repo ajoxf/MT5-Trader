@@ -135,3 +135,87 @@ def test_an_inflated_hedge_is_refused_against_the_brokers_ceiling():
                      META_A, META_B, 4292.0, 4351.0, spreads=1.0)
     assert plan['reason'] is not None
     assert "broker's maximum" in plan['reason']
+
+
+# -- HOW the two legs are matched -----------------------------------------
+#
+# The desk's rule, in its own words: where the underlying is the SAME
+# instrument — spot against its future, one future against another —
+# the lot size should be the same on both legs. Where it is not — WTI
+# against Brent — there is nothing shared to match lot for lot, and what
+# makes the two sides comparable is the MONEY on each.
+#
+# Only the units hedge cancels exactly. Under the other two the residual
+# is a real outright position in the underlying, and it is reported
+# rather than hidden.
+
+from mt5trader.sizing import basis_for, hedge_per_lot, residual_units
+
+
+def test_AUTO_follows_the_pair_type():
+    assert basis_for('SPOT_FUTURE') == 'SAME_LOTS'
+    assert basis_for('FUTURE_FUTURE') == 'SAME_LOTS'
+    assert basis_for('RELATED') == 'NOTIONAL'
+
+
+def test_a_basis_the_trader_CHOSE_outranks_the_pair_type():
+    """The control: AUTO is a default, not a rule that cannot be
+    overridden."""
+    assert basis_for('RELATED', 'SAME_LOTS') == 'SAME_LOTS'
+    assert basis_for('SPOT_FUTURE', 'UNITS') == 'UNITS'
+    # ...and anything unrecognised falls back to the pair type rather
+    # than to a basis nobody picked.
+    assert basis_for('RELATED', 'nonsense') == 'NOTIONAL'
+
+
+def test_lot_for_lot_is_one_for_one_whatever_else_is_true():
+    """The same underlying: a lot of the spot IS a lot of the future,
+    and neither the contract sizes nor the beta change that."""
+    assert hedge_per_lot('SAME_LOTS', 100.0, 5000.0, beta=2.0) == 1.0
+
+
+def test_by_notional_puts_the_same_MONEY_on_each_side():
+    """WTI at 60 against Brent at 64, both 1,000 a lot: the cheaper leg
+    needs more of it."""
+    per_lot = hedge_per_lot('NOTIONAL', 1000.0, 1000.0,
+                            price_a=64.0, price_b=60.0)
+    assert per_lot == pytest.approx(64.0 / 60.0)
+    # ...and the money on each side then matches.
+    assert 1.0 * 1000.0 * 64.0 == pytest.approx(per_lot * 1000.0 * 60.0)
+
+
+def test_by_notional_says_NOTHING_rather_than_guessing_without_a_price():
+    """Money against money cannot be settled before both legs have a
+    quote. 0.0 reads as 'not sized' everywhere, not as zero lots."""
+    assert hedge_per_lot('NOTIONAL', 1000.0, 1000.0) == 0.0
+
+
+def test_by_units_is_the_spread_arithmetics_own_hedge():
+    """The control, and the old behaviour: L_B = C_A / (beta x C_B)."""
+    assert hedge_per_lot('UNITS', 1000.0, 100.0, beta=2.0) == \
+        pytest.approx(5.0)
+
+
+def test_the_units_hedge_is_the_one_that_CANCELS():
+    """Which is why it is still on offer. Everything else leaves an
+    outright position in the underlying."""
+    per_lot = hedge_per_lot('UNITS', 1000.0, 100.0, beta=2.0)
+    assert residual_units(1.0, per_lot, 1000.0, 100.0, beta=2.0) == \
+        pytest.approx(0.0)
+
+
+def test_lot_for_lot_across_UNEQUAL_contracts_leaves_a_residual():
+    """And it is not small: 1 lot of a 1,000-unit contract against 1 lot
+    of a 100-unit one is 900 units net long. Said out loud, because a
+    spread trade carrying an outright nobody knows about is the failure
+    this module exists to prevent."""
+    assert residual_units(1.0, 1.0, 1000.0, 100.0, beta=1.0) == \
+        pytest.approx(900.0)
+
+
+def test_hedge_lots_rounds_the_chosen_basis_DOWN_to_leg_Bs_step():
+    """Whichever basis: the hedge must not overshoot the position it
+    hedges. Short is the recoverable error."""
+    lots = hedge_lots(1.0, 1000.0, 1000.0, beta=1.0, step=0.1,
+                      basis='NOTIONAL', price_a=64.0, price_b=60.0)
+    assert lots == pytest.approx(1.0)          # 1.0667 down to the 0.1 step

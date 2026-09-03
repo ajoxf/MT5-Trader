@@ -448,12 +448,15 @@ def check_pair(checklist, pair, report_a, report_b,
 
     contract_a = report_a.get('contract_size') or 0.0
     contract_b = report_b.get('contract_size') or 0.0
+    basis = sizing.basis_for(pair.pair_type,
+                             getattr(pair, 'sizing_basis', 'AUTO'))
     clip_a, clip_b = pair.clip_lots_a, pair.clip_lots_b
     if not (clip_a and clip_b):
         clip_a, clip_b = sizing.matched_minimum_lots(
             report_a.get('volume_min'), report_b.get('volume_min'),
             report_a.get('volume_step'), report_b.get('volume_step'),
-            beta, contract_a, contract_b)
+            beta, contract_a, contract_b,
+            basis=basis, price_a=price_a, price_b=price_b)
     floor = sizing.minimum_notional(contract_a, contract_b, price_a, price_b,
                                     beta, report_a.get('volume_min'),
                                     report_b.get('volume_min'))
@@ -470,6 +473,45 @@ def check_pair(checklist, pair, report_a, report_b,
                       'no size clears both legs\' minimum volumes',
                       ['Check both minimums above — on some brokers the '
                        'future\'s minimum is ten times the spot\'s'])
+
+    # WHAT THE MATCH LEAVES OVER. Only the units hedge cancels exactly;
+    # lot-for-lot across two contract sizes, or equal money across two
+    # instruments, leaves an outright position in the underlying — and
+    # so does rounding to a tradable step, on every pair. A spread
+    # trade carrying an outright nobody knows about is the failure the
+    # sizing module exists to prevent, so it is stated in units and in
+    # money rather than left to be inferred.
+    if clip_a and clip_b and contract_a and contract_b:
+        residual = sizing.residual_units(clip_a, clip_b, contract_a,
+                                         contract_b, beta)
+        exposure = abs(residual or 0.0) * (price_b or 0.0)
+        matched = clip_b * contract_b
+        share = abs(residual or 0.0) / matched if matched else 0.0
+        words = sizing.SIZING_WORDS.get(basis, basis)
+        if share <= 0.001:
+            checklist.add(scope, 'Sizing basis', PASS,
+                          f'matched {words} — the two sides cancel')
+        elif share <= 0.05:
+            checklist.add(scope, 'Sizing basis', INFO,
+                          f'matched {words}. It leaves {residual:+,.2f} '
+                          f'units of {pair.symbol_b} outright '
+                          f'({share:.1%} of the position'
+                          + (f', about ${exposure:,.0f}' if exposure else '')
+                          + ') — the steps cannot express the ratio exactly')
+        else:
+            checklist.add(
+                scope, 'Sizing basis', WARN,
+                f'matched {words}, which leaves {residual:+,.2f} units of '
+                f'{pair.symbol_b} outright — {share:.1%} of the position'
+                + (f', about ${exposure:,.0f}' if exposure else '') +
+                '. That is a directional position in the underlying, on '
+                'top of the spread, and the ladder\'s P&L does not price '
+                'it',
+                ['If both legs are the same underlying, "lot for lot" is '
+                 'the desk\'s rule and this residual is the contract '
+                 'sizes disagreeing — check them',
+                 'Sizing by UNITS makes the two sides cancel exactly, at '
+                 'the cost of legs that are not equal in lots or in money'])
 
     for report, role in ((report_a, 'A'), (report_b, 'B')):
         maximum = report.get('volume_max') or 0.0

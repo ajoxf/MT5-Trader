@@ -125,3 +125,43 @@ def test_the_same_currency_as_the_account_is_not_warned_about():
     diagnostics.check_pair(checklist, Pair(), symbol(),
                            symbol(symbol='GC1226'), account_currency='USD')
     assert currency_check(checklist)['status'] == PASS
+
+
+# -- what the match leaves over -------------------------------------------
+
+def sizing_check(checklist):
+    rows = [c for c in checklist.checks if c['name'] == 'Sizing basis']
+    return rows[0] if rows else None
+
+
+class RelatedPair(Pair):
+    pair_type = 'RELATED'
+    sizing_basis = 'SAME_LOTS'
+    clip_lots_a = 1.0
+    clip_lots_b = 1.0
+
+
+def test_a_match_that_cancels_is_passed():
+    """The control: equal contract sizes at beta 1, lot for lot. There
+    is nothing left over and the check must not invent something."""
+    checklist = diagnostics.Checklist()
+    diagnostics.check_pair(checklist, RelatedPair(), symbol(),
+                           symbol(symbol='GC1226'))
+    assert sizing_check(checklist)['status'] == PASS
+
+
+def test_a_match_that_leaves_an_OUTRIGHT_says_how_big_it_is():
+    """Lot for lot across a 100 and a 5,000 contract is 4,900 units net
+    — a directional position in the underlying sitting on top of the
+    spread, which the ladder's P&L does not price."""
+    checklist = diagnostics.Checklist()
+    diagnostics.check_pair(
+        checklist, RelatedPair(), symbol(),
+        symbol(symbol='XAGUSD', contract_size=5000.0, tick_size=0.001,
+               tick_value=5.0, bid=54.0, ask=54.2))
+
+    check = sizing_check(checklist)
+    assert check['status'] == WARN
+    assert 'outright' in check['message']
+    assert 'lot for lot' in check['message']
+    assert check['fix']

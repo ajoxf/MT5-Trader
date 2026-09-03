@@ -50,9 +50,91 @@ def round_step(volume, step, minimum=0.0, down=False):
     return volume if volume >= minimum - 1e-9 else 0.0
 
 
+#: How leg B is sized against leg A. AUTO follows the pair type, which
+#: is the desk's own rule and the right default:
+#:
+#: - SAME_LOTS for spot-vs-future and future-vs-future. The underlying
+#:   is the SAME instrument, so a lot of one is a lot of the other and
+#:   the trade is the basis between two contracts on one thing.
+#: - NOTIONAL for two RELATED instruments — WTI against Brent. There is
+#:   no shared underlying to match lot for lot; what makes the two
+#:   sides comparable is the MONEY on each.
+#:
+#: UNITS is the spread arithmetic's own hedge, `L_A x C_A / (beta x
+#: C_B)`, and it is what every pair used before there was a choice. It
+#: is kept because it is the only basis under which the P&L is exactly
+#: `-dS x k` — see `hedge_per_lot`.
+SIZING_BASES = ('AUTO', 'UNITS', 'SAME_LOTS', 'NOTIONAL')
+
+
+#: Each basis in the trader's own words, for the screen.
+SIZING_WORDS = {
+    'UNITS': 'by units — the spread arithmetic\u2019s own hedge',
+    'SAME_LOTS': 'lot for lot — the same underlying, so a lot is a lot',
+    'NOTIONAL': 'by notional — equal money on each side',
+}
+
+
+def basis_for(pair_type, basis=None):
+    """The basis actually in force. AUTO reads the pair type."""
+    basis = str(basis or 'AUTO').upper()
+    if basis in SIZING_BASES and basis != 'AUTO':
+        return basis
+    return 'NOTIONAL' if str(pair_type).upper() == 'RELATED' else 'SAME_LOTS'
+
+
+def hedge_per_lot(basis, contract_a, contract_b, beta=1.0,
+                  price_a=None, price_b=None):
+    """Leg B lots per ONE lot of leg A, before any rounding.
+
+    UNITS       `C_A / (beta x C_B)` — the hedge the spread's own
+                arithmetic implies, and the ONLY one under which a
+                move gives exactly `-dS x k`. Under the other two the
+                match is deliberate and the residual is real: what is
+                left over is an outright position in the underlying,
+                and `residual_units` reports it rather than hiding it.
+    SAME_LOTS   1.0. A lot for a lot.
+    NOTIONAL    `C_A x P_A / (C_B x P_B)` — equal money a side.
+
+    Returns 0.0 when it cannot be computed, which every caller reads as
+    "not sized" rather than as zero lots.
+    """
+    beta = float(beta or 1.0)
+    contract_a = float(contract_a or 0.0)
+    contract_b = float(contract_b or 0.0)
+    if basis == 'SAME_LOTS':
+        return 1.0
+    if basis == 'NOTIONAL':
+        if not (contract_a and contract_b and price_a and price_b):
+            return 0.0
+        return (contract_a * float(price_a)) / (contract_b * float(price_b))
+    if not contract_a or not contract_b or beta == 0:
+        return 0.0
+    return contract_a / (beta * contract_b)
+
+
+def residual_units(lots_a, lots_b, contract_a, contract_b, beta=1.0):
+    """What this hedge does NOT cancel, in leg B units.
+
+    A perfectly matched pair gives `L_A x C_A = beta x L_B x C_B`, and
+    anything left over is an outright position in the underlying — the
+    thing a spread trade is supposed not to have. Matching lot for lot
+    across two different contract sizes, or matching money across two
+    instruments that do not move one-for-one, both leave one. Rounding
+    to a tradable step leaves a smaller one on every pair.
+
+    Signed: positive means LEG A is the bigger side.
+    """
+    beta = float(beta or 1.0)
+    if not (contract_a and contract_b):
+        return None
+    return (lots_a or 0.0) * float(contract_a) / beta - \
+        (lots_b or 0.0) * float(contract_b)
+
+
 def hedge_lots(leg_a_lots, contract_a, contract_b, beta, step=0.0,
-               minimum=0.0):
-    """Leg B lots that hedge leg A: `L_A * C_A / (beta * C_B)`.
+               minimum=0.0, basis='UNITS', price_a=None, price_b=None):
+    """Leg B lots that hedge leg A, on the basis this pair is sized by.
 
     Rounds DOWN. Leg A's own size is a target and nearest is the honest
     reading of it; the hedge is a quantity that must not overshoot. With
@@ -60,11 +142,13 @@ def hedge_lots(leg_a_lots, contract_a, contract_b, beta, step=0.0,
     into 0.1 — a hedge twice the position it is hedging, net short the
     difference. Short is the recoverable error.
     """
-    beta = float(beta or 1.0)
-    if not leg_a_lots or not contract_a or not contract_b or beta == 0:
+    if not leg_a_lots:
         return 0.0
-    target = leg_a_lots * contract_a / (beta * contract_b)
-    return round_step(target, step, minimum, down=True)
+    per_lot = hedge_per_lot(basis, contract_a, contract_b, beta,
+                            price_a, price_b)
+    if not per_lot:
+        return 0.0
+    return round_step(leg_a_lots * per_lot, step, minimum, down=True)
 
 
 def spread_units(leg_b_lots, contract_b):
@@ -81,7 +165,8 @@ def notional(lots, contract_size, price):
 
 
 def matched_minimum_lots(min_a, min_b, step_a, step_b, beta=1.0,
-                         contract_a=1.0, contract_b=1.0):
+                         contract_a=1.0, contract_b=1.0,
+                         basis='UNITS', price_a=None, price_b=None):
     """The smallest MATCHED pair both legs can actually trade.
 
     Each leg's own minimum is right for a single-leg test, but using
@@ -107,7 +192,11 @@ def matched_minimum_lots(min_a, min_b, step_a, step_b, beta=1.0,
     contract_b = float(contract_b or 1.0)
     min_a, min_b = min_a or 0.0, min_b or 0.0
 
-    per_a = (contract_a / (beta * contract_b)) if (beta and contract_b) else 0.0
+    # The ratio the search matches to is the one this pair is SIZED
+    # by: a floor found against the units hedge is the wrong floor for
+    # a pair matched lot for lot or by money.
+    per_a = hedge_per_lot(basis, contract_a, contract_b, beta,
+                          price_a, price_b)
     if per_a <= 0:
         return round(min_a, 8), round(min_b, 8)
 
@@ -187,12 +276,14 @@ def clip_plan(pair, meta_a, meta_b, price_a, price_b, spreads=1.0):
                           'from MT5 before sizing anything',
                 'leg_a_lots': 0.0, 'leg_b_lots': 0.0, 'spread_units': 0.0}
 
+    basis = basis_for(pair.pair_type, getattr(pair, 'sizing_basis', 'AUTO'))
     unit_a, unit_b = pair.clip_lots_a, pair.clip_lots_b
     if not unit_a:
         # Nothing configured at all: the smallest size both legs can
-        # actually clear.
+        # actually clear, matched on THIS pair's basis.
         unit_a, unit_b = matched_minimum_lots(
-            min_a, min_b, step_a, step_b, beta, contract_a, contract_b)
+            min_a, min_b, step_a, step_b, beta, contract_a, contract_b,
+            basis=basis, price_a=price_a, price_b=price_b)
     elif not unit_b:
         # Leg A IS configured and its hedge did not settle — the hedge
         # for it is under leg B's minimum. Falling back to the matched
@@ -244,6 +335,16 @@ def clip_plan(pair, meta_a, meta_b, price_a, price_b, spreads=1.0):
         'leg_a_notional_usd': notional(lots_a, contract_a, price_a),
         'leg_b_notional_usd': notional(lots_b, contract_b, price_b),
         'hedge_ratio': beta,
+        #: HOW the two sides were matched, and what the match leaves
+        #: over. Only UNITS cancels exactly; under SAME_LOTS and
+        #: NOTIONAL the residual is a real outright position in the
+        #: underlying, and rounding to a tradable step leaves one on
+        #: every pair. Reported, never hidden — a spread trade carrying
+        #: an outright nobody knows about is the failure this whole
+        #: module exists to prevent.
+        'sizing_basis': basis,
+        'residual_units': residual_units(lots_a, lots_b, contract_a,
+                                         contract_b, beta),
         #: `k` — the ONE multiplier. Everything money-valued reads this.
         'spread_units': k,
         'min_notional_usd': floor,

@@ -158,3 +158,82 @@ def test_the_exit_type_never_changes_what_reaches_the_broker(engine, pair):
                                    engine.market.get(pair.key),
                                    reason='flattened by trader')
     assert position.is_open is False
+
+
+# -- HOW the two legs are matched, end to end -----------------------------
+
+def test_a_spot_future_pair_is_matched_LOT_FOR_LOT_by_default(config, legs):
+    """The desk's rule: the underlying is the same instrument, so a lot
+    of one is a lot of the other."""
+    pair = config.pairs['XAUUSD_|GC1226']
+    assert pair.pair_type == 'SPOT_FUTURE'
+    assert pair.sizing_basis == 'AUTO'
+    pair.clip_lots_a, pair.clip_lots_b = 0.50, None
+    Coordinator(config, legs, sleep=lambda s: None).start()
+    assert pair.clip_lots_b == pytest.approx(0.50)
+
+
+def test_a_RELATED_pair_is_matched_by_NOTIONAL_by_default(config, legs,
+                                                           gold_symbols):
+    """Two different instruments: nothing shared to match lot for lot,
+    so the money on each side is what makes them comparable. Leg A is
+    4292 and leg B 4351 here, so the dearer leg needs fewer lots."""
+    pair = config.pairs['XAUUSD_|GC1226']
+    pair.pair_type = 'RELATED'
+    pair.clip_lots_a, pair.clip_lots_b = 1.0, None
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+    coordinator._settle_clip(pair)
+
+    spot, future = gold_symbols
+    want = (100.0 * ((spot.bid + spot.ask) / 2)) / \
+        (100.0 * ((future.bid + future.ask) / 2))
+    # Rounded DOWN to leg B's 0.10 step, as every hedge is.
+    assert pair.clip_lots_b == pytest.approx(round(want - want % 0.10, 8),
+                                             abs=0.05)
+    assert pair.clip_lots_b < 1.0        # the dearer leg, so fewer lots
+
+
+def test_the_trader_can_override_the_pair_types_rule(config, legs):
+    """The control: AUTO is a default, not a rule that cannot be
+    changed. Sizing by UNITS is the old behaviour and still on offer —
+    it is the only basis that cancels exactly."""
+    pair = config.pairs['XAUUSD_|GC1226']
+    pair.pair_type = 'RELATED'
+    pair.sizing_basis = 'SAME_LOTS'
+    pair.clip_lots_a, pair.clip_lots_b = 1.0, None
+    Coordinator(config, legs, sleep=lambda s: None).start()
+    assert pair.clip_lots_b == pytest.approx(1.0)
+
+
+def test_changing_the_basis_re_derives_leg_B(config):
+    """Leg B is the hedge. Left where it was, the two legs would no
+    longer be matched on the basis the trader just chose."""
+    pair = config.pairs['XAUUSD_|GC1226']
+    pair.clip_lots_a, pair.clip_lots_b = 1.0, 1.0
+    assert 'sizing_basis' in pair.apply_hot({'sizing_basis': 'NOTIONAL'})
+    assert pair.clip_lots_b is None
+
+
+def test_a_fill_on_the_quoting_leg_crosses_the_other_on_the_SAME_basis(
+        config, legs, gold_symbols):
+    """A LIMIT fill hedges through the quoter and a MARKET click through
+    the executor. Two paths sizing the same trade differently is a pair
+    that is hedged on one route and not on the other."""
+    from mt5trader import sizing
+    pair = config.pairs['XAUUSD_|GC1226']
+    pair.pair_type = 'RELATED'                  # so the basis is NOTIONAL
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+
+    md = coordinator.market[pair.key]
+    basis = sizing.basis_for(pair.pair_type, pair.sizing_basis)
+    assert basis == 'NOTIONAL'
+    per_lot = sizing.hedge_per_lot(
+        basis, pair.meta_a['contract_size'], pair.meta_b['contract_size'],
+        pair.hedge_ratio, md['leg_a_mid'], md['leg_b_mid'])
+    assert per_lot != pytest.approx(1.0)        # or the test proves nothing
+    assert pair.clip_lots_b / pair.clip_lots_a == pytest.approx(
+        per_lot, rel=0.05)

@@ -1101,6 +1101,7 @@
     // actually clear", which is what the engine derives. Leg B is
     // never typed — it is the hedge of this one.
     ['.ls-clip-a', 'clip_lots_a', 'derived-number'],
+    ['.ls-sizing-basis', 'sizing_basis', 'live'],
     ['.ls-quoting', 'quoting_leg', 'live'],
     ['.ls-auto-route', 'auto_route', 'check'],
     // The Fair Spread window. One tick, and `algo` follows it on the
@@ -1227,13 +1228,25 @@
         + 'resolve on MT5 first';
       return;
     }
+    var words = {
+      SAME_LOTS: 'lot for lot', NOTIONAL: 'by notional', UNITS: 'by units'
+    }[live.sizing_basis_effective] || 'by units';
     note.textContent = 'In force: 1 spread = ' + fmt(live.clip_lots_a, 2) +
       ' lots ' + (live.symbol_a || 'A') + ' against ' +
       fmt(live.clip_lots_b, 2) + ' ' + (live.symbol_b || 'B') +
       (live.spread_units
         ? ' — ' + money(live.spread_units) + ' per 1.00 of spread'
         : '') +
-      '. Leg B is derived from leg A, the beta and both contract sizes.';
+      '. Matched ' + words + '; leg B is derived, never typed.' +
+      // What the match does NOT cancel is an outright position in the
+      // underlying. Unmeasured is not zero, so it is only said when
+      // there is a number.
+      (live.residual_units === null || live.residual_units === undefined
+        ? ''
+        : (Math.abs(live.residual_units) < 1e-9
+            ? ' The two sides cancel.'
+            : ' Leaves ' + fmt(live.residual_units, 2) + ' units of ' +
+              (live.symbol_b || 'B') + ' outright.'));
   }
 
   function fairKindFields(pane, saved) {

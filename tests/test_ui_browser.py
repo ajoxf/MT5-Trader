@@ -221,6 +221,9 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'show_fair_window': show_fair_window,
                 'auto_route_armed': auto_route_armed or [],
                 'clip_lots_a': 0.1, 'clip_lots_b': 0.1, 'spread_units': 10.0,
+                'sizing_basis': 'AUTO',
+                'sizing_basis_effective': 'SAME_LOTS',
+                'residual_units': 0.0,
                 'short_spread': 59.09, 'long_spread': 59.11,
                 'market': {'spread': 59.10, 'short_spread': 59.09,
                            'long_spread': 59.11, 'net_change': -0.61,
@@ -3792,7 +3795,10 @@ def test_the_lots_one_spread_costs_can_be_typed_and_says_what_is_in_force(
     note = ' '.join(page.text_content('.ladder .ls-clip-note').split())
     assert '1 spread = 0.10 lots XAUUSD_ against 0.10 GC1226' in note
     assert 'per 1.00 of spread' in note
-    assert 'Leg B is derived' in note
+    # HOW the legs are matched, and what the match leaves over.
+    assert 'Matched lot for lot' in note
+    assert 'leg B is derived, never typed' in note
+    assert 'The two sides cancel' in note
     # ...and there is no box for leg B to be typed into.
     assert page.locator('.ladder .ls-clip-b').count() == 0
 
@@ -3864,4 +3870,25 @@ def test_the_exit_type_is_set_where_the_entry_mode_s_twin_is(page):
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
     assert page.evaluate('() => window.__sent.exit_type') == 'LIMIT'
+    page.evaluate("() => { window.fetch = window.__realFetch; }")
+
+
+def test_how_the_two_legs_are_matched_is_the_traders_to_choose(page):
+    """AUTO is the desk's rule applied from the pair type — the same lot
+    size where the underlying is the same instrument, equal money where
+    it is not. It is a DEFAULT, and the trader can say otherwise."""
+    open_ladder(page)
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-sizing-basis', timeout=WAIT)
+
+    options = page.eval_on_selector_all(
+        '.ladder .ls-sizing-basis option', '(o) => o.map(x => x.value)')
+    assert options == ['AUTO', 'SAME_LOTS', 'NOTIONAL', 'UNITS']
+    assert page.input_value('.ladder .ls-sizing-basis') == 'AUTO'
+
+    page.evaluate(SPY_ON_PAIR_SAVE)
+    page.select_option('.ladder .ls-sizing-basis', 'NOTIONAL')
+    page.click('.ladder .ls-save')
+    page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
+    assert page.evaluate('() => window.__sent.sizing_basis') == 'NOTIONAL'
     page.evaluate("() => { window.fetch = window.__realFetch; }")
