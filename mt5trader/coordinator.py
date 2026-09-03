@@ -1028,12 +1028,26 @@ class Coordinator:
                 return self._refuse(pair_key, side, level, failure, closed)
             if closed and quantity <= 1e-9:
                 return self._closed_at_market(closed, armed)
-            if armed and quantity <= 1e-9:
+            if armed:
+                # ONE CLICK, ONE INSTRUCTION, IN ORDER. Any remainder
+                # rides on the LAST close armed and opens only once
+                # that close has gone through. Resting it now gives it
+                # a DIFFERENT ENGINE from the close — a pending at the
+                # BROKER, filling on the broker's own tick stream,
+                # against a level watched here at poll rate. Live
+                # 2026-09-03 the pending filled and the close never saw
+                # a qualifying tick, so a BUY 12 over a SELL 10 left the
+                # trader +2 AND still -10.
+                if quantity > 1e-9:
+                    self.quoter.carry_remainder(armed[-1], quantity)
                 return {'ok': True, 'order': armed[0].to_dict(),
                         'rested': True, 'reducing': True, 'closed': closed,
+                        'remainder': quantity if quantity > 1e-9 else None,
                         'reason': f'{level:g} is away from the market — '
                                   f'resting there to CLOSE '
-                                  f'{len(armed)} position(s)'}
+                                  f'{len(armed)} position(s)'
+                                  + (f', then open {quantity:g}'
+                                     if quantity > 1e-9 else '')}
             order = self.book.add_order(pair, side, level, quantity)
             self.quoter.group_for(pair, order)
             return {'ok': True, 'order': order.to_dict(), 'rested': True,
@@ -1087,11 +1101,17 @@ class Coordinator:
             return self._refuse(pair_key, side, level, failure, closed)
         if closed and quantity <= 1e-9:
             return self._closed_at_market(closed, armed)
-        if armed and quantity <= 1e-9:
+        if armed:
+            # Same rule as above: the remainder waits for the close.
+            if quantity > 1e-9:
+                self.quoter.carry_remainder(armed[-1], quantity)
             return {'ok': True, 'order': armed[0].to_dict(),
                     'reducing': True, 'closed': closed,
+                    'remainder': quantity if quantity > 1e-9 else None,
                     'reason': f'resting at {level:g} to CLOSE '
-                              f'{len(armed)} position(s)'}
+                              f'{len(armed)} position(s)'
+                              + (f', then open {quantity:g}'
+                                 if quantity > 1e-9 else '')}
         order = self.book.add_order(pair, side, level, quantity)
         self.quoter.group_for(pair, order)
         return {'ok': True, 'order': order.to_dict(), 'closed': closed}
