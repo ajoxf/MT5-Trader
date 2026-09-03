@@ -292,7 +292,28 @@ class SpreadPosition:
         move = closing_spread - self.entry_spread
         if self.side is SpreadSide.SELL:
             move = -move
-        return move * self.spread_units * self.quantity
+        # SIZE IS ALREADY IN `spread_units`, AND MUST NOT BE APPLIED
+        # TWICE.
+        #
+        # Every place a position is built passes
+        # `spread_units(leg_b.volume, contract_b)`, and `leg_b.volume`
+        # is the volume of the WHOLE position — 1.0 lots for 100
+        # spreads, not the 0.01 one spread costs. So `spread_units` is
+        # already the dollars a 1.00 move in the spread is worth for
+        # this position entire. Multiplying by `quantity` on top
+        # charged the size a second time.
+        #
+        # It was invisible at Qty 1, which is the size everything was
+        # tested at: there `spread_units` is 0.01 x 100 = 1.0 and
+        # `quantity` is 1, so the double count is x1 and the answer
+        # comes out right. At Qty 10 it read 10x, and at Qty 100 it
+        # read $6,000.00 against MT5's own -$56.70.
+        #
+        # The per-ONE-spread k of the same name — `spread_units(
+        # clip_lots_b, ...)` on the ladder and in the exit maths — is a
+        # different number and IS multiplied by quantity by its own
+        # callers. Only a POSITION's is whole already.
+        return move * self.spread_units
 
     def to_dict(self):
         return {
