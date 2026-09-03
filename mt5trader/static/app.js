@@ -1112,8 +1112,11 @@
     // the useful default: it means "the smallest size both legs can
     // actually clear", which is what the engine derives. Leg B is
     // never typed — it is the hedge of this one.
-    ['.ls-clip-a', 'clip_lots_a', 'derived-number'],
-    ['.ls-sizing-basis', 'sizing_basis', 'live'],
+    // LIVE, never blank. A blank box now MEANS 1, so leaving it empty
+    // while the engine runs 0.10 would read as "derived" and send 1 on
+    // the next Apply — a ten-fold resize nobody typed.
+    ['.ls-clip-a', 'clip_lots_a', 'live-number'],
+    ['.ls-clip-b', 'clip_lots_b', 'live-number'],
     ['.ls-quoting', 'quoting_leg', 'live'],
     ['.ls-auto-route', 'auto_route', 'check'],
     // The Fair Spread window. One tick, and `algo` follows it on the
@@ -1191,14 +1194,6 @@
           if (field === 'quoting_leg' && !input.value) { input.value = ''; }
           return;
         }
-        if (kind === 'derived-number') {
-          // Blank means DERIVED, and the note beside it says what the
-          // engine derived. Pre-filling the derived number would turn
-          // a reading into a setting the moment anybody pressed Apply.
-          input.value = (own === undefined || own === null || own === '')
-            ? '' : own;
-          return;
-        }
         if (kind === 'number' || kind === 'blank-number') {
           // This ladder's own number. A pair that has never been
           // configured starts from the built-in value, shown plainly:
@@ -1235,30 +1230,25 @@
      */
     var note = pane.querySelector('.ls-clip-note');
     if (!note) { return; }
-    if (!live.clip_lots_a || !live.clip_lots_b) {
-      note.textContent = 'one spread is not sized yet — both legs have to '
-        + 'resolve on MT5 first';
-      return;
-    }
-    var words = {
-      SAME_LOTS: 'lot for lot', NOTIONAL: 'by notional', UNITS: 'by units'
-    }[live.sizing_basis_effective] || 'by units';
-    note.textContent = 'In force: 1 spread = ' + fmt(live.clip_lots_a, 2) +
-      ' lots ' + (live.symbol_a || 'A') + ' against ' +
-      fmt(live.clip_lots_b, 2) + ' ' + (live.symbol_b || 'B') +
-      (live.spread_units
-        ? ' — ' + money(live.spread_units) + ' per 1.00 of spread'
-        : '') +
-      '. Matched ' + words + '; leg B is derived, never typed.' +
-      // What the match does NOT cancel is an outright position in the
-      // underlying. Unmeasured is not zero, so it is only said when
-      // there is a number.
-      (live.residual_units === null || live.residual_units === undefined
-        ? ''
-        : (Math.abs(live.residual_units) < 1e-9
-            ? ' The two sides cancel.'
-            : ' Leaves ' + fmt(live.residual_units, 2) + ' units of ' +
-              (live.symbol_b || 'B') + ' outright.'));
+    var lotsA = live.clip_lots_a || 1;
+    var lotsB = live.clip_lots_b || 1;
+    var qty = live.default_quantity || 1;
+    // PER QTY AND FOR THE QTY IN THE BOX, side by side. The first is
+    // the figure the exit levels are priced per and does not move when
+    // the keypad is touched; the second is the real money on the click
+    // about to be made.
+    // `spread_units` on the snapshot is ALREADY per one Qty — it is
+    // clip_lots_b x contract B — so it is the per-unit figure, not the
+    // one for the click.
+    var perQty = live.spread_units || 0;
+    note.textContent =
+      'In force: 1 Qty = ' + fmt(lotsA, 2) + ' lots ' +
+      (live.symbol_a || 'A') + ' / ' + fmt(lotsB, 2) + ' lots ' +
+      (live.symbol_b || 'B') +
+      (perQty ? ' — ' + money(perQty) + ' per 1.00 of spread' : '') +
+      '. Qty ' + fmt(qty, 2) + ' sends ' + fmt(lotsA * qty, 2) + ' / ' +
+      fmt(lotsB * qty, 2) + ' lots' +
+      (perQty ? ', ' + money(perQty * qty) + ' per 1.00' : '') + '.';
   }
 
   function fairKindFields(pane, saved) {
@@ -1348,7 +1338,7 @@
         // defaults page there is nothing for a null to mean.
         value = raw === '' ? null : parseFloat(raw);
         if (value !== null && isNaN(value)) { return; }
-      } else if (kind === 'blank-number' || kind === 'derived-number') {
+      } else if (kind === 'blank-number') {
         value = raw === '' ? null : parseFloat(raw);
         if (value !== null && isNaN(value)) { return; }
       } else {

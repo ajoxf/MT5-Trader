@@ -363,7 +363,6 @@ class Coordinator:
             self.errors[key] = problems
             if not problems:
                 self._settle_beta(pair)
-                self._settle_clip(pair)
         return self.errors
 
     def _settle_beta(self, pair):
@@ -385,79 +384,6 @@ class Coordinator:
         pair.hedge_ratio_for = hedgeratio.pair_signature(pair.symbol_a,
                                                          pair.symbol_b)
         pair.beta_reason = why
-
-    def _settle_clip(self, pair):
-        """What ONE spread means in leg lots.
-
-        Three cases, and only the first two involve a choice:
-
-        - NEITHER set: the smallest size at which both legs clear their
-          own minimum volume. Quoting the click in spreads makes a size
-          that implies a sub-minimum hedge unrepresentable, so that
-          floor is the honest default.
-        - LEG A set by the trader: leg B is DERIVED from it. It is the
-          hedge — `L_A x C_A / (beta x C_B)`, rounded DOWN — and a
-          number typed into it independently would be a leg that does
-          not hedge the other.
-        - both already settled: left alone.
-        """
-        if pair.clip_lots_a and pair.clip_lots_b:
-            return
-        meta_a, meta_b = pair.meta_a or {}, pair.meta_b or {}
-        basis = sizing.basis_for(pair.pair_type, pair.sizing_basis)
-        price_a, price_b = self._reference_prices(pair)
-        if pair.clip_lots_a:
-            hedge = sizing.hedge_lots(
-                pair.clip_lots_a, meta_a.get('contract_size'),
-                meta_b.get('contract_size'), pair.hedge_ratio,
-                meta_b.get('volume_step') or 0.0,
-                meta_b.get('volume_min') or 0.0,
-                basis=basis, price_a=price_a, price_b=price_b)
-            # 0.0 means the hedge for that leg A rounds to less than
-            # leg B's minimum. Leaving it None is the honest state:
-            # `clip_plan` then refuses the click and names the smallest
-            # leg A that WOULD work, rather than this quietly resizing
-            # the trader to something many times bigger.
-            #
-            # Said in the log too, because the ladder looks entirely
-            # normal in this state — the clicks land, the orders join
-            # the book, and nothing ever reaches a broker.
-            pair.clip_lots_b = hedge or None
-            if pair.clip_lots_b is None:
-                workable, _b = sizing.matched_minimum_lots(
-                    meta_a.get('volume_min'), meta_b.get('volume_min'),
-                    meta_a.get('volume_step'), meta_b.get('volume_step'),
-                    pair.hedge_ratio, meta_a.get('contract_size'),
-                    meta_b.get('contract_size'),
-                    basis=basis, price_a=price_a, price_b=price_b)
-                logging.error(
-                    '%s: one spread of %g lots on leg A cannot be hedged '
-                    'matched %s — nothing will reach a broker until '
-                    'Lots/spread A is %s', pair.key, pair.clip_lots_a,
-                    sizing.SIZING_SHORT.get(basis, basis),
-                    f'{workable:g} or more' if workable
-                    else 'workable on both legs')
-            return
-        pair.clip_lots_a, pair.clip_lots_b = sizing.matched_minimum_lots(
-            meta_a.get('volume_min'), meta_b.get('volume_min'),
-            meta_a.get('volume_step'), meta_b.get('volume_step'),
-            pair.hedge_ratio, meta_a.get('contract_size'),
-            meta_b.get('contract_size'),
-            basis=basis, price_a=price_a, price_b=price_b)
-
-    def _reference_prices(self, pair):
-        """A mid a side each, for the bases that need a price.
-
-        NOTIONAL sizing is money against money, so it cannot be settled
-        before both legs have a quote. The market comes first; the
-        metadata MT5 handed back at resolve time is the fallback, so a
-        pair sized before the first tick still gets a number rather
-        than nothing.
-        """
-        md = self.market.get(pair.key) or {}
-        meta_a, meta_b = pair.meta_a or {}, pair.meta_b or {}
-        return (md.get('leg_a_mid') or meta_a.get('mid'),
-                md.get('leg_b_mid') or meta_b.get('mid'))
 
     # -- the loop ------------------------------------------------------------
 
@@ -499,13 +425,6 @@ class Coordinator:
         moved = []
         for key, pair in self.config.pairs.items():
             changed = pair.apply_hot((raw.get('pairs') or {}).get(key) or {})
-            if 'clip_lots_a' in changed:
-                # apply_hot drops leg B when leg A moves. Re-derive it
-                # HERE, on the same pass — a pair carrying a leg A and
-                # no leg B cannot size a click at all, and waiting for
-                # the next symbol resolve would leave the ladder dead
-                # in the meantime.
-                self._settle_clip(pair)
             if changed:
                 moved.append(f"{key}: {', '.join(changed)}")
         settings = raw.get('settings') or {}
@@ -556,14 +475,6 @@ class Coordinator:
             md['feed_badge'] = _badge(md, stale, jumped)
             self._observe_session(key, md, pair)
             self.market[key] = md
-            # A pair that has not been sized yet gets another go now
-            # that there IS a price. `_settle_clip` runs at resolve
-            # time, which is once, at startup — and NOTIONAL sizing
-            # cannot be settled without a mid, so a pair whose market
-            # was closed when the engine came up stayed unsized for the
-            # session and refused every click.
-            if not (pair.clip_lots_a and pair.clip_lots_b):
-                self._settle_clip(pair)
             # LIMIT-mode orders are worked on the SAME pass that priced
             # them: a peg re-priced off a snapshot older than the one on
             # screen is a peg holding a level nobody is showing.
@@ -1879,21 +1790,6 @@ class Coordinator:
                 'row_count': pair.rows,
                 'clip_lots_a': pair.clip_lots_a,
                 'clip_lots_b': pair.clip_lots_b,
-                'sizing_basis': pair.sizing_basis,
-                # What AUTO resolved to, so the screen can say the rule
-                # rather than the word 'AUTO'.
-                'sizing_basis_effective': sizing.basis_for(
-                    pair.pair_type, pair.sizing_basis),
-                # What the match does not cancel: an outright position
-                # in the underlying, in leg B units. None when it
-                # cannot be computed — unmeasured is not zero.
-                'residual_units': (
-                    sizing.residual_units(
-                        pair.clip_lots_a, pair.clip_lots_b,
-                        (pair.meta_a or {}).get('contract_size'),
-                        (pair.meta_b or {}).get('contract_size'),
-                        pair.hedge_ratio)
-                    if (pair.clip_lots_a and pair.clip_lots_b) else None),
                 'spread_units': sizing.spread_units(
                     pair.clip_lots_b, (pair.meta_b or {}).get('contract_size')),
                 'market': md,

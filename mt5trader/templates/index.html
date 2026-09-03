@@ -345,25 +345,17 @@
           <label class="lsf"><span>Default qty</span>
             <input class="ls-qty" type="number" min="0.01" step="0.01"
                    title="How many SPREADS one click sends. It is not lots — see Lots/spread below for what one spread is worth in each leg."></label>
-          <!-- What ONE spread MEANS. Until this was here it was derived
-               silently: the smallest size at which both legs clear
-               their own minimum volume, which on CFI is 0.01, and
-               there was nowhere to change it. -->
-          <label class="lsf"><span>Lots/spread A</span>
+          <!-- WHAT ONE QTY IS, ON EACH LEG. Both typed: Qty is the
+               lots. Leg B used to be derived — from the hedge
+               arithmetic, or lot for lot, or by equal notional — and
+               every one of those could round a leg to zero or size a
+               pair the desk had not asked for. -->
+          <label class="lsf"><span>Leg A lots</span>
             <input class="ls-clip-a" type="number" min="0" step="0.01"
-                   placeholder="smallest both legs can do"
-                   title="How many LOTS of leg A one spread is. Leg B is not typed: it is the hedge, and it is derived from this, the beta and both contract sizes. Blank goes back to the smallest size at which both legs clear their own minimum volume."></label>
-          <!-- HOW the two legs are matched. The desk's rule: the same
-               lot size where the underlying is the same instrument,
-               equal money where it is not. AUTO applies exactly that
-               from the pair type. -->
-          <label class="lsf"><span>Match legs</span>
-            <select class="ls-sizing-basis" title="How leg B is sized against leg A. AUTO follows the pair type: LOT FOR LOT for spot vs future and future vs future, where the underlying is the same instrument; BY NOTIONAL for two related instruments, where there is nothing shared to match lot for lot and equal money is what makes the sides comparable. BY UNITS is the spread arithmetic's own hedge and the only one that cancels exactly.">
-              <option value="AUTO">Auto (by pair type)</option>
-              <option value="SAME_LOTS">Lot for lot</option>
-              <option value="NOTIONAL">By notional</option>
-              <option value="UNITS">By units</option>
-            </select></label>
+                   title="How many LOTS of leg A one unit of Qty is. Qty 100 at 1 sends 100 lots. Blank reads as 1."></label>
+          <label class="lsf"><span>Leg B lots</span>
+            <input class="ls-clip-b" type="number" min="0" step="0.01"
+                   title="How many LOTS of leg B one unit of Qty is. Set it different from leg A for a ratio — 1 and 2 sends twice as many lots of B as of A. Blank reads as 1."></label>
           <div class="lsf-note ls-clip-note"></div>
           <label class="lsf"><span>Quoting leg</span>
             <select class="ls-quoting" title="Which leg rests the real pending in LIMIT mode. Default: the wider bid-ask — that is the spread you earn.">

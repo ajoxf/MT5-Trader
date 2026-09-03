@@ -228,9 +228,6 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'show_fair_window': show_fair_window,
                 'auto_route_armed': auto_route_armed or [],
                 'clip_lots_a': 0.1, 'clip_lots_b': 0.1, 'spread_units': 10.0,
-                'sizing_basis': 'AUTO',
-                'sizing_basis_effective': 'SAME_LOTS',
-                'residual_units': 0.0,
                 'short_spread': 59.09, 'long_spread': 59.11,
                 'market': {'spread': 59.10, 'short_spread': 59.09,
                            'long_spread': 59.11, 'net_change': -0.61,
@@ -3827,34 +3824,30 @@ def test_the_lots_one_spread_costs_can_be_typed_and_says_what_is_in_force(
     page.click('.ladder .ladder-cog')
     page.wait_for_selector('.ladder .ls-clip-a', timeout=WAIT)
 
-    # Blank means DERIVED, and the note says what the engine derived.
-    assert page.input_value('.ladder .ls-clip-a') == ''
+    # BOTH legs have a box, and each holds what the engine is running
+    # — never blank. A blank box MEANS 1 now, so an empty one beside a
+    # ladder trading 0.10 would send 1 on the next Apply: a ten-fold
+    # resize nobody typed.
+    assert page.input_value('.ladder .ls-clip-a') == '0.1'
+    assert page.input_value('.ladder .ls-clip-b') == '0.1'
+    # ...and the presets that used to derive leg B are gone.
+    assert page.locator('.ladder .ls-sizing-basis').count() == 0
+
     note = ' '.join(page.text_content('.ladder .ls-clip-note').split())
-    assert '1 spread = 0.10 lots XAUUSD_ against 0.10 GC1226' in note
+    # PER QTY and FOR THE QTY IN THE BOX, side by side.
+    assert '1 Qty = 0.10 lots XAUUSD_ / 0.10 lots GC1226' in note
     assert 'per 1.00 of spread' in note
-    # HOW the legs are matched, and what the match leaves over.
-    assert 'Matched lot for lot' in note
-    assert 'leg B is derived, never typed' in note
-    assert 'The two sides cancel' in note
-    # ...and there is no box for leg B to be typed into.
-    assert page.locator('.ladder .ls-clip-b').count() == 0
+    assert 'Qty 1.00 sends 0.10 / 0.10 lots' in note
 
     page.evaluate(SPY_ON_PAIR_SAVE)
-    page.fill('.ladder .ls-clip-a', '0.5')
+    page.fill('.ladder .ls-clip-a', '1')
+    page.fill('.ladder .ls-clip-b', '2')
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
-    assert page.evaluate('() => window.__sent.clip_lots_a') == 0.5
-
-    # Cleared, it goes back to derived — a null, not the number the
-    # note happened to be showing, which would freeze today's floor
-    # into this pair for ever.
-    page.click('.ladder .ladder-cog')
-    page.wait_for_selector('.ladder .ls-clip-a', timeout=WAIT)
-    page.evaluate("() => { window.__sent = null; }")
-    page.fill('.ladder .ls-clip-a', '')
-    page.click('.ladder .ls-save')
-    page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
-    assert page.evaluate('() => window.__sent.clip_lots_a') is None
+    assert page.evaluate('() => window.__sent.clip_lots_a') == 1
+    # Leg B is TYPED, not derived from leg A — a ratio of 1:2 reaches
+    # the engine exactly as it was entered.
+    assert page.evaluate('() => window.__sent.clip_lots_b') == 2
     page.evaluate("() => { window.fetch = window.__realFetch; "
                   "document.getElementById('toasts').innerHTML = ''; }")
 
@@ -3912,24 +3905,55 @@ def test_the_exit_type_is_set_where_the_entry_mode_s_twin_is(page):
                   "document.getElementById('toasts').innerHTML = ''; }")
 
 
-def test_how_the_two_legs_are_matched_is_the_traders_to_choose(page):
-    """AUTO is the desk's rule applied from the pair type — the same lot
-    size where the underlying is the same instrument, equal money where
-    it is not. It is a DEFAULT, and the trader can say otherwise."""
+def test_the_default_way_out_is_shown_on_the_button_F_will_press(page):
+    """Two ways out, and F fires one of them. Which one is the ladder's
+    OWN setting, so it is said on the buttons rather than remembered —
+    and both stay on the screen either way: the way out must not change
+    meaning under the button pressed in a hurry."""
     open_ladder(page)
-    page.click('.ladder .ladder-cog')
-    page.wait_for_selector('.ladder .ls-sizing-basis', timeout=WAIT)
+    publisher = page.paths['publisher']
 
-    options = page.eval_on_selector_all(
-        '.ladder .ls-sizing-basis option', '(o) => o.map(x => x.value)')
-    assert options == ['AUTO', 'SAME_LOTS', 'NOTIONAL', 'UNITS']
-    assert page.input_value('.ladder .ls-sizing-basis') == 'AUTO'
+    publisher.exit_type = 'MARKET'
+    publisher.publish()
+    page.wait_for_selector('.ladder .flatten.primary-exit', timeout=WAIT)
+    assert page.locator('.ladder .close-limit-go.primary-exit').count() == 0
+    assert '(F)' in (page.get_attribute('.ladder .flatten', 'title') or '')
+
+    publisher.exit_type = 'LIMIT'
+    publisher.publish()
+    page.wait_for_selector('.ladder .close-limit-go.primary-exit',
+                           timeout=WAIT)
+    assert page.locator('.ladder .flatten.primary-exit').count() == 0
+    assert '(F)' in (page.get_attribute('.ladder .close-limit-go',
+                                        'title') or '')
+    # CLOSE ALL is still there, and still says it crosses NOW.
+    assert page.locator('.ladder .flatten').count() == 1
+    assert 'NOW' in (page.get_attribute('.ladder .flatten', 'title') or '')
+
+    publisher.exit_type = 'MARKET'
+    publisher.publish()
+
+
+def test_the_exit_type_is_set_where_the_entry_mode_s_twin_is(page):
+    """In the ladder's own settings, beside the exit fields it governs
+    — not on the rail, which has no row to spare."""
+    open_ladder(page)
+    # The page polls; the pane seeds from the snapshot it HAS, so wait
+    # for the engine's default to have arrived before reading it.
+    page.wait_for_function(
+        "() => window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+        ".exit_type === 'MARKET'", timeout=WAIT)
+    page.click('.ladder .ladder-cog')
+    page.wait_for_selector('.ladder .ls-exit-type', timeout=WAIT)
+    assert page.locator(
+        '.ladder .ls-group:has(.ls-overnight) .ls-exit-type').count() == 1
+    assert page.input_value('.ladder .ls-exit-type') == 'MARKET'
 
     page.evaluate(SPY_ON_PAIR_SAVE)
-    page.select_option('.ladder .ls-sizing-basis', 'NOTIONAL')
+    page.select_option('.ladder .ls-exit-type', 'LIMIT')
     page.click('.ladder .ls-save')
     page.wait_for_function("() => window.__sent !== null", timeout=WAIT)
-    assert page.evaluate('() => window.__sent.sizing_basis') == 'NOTIONAL'
+    assert page.evaluate('() => window.__sent.exit_type') == 'LIMIT'
     page.evaluate("() => { window.fetch = window.__realFetch; "
                   "document.getElementById('toasts').innerHTML = ''; }")
 

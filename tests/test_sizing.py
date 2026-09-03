@@ -1,221 +1,159 @@
-"""The hedge arithmetic — the part that inverts if you guess."""
+"""What one Qty means on each leg — now that the trader types both.
+
+QTY IS THE LOTS. `clip_lots_a` and `clip_lots_b` are what ONE unit of
+the Qty box is on each leg, and both are typed: at 1 and 1 a Qty of 100
+is 100 lots of leg A against 100 of leg B; at 1 and 2 it is 100 against
+200. Nothing is derived and nothing is matched on the desk's behalf.
+
+The hedge arithmetic that used to compute leg B is gone with it, and so
+is the guarantee it bought. `k = L_B x C_B` still prices every
+spread-to-money conversion, and a move gives exactly `-dS x k` only
+when `L_A x C_A = beta x L_B x C_B`. Typed lots are under no obligation
+to satisfy that. The tests that pinned the derivation are therefore
+gone too; what is pinned here is that the typed numbers are the ones
+that reach the brokers, unchanged except by each broker's own step.
+"""
 
 import pytest
 
 from mt5trader.config import PairConfig
-from mt5trader.sizing import (clip_plan, hedge_lots, matched_minimum_lots,
-                              minimum_notional, spread_units)
+from mt5trader.sizing import (clip_plan, leg_ratio, minimum_notional,
+                              round_step, spread_units)
 
 
-def pnl_of_pure_beta_move(lots_a, contract_a, lots_b, contract_b, beta,
-                          move_a=1.0):
-    """A move that leaves the SPREAD unchanged: dP_B = beta x dP_A.
-
-    A correctly hedged short-spread pair (long A, short B) nets exactly
-    zero across it. That is the definition of the hedge, so it is the
-    test that catches an inverted one.
-    """
-    move_b = beta * move_a
-    return move_a * lots_a * contract_a - move_b * lots_b * contract_b
+def a_pair(lots_a=1.0, lots_b=1.0, beta=1.0):
+    return PairConfig('K', hedge_ratio=beta,
+                      clip_lots_a=lots_a, clip_lots_b=lots_b)
 
 
-@pytest.mark.parametrize('beta,contract_a,contract_b', [
-    (1.0, 100.0, 100.0),      # the only shape the stat-arb engine ran in
-    (2.0, 100.0, 100.0),      # beta != 1 INVERTS the naive rule
-    (0.5, 100.0, 100.0),
-    (1.0, 1000.0, 100.0),     # 1,000 bbl CFD against a 100 bbl future
-    (66.93, 100.0, 5000.0),   # gold against silver
-])
-def test_a_pure_beta_move_nets_to_zero(beta, contract_a, contract_b):
-    lots_a = 1.0
-    lots_b = hedge_lots(lots_a, contract_a, contract_b, beta, step=0.0)
-    assert pnl_of_pure_beta_move(lots_a, contract_a, lots_b, contract_b,
-                                 beta) == pytest.approx(0.0, abs=1e-6)
+def meta(contract=1000.0, minimum=0.01, step=0.01, maximum=1000.0):
+    return {'contract_size': contract, 'volume_min': minimum,
+            'volume_step': step, 'volume_max': maximum}
 
 
-@pytest.mark.parametrize('beta,contract_a,contract_b', [
-    (2.0, 100.0, 100.0),
-    (1.0, 1000.0, 100.0),
-])
-def test_the_naive_hedge_does_not_net_to_zero(beta, contract_a, contract_b):
-    """The control. `L_B = L_A x beta` is identical only at beta 1 with
-    equal contract sizes — which is why it hid for months. Without this
-    assertion the test above could pass for an unrelated reason."""
-    lots_a = 1.0
-    naive = lots_a * beta
-    assert pnl_of_pure_beta_move(lots_a, contract_a, naive, contract_b,
-                                 beta) != pytest.approx(0.0, abs=1e-6)
+# -- Qty is the lots -------------------------------------------------------
+
+def test_one_qty_is_one_lot_a_side_by_default():
+    """A new pair is 1 and 1. The desk's own words: place 1 lot on the
+    ladder and it places 1 lot of leg A and 1 lot of leg B."""
+    pair = PairConfig('K')
+    assert (pair.clip_lots_a, pair.clip_lots_b) == (1.0, 1.0)
+    plan = clip_plan(pair, meta(), meta(), 88.63, 96.475, 1.0)
+    assert plan['leg_a_lots'] == pytest.approx(1.0)
+    assert plan['leg_b_lots'] == pytest.approx(1.0)
 
 
-def test_k_is_leg_bs_units_not_leg_as():
-    """`k = L_B x C_B` is the ONE multiplier every spread-to-money
-    conversion uses. Leg A's units are equal only at beta 1 with equal
-    contracts."""
-    lots_b = hedge_lots(1.0, 1000.0, 100.0, beta=1.0, step=0.0)
-    assert spread_units(lots_b, 100.0) == pytest.approx(1000.0)
+def test_qty_multiplies_both_legs():
+    """Qty 100 at 1 and 1 is 100 lots a side — 100 x 1,000 bbl on each,
+    which is what the desk asked for in so many words."""
+    plan = clip_plan(a_pair(), meta(), meta(), 88.63, 96.475, 100.0)
+    assert plan['leg_a_lots'] == pytest.approx(100.0)
+    assert plan['leg_b_lots'] == pytest.approx(100.0)
+    assert plan['leg_a_units'] == pytest.approx(100_000.0)   # bbl
+    assert plan['leg_b_units'] == pytest.approx(100_000.0)
 
 
-def test_the_hedge_rounds_down_short_is_the_recoverable_error():
-    """Nearest would turn a wanted 0.05 into 0.1 on a 0.1-step leg — a
-    hedge twice the position it is hedging, net short the difference."""
-    lots = hedge_lots(0.05, 100.0, 100.0, beta=1.0, step=0.1, minimum=0.0)
-    assert lots == 0.0                      # under the step: not 0.1
+def test_an_unequal_ratio_is_taken_exactly_as_typed():
+    """1 and 2 is 1 lot of A against 2 of B, at every Qty. Nothing
+    second-guesses it against the beta or the contract sizes."""
+    plan = clip_plan(a_pair(1.0, 2.0), meta(), meta(), 88.63, 96.475, 10.0)
+    assert plan['leg_a_lots'] == pytest.approx(10.0)
+    assert plan['leg_b_lots'] == pytest.approx(20.0)
 
 
-def test_matched_minimum_clears_both_legs_and_actually_hedges():
-    """CFI's real shape: spot minimum 0.01, futures minimum 0.10. Using
-    each leg's own minimum is not a hedge — it is 9 oz net short."""
-    lots_a, lots_b = matched_minimum_lots(
-        min_a=0.01, min_b=0.10, step_a=0.01, step_b=0.10, beta=1.0,
-        contract_a=100.0, contract_b=100.0)
-    assert lots_a == pytest.approx(0.10)
-    assert lots_b == pytest.approx(0.10)
-    assert pnl_of_pure_beta_move(lots_a, 100.0, lots_b, 100.0,
-                                 1.0) == pytest.approx(0.0)
+def test_a_blank_leg_reads_as_ONE_never_as_nothing():
+    """There is nothing left to derive, so a blank has one honest
+    reading. Zero would be a click that sends no order on that leg."""
+    pair = PairConfig('K', clip_lots_a=None, clip_lots_b=None)
+    assert (pair.clip_lots_a, pair.clip_lots_b) == (1.0, 1.0)
+    plan = clip_plan(pair, meta(), meta(), 88.63, 96.475, 5.0)
+    assert plan['leg_a_lots'] == pytest.approx(5.0)
+    assert plan['leg_b_lots'] == pytest.approx(5.0)
 
 
-def test_matched_minimum_walks_up_until_the_steps_can_express_the_ratio():
-    """Silver (5,000/lot) against gold (100/lot) at beta 66.93: the floor
-    is 0.02/0.01, a third out. The smallest genuinely MATCHED pair is
-    further up."""
-    lots_a, lots_b = matched_minimum_lots(
-        min_a=0.01, min_b=0.01, step_a=0.01, step_b=0.01, beta=66.93,
-        contract_a=5000.0, contract_b=100.0)
-    exact = lots_a * 5000.0 / (66.93 * 100.0)
-    assert abs(lots_b - exact) / exact <= 0.02
+def test_the_ratio_is_read_from_ONE_place():
+    """The click and the fill's cross both use it. Two readings of
+    'what does this pair trade' is a pair hedged on one route and not
+    on the other."""
+    assert leg_ratio(a_pair(1.0, 2.0)) == pytest.approx(2.0)
+    assert leg_ratio(a_pair(2.0, 1.0)) == pytest.approx(0.5)
+    assert leg_ratio(PairConfig('K')) == pytest.approx(1.0)
 
 
-def test_minimum_notional_names_the_number_the_operator_can_act_on():
-    floor = minimum_notional(contract_a=100.0, contract_b=100.0,
-                             price_a=4292.0, price_b=4351.0, beta=1.0,
-                             min_a=0.01, min_b=0.10)
-    # Leg B's 0.10-lot minimum binds, not leg A's 0.01.
-    assert floor == pytest.approx(0.10 * 100.0 * 4292.0)
+# -- what each broker will actually take ----------------------------------
+
+def test_each_leg_is_rounded_to_ITS_OWN_step():
+    """The two brokers do not have the same step. Leg A to nearest —
+    its size is the target; leg B DOWN, because it is what covers leg A
+    and short is the recoverable error."""
+    plan = clip_plan(a_pair(0.333, 0.333), meta(step=0.01, minimum=0.01),
+                     meta(step=0.1, minimum=0.1), 88.63, 96.475, 1.0)
+    assert plan['leg_a_lots'] == pytest.approx(0.33)     # nearest
+    assert plan['leg_b_lots'] == pytest.approx(0.3)      # down, not 0.4
 
 
-def _pair(**kwargs):
-    base = dict(leg_a={'account': 'a', 'symbol': 'A'},
-                leg_b={'account': 'b', 'symbol': 'B'},
-                hedge_ratio=1.0, increment=0.01, clip_lots_a=0.1,
-                clip_lots_b=0.1)
-    base.update(kwargs)
-    return PairConfig('A|B', **base)
-
-
-META_A = {'contract_size': 100.0, 'volume_min': 0.01, 'volume_step': 0.01,
-          'volume_max': 100.0}
-META_B = {'contract_size': 100.0, 'volume_min': 0.10, 'volume_step': 0.10,
-          'volume_max': 100.0}
-
-
-def test_a_click_is_quoted_in_spreads_and_shows_its_derivation():
-    plan = clip_plan(_pair(), META_A, META_B, 4292.0, 4351.0, spreads=1.0)
-    assert plan['reason'] is None
-    assert plan['leg_a_lots'] == pytest.approx(0.1)
-    assert plan['leg_b_lots'] == pytest.approx(0.1)
-    assert plan['spread_units'] == pytest.approx(10.0)
-    # A number with no unit is not checkable (spec §11).
-    assert '$10.00 per 1.00 of spread' in plan['derivation']
-
-
-def test_a_click_under_leg_bs_minimum_is_refused_before_anything_moves():
-    plan = clip_plan(_pair(clip_lots_a=0.01, clip_lots_b=0.01),
-                     META_A, META_B, 4292.0, 4351.0, spreads=1.0)
-    assert plan['reason'] is not None
-    assert '0.1-lot minimum' in plan['reason']
+def test_a_leg_under_its_minimum_is_refused_and_names_the_number():
+    plan = clip_plan(a_pair(0.01, 0.01), meta(), meta(minimum=0.1, step=0.1),
+                     88.63, 96.475, 1.0)
+    # Leg A is fine at 0.01; leg B cannot trade under 0.1, so the
+    # CLICK is refused — one leg alone is a naked position.
     assert plan['leg_b_lots'] == 0.0
+    assert '0.1-lot minimum' in plan['reason']
+    assert 'leg B' in plan['reason']
 
 
-def test_an_inflated_hedge_is_refused_against_the_brokers_ceiling():
-    """An inverted beta once sized leg B at 5,167 lots of gold — $2.25bn
-    — and the plan reported it as fine. MT5 would have rejected it AFTER
-    leg A was already on."""
-    plan = clip_plan(_pair(hedge_ratio=0.0149, clip_lots_a=1.0,
-                           clip_lots_b=5167.0),
-                     META_A, META_B, 4292.0, 4351.0, spreads=1.0)
-    assert plan['reason'] is not None
-    assert "broker's maximum" in plan['reason']
+def test_a_leg_over_the_brokers_MAXIMUM_is_refused_before_either_moves():
+    """Discovered AFTER leg A has filled is a naked leg. In the
+    stat-arb system an inverted beta asked for 5,167 lots of gold and
+    the plan reported it as fine."""
+    plan = clip_plan(a_pair(), meta(maximum=50.0), meta(), 88.63, 96.475,
+                     100.0)
+    assert plan['reason'] and 'maximum' in plan['reason']
+    assert '50' in plan['reason']
+    # ...and it says which Qty asked for it.
+    assert 'leg A' in plan['reason']
 
 
-# -- HOW the two legs are matched -----------------------------------------
-#
-# The desk's rule, in its own words: where the underlying is the SAME
-# instrument — spot against its future, one future against another —
-# the lot size should be the same on both legs. Where it is not — WTI
-# against Brent — there is nothing shared to match lot for lot, and what
-# makes the two sides comparable is the MONEY on each.
-#
-# Only the units hedge cancels exactly. Under the other two the residual
-# is a real outright position in the underlying, and it is reported
-# rather than hidden.
-
-from mt5trader.sizing import basis_for, hedge_per_lot, residual_units
+def test_contract_sizes_that_are_not_known_yet_refuse_rather_than_guess():
+    plan = clip_plan(a_pair(), {}, {}, 88.63, 96.475, 1.0)
+    assert 'contract sizes are not known' in plan['reason']
 
 
-def test_AUTO_follows_the_pair_type():
-    assert basis_for('SPOT_FUTURE') == 'SAME_LOTS'
-    assert basis_for('FUTURE_FUTURE') == 'SAME_LOTS'
-    assert basis_for('RELATED') == 'NOTIONAL'
+# -- the money multiplier --------------------------------------------------
+
+def test_k_is_leg_bs_units_and_follows_the_typed_lots():
+    """`k = L_B x C_B` is the ONE multiplier every spread-to-money
+    conversion uses, and it is LEG B's."""
+    plan = clip_plan(a_pair(1.0, 2.0), meta(), meta(contract=100.0),
+                     88.63, 96.475, 10.0)
+    assert plan['spread_units'] == pytest.approx(20.0 * 100.0)
+    # ...and the per-Qty figure, which is what the exit levels are
+    # priced per and does not move when the keypad is touched.
+    assert plan['spread_units_per_qty'] == pytest.approx(2.0 * 100.0)
 
 
-def test_a_basis_the_trader_CHOSE_outranks_the_pair_type():
-    """The control: AUTO is a default, not a rule that cannot be
-    overridden."""
-    assert basis_for('RELATED', 'SAME_LOTS') == 'SAME_LOTS'
-    assert basis_for('SPOT_FUTURE', 'UNITS') == 'UNITS'
-    # ...and anything unrecognised falls back to the pair type rather
-    # than to a basis nobody picked.
-    assert basis_for('RELATED', 'nonsense') == 'NOTIONAL'
+def test_spread_units_is_zero_only_when_there_is_nothing_to_price():
+    assert spread_units(0.0, 100.0) == 0.0
+    assert spread_units(1.0, 0.0) == 0.0
+    assert spread_units(1.5, 100.0) == pytest.approx(150.0)
 
 
-def test_lot_for_lot_is_one_for_one_whatever_else_is_true():
-    """The same underlying: a lot of the spot IS a lot of the future,
-    and neither the contract sizes nor the beta change that."""
-    assert hedge_per_lot('SAME_LOTS', 100.0, 5000.0, beta=2.0) == 1.0
+def test_round_step_snaps_nearest_and_down_where_asked():
+    assert round_step(0.055, 0.01) == pytest.approx(0.06)
+    assert round_step(0.055, 0.01, down=True) == pytest.approx(0.05)
+    # DOWN, under the minimum, is 0.0 — not a size the broker takes.
+    assert round_step(0.005, 0.01, minimum=0.01, down=True) == 0.0
 
 
-def test_by_notional_puts_the_same_MONEY_on_each_side():
-    """WTI at 60 against Brent at 64, both 1,000 a lot: the cheaper leg
-    needs more of it."""
-    per_lot = hedge_per_lot('NOTIONAL', 1000.0, 1000.0,
-                            price_a=64.0, price_b=60.0)
-    assert per_lot == pytest.approx(64.0 / 60.0)
-    # ...and the money on each side then matches.
-    assert 1.0 * 1000.0 * 64.0 == pytest.approx(per_lot * 1000.0 * 60.0)
+def test_the_minimum_notional_a_leg_still_reports_what_it_costs():
+    floor = minimum_notional(1000.0, 1000.0, 88.63, 96.475, 1.0, 0.01, 0.01)
+    assert floor == pytest.approx(886.3, rel=0.01)
 
 
-def test_by_notional_says_NOTHING_rather_than_guessing_without_a_price():
-    """Money against money cannot be settled before both legs have a
-    quote. 0.0 reads as 'not sized' everywhere, not as zero lots."""
-    assert hedge_per_lot('NOTIONAL', 1000.0, 1000.0) == 0.0
+# -- the sentence the ladder prints ---------------------------------------
 
-
-def test_by_units_is_the_spread_arithmetics_own_hedge():
-    """The control, and the old behaviour: L_B = C_A / (beta x C_B)."""
-    assert hedge_per_lot('UNITS', 1000.0, 100.0, beta=2.0) == \
-        pytest.approx(5.0)
-
-
-def test_the_units_hedge_is_the_one_that_CANCELS():
-    """Which is why it is still on offer. Everything else leaves an
-    outright position in the underlying."""
-    per_lot = hedge_per_lot('UNITS', 1000.0, 100.0, beta=2.0)
-    assert residual_units(1.0, per_lot, 1000.0, 100.0, beta=2.0) == \
-        pytest.approx(0.0)
-
-
-def test_lot_for_lot_across_UNEQUAL_contracts_leaves_a_residual():
-    """And it is not small: 1 lot of a 1,000-unit contract against 1 lot
-    of a 100-unit one is 900 units net long. Said out loud, because a
-    spread trade carrying an outright nobody knows about is the failure
-    this module exists to prevent."""
-    assert residual_units(1.0, 1.0, 1000.0, 100.0, beta=1.0) == \
-        pytest.approx(900.0)
-
-
-def test_hedge_lots_rounds_the_chosen_basis_DOWN_to_leg_Bs_step():
-    """Whichever basis: the hedge must not overshoot the position it
-    hedges. Short is the recoverable error."""
-    lots = hedge_lots(1.0, 1000.0, 1000.0, beta=1.0, step=0.1,
-                      basis='NOTIONAL', price_a=64.0, price_b=60.0)
-    assert lots == pytest.approx(1.0)          # 1.0667 down to the 0.1 step
+def test_the_derivation_says_lots_and_money_in_the_same_breath():
+    """A number with no unit is not checkable (spec 11)."""
+    plan = clip_plan(a_pair(), meta(), meta(), 88.63, 96.475, 100.0)
+    assert plan['derivation'] == \
+        'Qty 100 = 100 lots A / 100 lots B, $100,000.00 per 1.00 of spread'

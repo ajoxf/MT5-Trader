@@ -501,7 +501,14 @@ def pair():
         leg_a={'account': 'acct_a', 'symbol': 'XAUUSD_'},
         leg_b={'account': 'acct_b', 'symbol': 'GC1226'},
         hedge_ratio=1.0, hedge_ratio_for='XAUUSD_|GC1226',
-        increment=0.01, default_quantity=1.0)
+        increment=0.01, default_quantity=1.0,
+        # What ONE Qty is on each leg. Typed now, not derived — and set
+        # to what this pair's matched minimum used to resolve to, so
+        # every test written against that size goes on testing what it
+        # was written to test. The future's minimum is 0.10 against the
+        # spot's 0.01, which is CFI's real shape and the reason a click
+        # is quoted in Qty rather than in lots.
+        clip_lots_a=0.10, clip_lots_b=0.10)
 
 
 @pytest.fixture

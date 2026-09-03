@@ -436,11 +436,11 @@ def test_diagnose_checks_the_symbols_and_whether_the_two_legs_fit(wired,
 
     names = [check['name'] for check in body['checks']]
     assert 'Symbol XAUUSD_ (leg A)' in names
-    assert 'Hedge ratio' in names and 'One spread' in names
+    assert 'Hedge ratio' in names and 'One Qty' in names
     spread = [check for check in body['checks'] if check['name'] == 'Spread'][0]
     assert spread['status'] == 'PASS'
     clip = [check for check in body['checks']
-            if check['name'] == 'One spread'][0]
+            if check['name'] == 'One Qty'][0]
     assert 'per 1.00 of spread' in clip['message']
     assert body['ok'] is True
 
@@ -520,10 +520,15 @@ def test_deriving_a_pair_shows_every_number_and_its_derivation(wired):
     # max(tick B, beta x tick A), with the derivation beside it.
     assert body['increment'] == pytest.approx(0.01)
     assert 'max(tick B' in body['increment_derivation']
-    # The matched minimum: leg B's 0.10 binds, so leg A is walked up.
-    assert body['clip_lots_a'] == pytest.approx(0.10)
-    assert body['clip_lots_b'] == pytest.approx(0.10)
-    assert body['spread_units'] == pytest.approx(10.0)
+    # What one Qty is on each leg. BOTH are the trader's now, and a
+    # pair that names neither is one lot a side.
+    assert body['clip_lots_a'] == pytest.approx(1.0)
+    assert body['clip_lots_b'] == pytest.approx(1.0)
+    assert body['spread_units'] == pytest.approx(100.0)
+    # ...and the derivation names the brokers' own minimums, which is
+    # what the trader needs in order to choose.
+    assert '1 Qty = 1 lots A / 1 lots B' in body['clip_derivation']
+    assert '0.01 and 0.1 lots' in body['clip_derivation']
     # Leg B's 0.10-lot minimum binds, priced off leg A's MID.
     assert body['min_notional_usd'] == pytest.approx(0.10 * 100 * 4292.10)
     # Which leg should quote, from MEASURED widths.

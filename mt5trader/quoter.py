@@ -492,37 +492,25 @@ class Quoter:
         state, filled = self._pull_residual(pair, group, state, filled, ticket)
 
         meta_a, meta_b = pair.meta_a or {}, pair.meta_b or {}
-        beta = float(pair.hedge_ratio or 1.0)
         contract_a = float(meta_a.get('contract_size') or 0.0)
         contract_b = float(meta_b.get('contract_size') or 0.0)
         leg_a_side, leg_b_side = group.side.leg_sides()
-        basis = sizing.basis_for(pair.pair_type,
-                                 getattr(pair, 'sizing_basis', 'AUTO'))
-        # The LIVE mid where there is one. NOTIONAL sizing is money
-        # against money, so a ratio taken from the metadata MT5 handed
-        # back at resolve time is a ratio from whenever the engine
-        # started; that is the fallback, not the reading.
-        live = self._markets.get(pair.key) or {}
-        price_a = live.get('leg_a_mid') or meta_a.get('mid')
-        price_b = live.get('leg_b_mid') or meta_b.get('mid')
+        # THE TRADER'S OWN RATIO, read the way round this fill needs
+        # it. A click and a fill must cross the same pair of sizes, or
+        # the pair is hedged on one route and not on the other.
+        ratio = sizing.leg_ratio(pair)      # leg B lots per lot of A
 
         if group.leg == 'b':
             cross_leg, cross_side = 'a', leg_a_side
-            # The INVERSE of the same ratio, so a fill on leg B hedges
-            # exactly as a click on leg A would have. Read the other
-            # way round it is the same match, on the same basis.
-            per_lot = sizing.hedge_per_lot(basis, contract_a, contract_b,
-                                           beta, price_a, price_b)
             cross_volume = sizing.round_step(
-                (filled / per_lot) if per_lot else 0.0,
+                (filled / ratio) if ratio else 0.0,
                 meta_a.get('volume_step'), meta_a.get('volume_min'), down=True)
             quote_side = leg_b_side
         else:
             cross_leg, cross_side = 'b', leg_b_side
-            cross_volume = sizing.hedge_lots(
-                filled, contract_a, contract_b, beta,
-                meta_b.get('volume_step'), meta_b.get('volume_min'),
-                basis=basis, price_a=price_a, price_b=price_b)
+            cross_volume = sizing.round_step(
+                filled * ratio,
+                meta_b.get('volume_step'), meta_b.get('volume_min'), down=True)
             quote_side = leg_a_side
 
         cross = self.executor._cross_with_deadline(

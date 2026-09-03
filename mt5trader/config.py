@@ -49,24 +49,6 @@ def pair_type_name(value):
     return name if name in PAIR_TYPES else 'RELATED'
 
 
-def _sizing_basis(value, key=None):
-    """One of `sizing.SIZING_BASES`. Blank is AUTO.
-
-    An unrecognised value is AUTO too, and SAYS SO once: AUTO follows
-    the pair type, which is the desk's own rule, and falling back to a
-    basis the trader did not choose is worse than falling back to the
-    rule they described.
-    """
-    from .sizing import SIZING_BASES
-    name = str(value or 'AUTO').strip().upper()
-    if name in SIZING_BASES:
-        return name
-    _warn_once(f"pair '{key}': sizing_basis '{value}' is not one of "
-               f"{', '.join(SIZING_BASES)} — using AUTO, which follows the "
-               f"pair type")
-    return 'AUTO'
-
-
 #: Warnings already said once, so a file re-read every few seconds
 #: does not scroll the interesting line off the screen.
 _WARNED = set()
@@ -373,8 +355,7 @@ class PairConfig:
 
     def __init__(self, key, name=None, leg_a=None, leg_b=None,
                  hedge_ratio=1.0, hedge_ratio_for=None, pair_type='SPOT_FUTURE',
-                 increment=None, clip_lots_a=None, clip_lots_b=None,
-                 sizing_basis='AUTO',
+                 increment=None, clip_lots_a=1.0, clip_lots_b=1.0,
                  default_quantity=1.0, order_type=OrderType.LIMIT.value,
                  exit_type=OrderType.MARKET.value,
                  time_in_force=TimeInForce.DAY.value,
@@ -398,20 +379,17 @@ class PairConfig:
         #: Spread ticks per ladder row. None = derive it (see
         #: `derived_increment`) rather than guess a readable-looking one.
         self.increment = increment
-        #: What ONE spread means in leg lots. None until the matched
-        #: minimum can be computed from both legs' MT5 metadata.
-        self.clip_lots_a = clip_lots_a
-        self.clip_lots_b = clip_lots_b
-        #: HOW leg B is matched to leg A. AUTO follows the pair type,
-        #: which is the desk's own rule: the same lot size where the
-        #: underlying is the same instrument (spot vs future, future vs
-        #: future), and equal NOTIONAL where it is not (WTI against
-        #: Brent — nothing shared to match lot for lot, so the money on
-        #: each side is what makes them comparable).
+        #: What ONE unit of the Qty box means on each leg, in LOTS.
+        #: BOTH are the trader's: Qty 100 at 1 and 1 is 100 lots of leg
+        #: A against 100 of leg B; at 1 and 2 it is 100 against 200.
         #:
-        #: UNITS is the spread arithmetic's own hedge and what every
-        #: pair used before there was a choice. See `sizing.hedge_per_lot`.
-        self.sizing_basis = _sizing_basis(sizing_basis, key)
+        #: Blank reads as 1. Nothing derives leg B any more — it was
+        #: computed from the hedge arithmetic, or lot for lot, or by
+        #: equal notional, and every one of those could round a leg to
+        #: zero or size a pair the trader had not asked for. A number
+        #: typed into a box can do neither.
+        self.clip_lots_a = float(clip_lots_a or 1.0)
+        self.clip_lots_b = float(clip_lots_b or 1.0)
         self.default_quantity = float(default_quantity or 1.0)
         # Blank is the DEFAULT, never an exception: see `_choice`.
         self.order_type = _choice(OrderType, order_type,
@@ -623,7 +601,7 @@ class PairConfig:
                    'default_quantity', 'quoting_leg', 'rows',
                    # What ONE spread means in leg A lots. Leg B is
                    # never typed: it is the hedge, and it is derived.
-                   'clip_lots_a', 'sizing_basis',
+                   'clip_lots_a', 'clip_lots_b',
                    'algo_window', 'show_fair_window', 'pair_type')
                   + tuple(EXIT_FIELDS))
 
@@ -664,21 +642,13 @@ class PairConfig:
                     continue          # a ladder always has a size
             elif field == 'rows':
                 value = int(value or 30)
-            elif field == 'clip_lots_a':
-                value = _blank_to_none(value)
-            elif field == 'sizing_basis':
-                value = _sizing_basis(value, self.key)
+            elif field in ('clip_lots_a', 'clip_lots_b'):
+                # Blank is 1, never None: with nothing left to derive,
+                # an unset leg has no other honest reading.
+                value = float(_blank_to_none(value) or 1.0)
             if getattr(self, field) != value:
                 setattr(self, field, value)
                 changed.append(field)
-                if field in ('clip_lots_a', 'sizing_basis'):
-                    # Leg B is the HEDGE of leg A, never a number in
-                    # its own right. Dropping it makes the coordinator
-                    # re-derive it against this leg A, the beta and
-                    # both contract sizes on the next poll — keeping
-                    # the old one would leave a pair whose two legs no
-                    # longer hedge each other.
-                    self.clip_lots_b = None
         return changed
 
     def to_dict(self):
@@ -688,7 +658,6 @@ class PairConfig:
             'hedge_ratio_for': self.hedge_ratio_for,
             'pair_type': self.pair_type, 'increment': self.increment,
             'clip_lots_a': self.clip_lots_a, 'clip_lots_b': self.clip_lots_b,
-            'sizing_basis': self.sizing_basis,
             'default_quantity': self.default_quantity,
             'order_type': self.order_type.value,
             'exit_type': self.exit_type.value,

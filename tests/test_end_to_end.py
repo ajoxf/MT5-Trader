@@ -82,7 +82,11 @@ class Desk:
             leg_a={'account': 'spot', 'symbol': 'XAUUSD_'},
             leg_b={'account': 'fut', 'symbol': 'GC1226'},
             hedge_ratio=1.0, hedge_ratio_for='XAUUSD_|GC1226',
-            increment=0.01, default_quantity=1.0, order_type='MARKET')
+            increment=0.01, default_quantity=1.0, order_type='MARKET',
+            # What one Qty is on each leg, as the trader would type it.
+            # The future's minimum is 0.10 against the spot's 0.01, so
+            # this is the smallest size that clears both.
+            clip_lots_a=0.10, clip_lots_b=0.10)
         config = TraderConfig(pairs={pair.key: pair})
         config.settings.update({'POLL_INTERVAL_SEC': 0.05,
                                 'COMMAND_POLL_SEC': 0.01,

@@ -160,9 +160,10 @@ class CommandRunner:
         'default_quantity': float,
         'quoting_leg': lambda v: v if v in ('a', 'b') else None,
         'rows': int,
-        #: HOW leg B is matched to leg A: lot for lot, by notional, by
-        #: the units hedge, or AUTO — which follows the pair type.
-        'sizing_basis': lambda v: str(v or 'AUTO').upper(),
+        #: What ONE unit of Qty is on each leg, in lots. Both typed;
+        #: blank reads as 1.
+        'clip_lots_a': lambda v: float(v or 1.0),
+        'clip_lots_b': lambda v: float(v or 1.0),
         #: AutoRouting: on a fill, rest a working order to close at the
         #: take-profit. Default OFF, and it arms a target and NO STOP.
         'auto_route': bool,
