@@ -28,10 +28,15 @@ terminal that runs with one, and the first-run screen asking the trader
 to choose costs them ten seconds once.
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
+import re
 import secrets
+import struct
 import time
 
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -55,6 +60,23 @@ IDLE_SEC = 8 * 3600.0
 #: The shortest password the terminal will accept. Short enough not to
 #: be theatre, long enough that MAX_FAILURES is not the only defence.
 MIN_PASSWORD = 10
+
+#: The authenticator's step, in seconds. Thirty is what every
+#: authenticator app assumes and none of them let you change.
+TOTP_STEP = 30
+
+#: How many steps either side of now are accepted. One — thirty seconds
+#: of slack for a phone clock that drifts and a trader who types slowly.
+#: More than that is thirty more seconds in which a shoulder-surfed code
+#: still works.
+TOTP_WINDOW = 1
+
+#: Recovery codes handed over at enrolment. Ten is enough to survive a
+#: lost phone more than once and few enough to print on one line each.
+RECOVERY_CODES = 10
+
+#: The name the authenticator app shows beside the code.
+ISSUER = 'Nexus'
 
 
 class AuthError(Exception):
@@ -190,6 +212,119 @@ class Store:
         user = self.load()['users'].get(_tidy_username(username)) or {}
         return _lock_note(user, _now() if now is None else now)
 
+    # -- the second factor -------------------------------------------------
+
+    def totp_state(self, username):
+        """What this account's authenticator is: 'none', 'pending' or
+        'on'."""
+        user = self.load()['users'].get(_tidy_username(username)) or {}
+        if not user.get('totp_secret'):
+            return 'none'
+        return 'on' if user.get('totp_confirmed') else 'pending'
+
+    def load_secret(self, username):
+        """The secret this account is enrolling with, or None."""
+        user = self.load()['users'].get(_tidy_username(username)) or {}
+        return user.get('totp_secret')
+
+    def start_enrolment(self, username):
+        """Mint a secret to show, and keep it UNCONFIRMED.
+
+        Unconfirmed because an account whose authenticator was never
+        proved to work is an account nobody can get into — the enrolment
+        is not finished until a code off the phone comes back.
+        """
+        username = _tidy_username(username)
+        body = self.load()
+        user = body['users'].get(username)
+        if not user:
+            raise AuthError(f'there is no account called {username}.')
+        secret = new_totp_secret()
+        user['totp_secret'] = secret
+        user['totp_confirmed'] = False
+        self.save(body)
+        return secret
+
+    def confirm_enrolment(self, username, code, now=None):
+        """Prove the phone works, then hand over the recovery codes.
+
+        Returns the codes in the clear, once. What is kept is hashes:
+        the file must not be a list of ways in.
+        """
+        now = _now() if now is None else now
+        username = _tidy_username(username)
+        body = self.load()
+        user = body['users'].get(username) or {}
+        secret = user.get('totp_secret')
+        if not secret:
+            raise AuthError('this account has no authenticator to confirm — '
+                            'start again.')
+        counter = totp_counter(secret, code, at=now)
+        if counter is None:
+            raise AuthError('that code is not the one this authenticator is '
+                            'showing. Check the clock on the phone, and try '
+                            'the next code.')
+        codes = new_recovery_codes()
+        salt = secrets.token_hex(16)
+        user['totp_confirmed'] = True
+        user['totp_last_counter'] = counter
+        user['recovery_salt'] = salt
+        user['recovery_hashes'] = [recovery_hash(salt, c) for c in codes]
+        self.save(body)
+        logging.info('account %s enrolled an authenticator', username)
+        return codes
+
+    def recovery_left(self, username):
+        user = self.load()['users'].get(_tidy_username(username)) or {}
+        return len(user.get('recovery_hashes') or [])
+
+    def check_second_factor(self, username, code, now=None):
+        """The six digits, or one recovery code. Raises with the reason.
+
+        Returns 'code' or 'recovery' so the screen can say which was
+        used — a trader who has just spent one of ten needs telling.
+        """
+        now = _now() if now is None else now
+        username = _tidy_username(username)
+        body = self.load()
+        user = body['users'].get(username)
+        if not user or not user.get('totp_confirmed'):
+            raise AuthError('this account has no authenticator set up.')
+        note = _lock_note(user, now)
+        if note:
+            raise AuthError(note)
+        secret = user['totp_secret']
+        counter = totp_counter(secret, code, at=now)
+        if counter is not None:
+            last = user.get('totp_last_counter')
+            if last is not None and counter <= last:
+                # Not a failure to count: it is the right code, used
+                # twice. Saying so is the difference between "wait eight
+                # seconds" and "your phone is wrong".
+                raise AuthError('that code has already been used — wait for '
+                                'the next one.')
+            user['totp_last_counter'] = counter
+            user['failures'] = 0
+            self.save(body)
+            return 'code'
+        typed = _tidy_recovery(code)
+        wanted = recovery_hash(user.get('recovery_salt'), typed)
+        for index, hashed in enumerate(user.get('recovery_hashes') or []):
+            if typed and secrets.compare_digest(hashed, wanted):
+                # Single use: it is spent whether or not the phone ever
+                # comes back.
+                user['recovery_hashes'].pop(index)
+                user['failures'] = 0
+                self.save(body)
+                logging.warning('account %s signed in with a recovery code — '
+                                '%d left', username,
+                                len(user['recovery_hashes']))
+                return 'recovery'
+        return self._count_failure(body, user, username, now,
+                                   'that is not the code this account is '
+                                   'showing, and not one of its recovery '
+                                   'codes.')
+
     # -- the attempt itself ------------------------------------------------
 
     def authenticate(self, username, password, now=None):
@@ -221,21 +356,123 @@ class Store:
             user['last_login_at'] = now
             self.save(body)
             return username
+        return self._count_failure(body, user, username, now,
+                                   'that username and password do not match '
+                                   'an account on this machine.')
+
+    def _count_failure(self, body, user, username, now, sentence):
+        """One wrong attempt — of either factor — against the same count.
+
+        The same count on purpose: guessing the password and guessing
+        the code are the same attack, and letting the second one start
+        fresh would double the guesses on offer.
+        """
         user['failures'] = int(user.get('failures') or 0) + 1
         left = MAX_FAILURES - user['failures']
         if left <= 0:
             user['locked_until'] = now + LOCKOUT_SEC
             user['failures'] = 0
             self.save(body)
-            logging.warning('account %s locked after %d wrong passwords',
+            logging.warning('account %s locked after %d wrong attempts',
                             username, MAX_FAILURES)
             raise AuthError(_lock_note(user, now))
         self.save(body)
-        raise AuthError(f'that username and password do not match an account '
-                        f'on this machine. {left} '
+        raise AuthError(f'{sentence} {left} '
                         f'{"attempt" if left == 1 else "attempts"} left '
                         f'before this account is held shut for '
                         f'{_minutes(LOCKOUT_SEC)}.')
+
+
+# -- the second factor -----------------------------------------------------
+#
+# RFC 6238, implemented here rather than pulled in, because it is thirty
+# lines of stdlib and this is a product that installs on a machine with
+# no internet: every dependency is something the installer has to carry
+# and something that can fail to be there at 7am.
+
+def new_totp_secret():
+    """A fresh authenticator secret: 160 bits, base32, no padding."""
+    return base64.b32encode(secrets.token_bytes(20)).decode().rstrip('=')
+
+
+def totp_code(secret, at=None, step=TOTP_STEP):
+    """The six digits an authenticator would be showing right now."""
+    at = _now() if at is None else at
+    return _hotp(secret, int(at // step))
+
+
+def totp_counter(secret, code, at=None, step=TOTP_STEP, window=TOTP_WINDOW):
+    """The step this code belongs to, or None if it belongs to none.
+
+    The COUNTER, not True, because a code that was right thirty seconds
+    ago is right again for as long as its step lasts — and a code that
+    has been used once must not work a second time.
+    """
+    code = _tidy_code(code)
+    if len(code) != 6 or not code.isdigit():
+        return None
+    at = _now() if at is None else at
+    here = int(at // step)
+    for offset in range(-window, window + 1):
+        if secrets.compare_digest(_hotp(secret, here + offset), code):
+            return here + offset
+    return None
+
+
+def otpauth_uri(secret, username, issuer=ISSUER):
+    """What the QR code on the enrolment page encodes."""
+    from urllib.parse import quote
+    label = quote(f'{issuer}:{username}')
+    return (f'otpauth://totp/{label}?secret={secret}'
+            f'&issuer={quote(issuer)}&algorithm=SHA1&digits=6'
+            f'&period={TOTP_STEP}')
+
+
+def new_recovery_codes(count=RECOVERY_CODES):
+    """Codes for the day the phone is lost.
+
+    Shown once, stored as hashes, and each one works once. They are the
+    password reset too: there is no server to email a link from, and a
+    trader locked out of their own installed terminal has nobody to ring.
+
+    Sixty-four bits each, because these are not passwords: a password is
+    hashed slowly because a human chose it and a guesser can therefore
+    enumerate the likely ones. Nobody chose these — they come out of the
+    system's own randomness, and there is no shortlist to try.
+    """
+    return [f'{secrets.token_hex(4)}-{secrets.token_hex(4)}'
+            for _ in range(count)]
+
+
+def recovery_hash(salt, code):
+    """A recovery code as it is kept: salted SHA-256, not scrypt.
+
+    Deliberately the fast one. Slow hashing buys nothing against a
+    64-bit random secret — 2**64 SHA-256 evaluations is out of reach on
+    its own — and it costs a full second at enrolment, on a screen the
+    trader is standing in front of. Passwords still get scrypt, because
+    a password IS guessable.
+    """
+    return hashlib.sha256(
+        (str(salt) + _tidy_recovery(code)).encode('utf-8')).hexdigest()
+
+
+def _hotp(secret, counter):
+    key = base64.b32decode(secret + '=' * (-len(secret) % 8), casefold=True)
+    digest = hmac.new(key, struct.pack('>Q', int(counter)),
+                      hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    number = struct.unpack('>I', digest[offset:offset + 4])[0] & 0x7FFFFFFF
+    return f'{number % 1_000_000:06d}'
+
+
+def _tidy_code(code):
+    """What the trader typed, without the spaces the app puts in."""
+    return re.sub(r'[\s]', '', str(code or ''))
+
+
+def _tidy_recovery(code):
+    return re.sub(r'[^0-9a-f]', '', str(code or '').strip().lower())
 
 
 # -- session bookkeeping ---------------------------------------------------
@@ -311,7 +548,8 @@ def _lock_note(user, now):
     if not until or until <= now:
         return None
     return (f'this account is held shut for another '
-            f'{_minutes(until - now)} after {MAX_FAILURES} wrong passwords.')
+            f'{_minutes(until - now)} after {MAX_FAILURES} wrong '
+            f'attempts.')
 
 
 def _minutes(seconds):

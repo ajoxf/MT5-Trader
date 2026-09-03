@@ -40,6 +40,15 @@
   </form>
 </div>
 
+{% if recovery_note is not none %}
+<!-- Signed in with a recovery code. Nine left is fine; one left is a
+     week's notice that the terminal is about to become unopenable. -->
+<div class="banner" role="status">Signed in with a recovery code.
+  {{ recovery_note }} {{ 'is' if recovery_note == 1 else 'are' }} left.
+  {% if recovery_note < 4 %}Set the authenticator up again to get a new
+  set.{% endif %}</div>
+{% endif %}
+
 <!-- The engine banner. A dead coordinator must never be mistaken for a
      quiet market: that is the confusion that gets orders clicked into a
      screen with nothing behind it. -->

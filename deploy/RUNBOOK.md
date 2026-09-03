@@ -294,9 +294,17 @@ aws ssm start-session --target i-XXXXXXXX ^
 then open `http://localhost:8000` in your browser. Nothing inbound has
 to be open on the instance for this to work.
 
-The first person to open it is asked to choose a username and password.
-There is no default account and no default password — a terminal that
-ships with one is a terminal that runs with one. Those credentials are
-stored as a scrypt hash in `auth.json` beside the config; back that file
-up with the other four, or the next start will offer first-run setup to
-whoever opens the page.
+The first person to open it is asked to choose a username and password,
+and then to scan a QR code into an authenticator app. There is no
+default account and no default password — a terminal that ships with one
+is a terminal that runs with one.
+
+Enrolment ends by showing **ten recovery codes, once**. Print them. They
+are what gets you back in when the phone is lost, and they are the
+password reset too: nothing on this instance can email a link, and there
+is no support line that can read them back — what is on disk is hashes.
+
+All of it lives in `auth.json` beside the config: the password hash, the
+authenticator secret, the recovery hashes, and the cookie signing key for
+this machine. Back that file up with the other four, or the next start
+will offer first-run setup to whoever opens the page.

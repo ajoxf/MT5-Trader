@@ -24,7 +24,11 @@ from.
   about the person who sits down at a machine that is already on. Every
   endpoint is behind a session and every write carries a CSRF token,
   because `/api/command` is the button that sends orders. There is no
-  default account and no default password — the first run asks for one.
+  default account and no default password — the first run asks for one,
+  and no account reaches the ladder until it has enrolled an
+  authenticator. A TOTP code works ONCE; recovery codes are shown once
+  and stored as hashes, and they are also the password reset, because
+  there is no server to email a link from.
 - **Credentials live only in `.env`** — never in code, config, chat or a
   log line.
 - **Sweep our pendings at shutdown AND at startup**, magic-scoped.

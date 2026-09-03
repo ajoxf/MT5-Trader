@@ -100,3 +100,37 @@ button:hover { background: #275e97; }
   font-size: 11px;
   color: var(--muted);
 }
+
+
+/* -- the authenticator ---------------------------------------------- */
+
+.qr {
+  margin: 6px 0 10px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid var(--frame);
+  border-radius: 4px;
+  text-align: center;
+}
+.qr svg { width: 180px; height: 180px; }
+
+/* The typed fallback. Monospace and spaced in fours, because it is read
+   off a screen and typed into a phone. */
+.secret {
+  margin: 0;
+  padding: 8px 9px;
+  font: 13px/1.4 "Cascadia Mono", Consolas, ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  word-break: break-all;
+  background: #f6f7f9;
+  border: 1px solid var(--frame);
+  border-radius: 3px;
+}
+
+/* Shown once, so they are set out to be read off and written down. */
+.codes {
+  margin: 12px 0 0;
+  padding-left: 26px;
+  font: 13px/1.9 "Cascadia Mono", Consolas, ui-monospace, monospace;
+  letter-spacing: 0.06em;
+}

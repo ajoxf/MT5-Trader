@@ -3,6 +3,10 @@
 MetaTrader5>=5.0.45 ; sys_platform == "win32"
 python-dotenv>=1.0.0
 Flask>=3.0.0
+# The enrolment QR, drawn on this machine. Pure Python and no network:
+# the SVG writer needs nothing else installed. Without it the enrolment
+# page still works — it shows the secret to type instead.
+qrcode>=7.4
 
 # Tests. Playwright drives a real Chromium: Python tests cannot see a
 # script error that silently unregisters a handler, and that has

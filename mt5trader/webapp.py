@@ -40,6 +40,11 @@ from .legs import RemoteLeg
 #: screen nothing is behind.
 STATUS_STALE_SEC = 2.0
 
+#: How long a half-finished sign-in stays open. The password has already
+#: been typed by then, so a browser left on the code page overnight is
+#: not somewhere to leave it.
+PENDING_SEC = 300.0
+
 
 def create_app(status_path='status.json', command_path='commands.jsonl',
                results_path='results.json', config_path='config.json',
@@ -75,7 +80,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
     #: Reachable without being signed in. `static` is on the list so the
     #: login page has its stylesheet; nothing on it says anything about
     #: the account or the market.
-    OPEN = {'login', 'sign_in', 'setup', 'static'}
+    OPEN = {'login', 'sign_in', 'setup', 'static', 'code_form', 'code'}
 
     def wants_json():
         return request.path.startswith('/api/')
@@ -109,6 +114,18 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                 return jsonify({'ok': False,
                                 'error': 'change your password first'}), 403
             return redirect(url_for('password'))
+        # An account with no working authenticator gets no further than
+        # the page that gives it one. Half-enrolled is not enrolled: a
+        # secret nobody has proved they can read is an account nobody
+        # can get back into.
+        if endpoint not in ('enrol', 'enrol_form', 'logout',
+                            'password', 'password_form') \
+                and accounts.totp_state(session['user']) != 'on':
+            if wants_json():
+                return jsonify({'ok': False,
+                                'error': 'set up your authenticator '
+                                         'first'}), 403
+            return redirect(url_for('enrol_form'))
         auth.touch(session)
         return None
 
@@ -130,6 +147,40 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             return redirect(url_for('index'))
         return login_page('login', next_url=_local(request.args.get('next')))
 
+    def after_password(user):
+        """Where a correct password leads.
+
+        Not to the ladder: a password is one factor. The session is not
+        started here at all — until the code comes back there is nothing
+        to hijack but a username.
+        """
+        if accounts.totp_state(user) == 'on':
+            session.clear()
+            session['pending_user'] = user
+            session['pending_at'] = time.time()
+            session['pending_next'] = _local(request.form.get('next'))
+            auth.csrf_token(session)
+            return redirect(url_for('code_form'))
+        auth.start_session(session, user)
+        if accounts.must_change(user):
+            return redirect(url_for('password'))
+        return redirect(_local(request.form.get('next')))
+
+    def pending_user():
+        """Who is halfway through signing in, if anyone.
+
+        Halfway does not last: a browser left on the code page overnight
+        is a password that has already been typed.
+        """
+        user = session.get('pending_user')
+        at = session.get('pending_at')
+        if not user or not isinstance(at, (int, float)):
+            return None
+        if time.time() - at > PENDING_SEC:
+            session.clear()
+            return None
+        return user
+
     @app.post('/login')
     def sign_in():
         if not auth.csrf_ok(session, request.form.get('csrf_token')):
@@ -142,10 +193,66 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             logging.warning('sign-in refused: %s', e)
             return login_page('login', str(e), status=401,
                               next_url=_local(request.form.get('next')))
+        return after_password(user)
+
+    @app.get('/login/code')
+    def code_form():
+        if not pending_user():
+            return redirect(url_for('login'))
+        return login_page('code', recovery=accounts.recovery_left(
+            session['pending_user']))
+
+    @app.post('/login/code')
+    def code():
+        user = pending_user()
+        if not user:
+            return redirect(url_for('login'))
+        if not auth.csrf_ok(session, request.form.get('csrf_token')):
+            return login_page('code', 'that form was stale — try again',
+                              status=400)
+        try:
+            used = accounts.check_second_factor(user, request.form.get('code'))
+        except auth.AuthError as e:
+            logging.warning('second factor refused: %s', e)
+            return login_page('code', str(e), status=401,
+                              recovery=accounts.recovery_left(user))
+        target = session.get('pending_next') or '/'
         auth.start_session(session, user)
+        if used == 'recovery':
+            # Spent one of ten, and the trader has to know: the page
+            # they land on cannot say it, so this one does.
+            session['recovery_note'] = accounts.recovery_left(user)
         if accounts.must_change(user):
             return redirect(url_for('password'))
-        return redirect(_local(request.form.get('next')))
+        return redirect(_local(target))
+
+    @app.get('/enrol')
+    def enrol_form():
+        user = session['user']
+        if accounts.totp_state(user) == 'none':
+            accounts.start_enrolment(user)
+        secret = accounts.load_secret(user)
+        uri = auth.otpauth_uri(secret, user)
+        return login_page('enrol', user=user, secret=_grouped(secret),
+                          otpauth=uri, qr=_qr_svg(uri))
+
+    @app.post('/enrol')
+    def enrol():
+        user = session['user']
+        if request.form.get('codes_seen'):
+            # The recovery codes have been read. Nothing to confirm.
+            return redirect(url_for('index'))
+        try:
+            codes = accounts.confirm_enrolment(user, request.form.get('code'))
+        except auth.AuthError as e:
+            secret = accounts.load_secret(user) or \
+                accounts.start_enrolment(user)
+            uri = auth.otpauth_uri(secret, user)
+            return login_page('enrol', str(e), status=400, user=user,
+                              secret=_grouped(secret), otpauth=uri,
+                              qr=_qr_svg(uri))
+        # Shown once, and never again: what is stored is hashes.
+        return login_page('codes', user=user, codes=codes)
 
     @app.post('/setup')
     def setup():
@@ -298,7 +405,12 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         response = app.make_response(
             render_template('index.html', asset_version=asset_version(),
                             csrf_token=auth.csrf_token(session),
-                            user=session.get('user')))
+                            user=session.get('user'),
+                            # Popped: a spent recovery code is worth
+                            # saying once, on the screen the trader
+                            # lands on, and not on every reload after.
+                            recovery_note=session.pop('recovery_note',
+                                                      None)))
         # The PAGE itself is never cached: it carries the stamp that
         # tells the browser whether its cached CSS and JS are current.
         response.headers['Cache-Control'] = 'no-store'
@@ -1137,6 +1249,37 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return jsonify({'ok': True, 'deleted': key})
 
     return app
+
+
+def _grouped(secret):
+    """The secret in fours, for someone typing it off a screen.
+
+    The QR code is the way in; this is the way in when the QR code will
+    not scan, which on a phone held at the wrong angle is often enough
+    to matter.
+    """
+    secret = str(secret or '')
+    return ' '.join(secret[i:i + 4] for i in range(0, len(secret), 4))
+
+
+def _qr_svg(uri):
+    """The enrolment QR, as inline SVG, or None.
+
+    Inline because everything here is self-hosted and a QR served as a
+    second request is a QR that can arrive late or not at all. None when
+    the library is not installed — the typed secret beside it is the
+    fallback, and a missing picture must not mean a terminal nobody can
+    enrol on.
+    """
+    try:
+        import qrcode
+        import qrcode.image.svg
+        image = qrcode.make(uri, image_factory=qrcode.image.svg.SvgPathImage,
+                            box_size=10, border=2)
+        return image.to_string(encoding='unicode')
+    except Exception as e:                            # pragma: no cover
+        logging.warning('the enrolment QR could not be drawn: %s', e)
+        return None
 
 
 def _local(target):

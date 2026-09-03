@@ -17,6 +17,7 @@ So each test here is about a way in that must not exist:
 """
 
 import json
+import re
 import time
 
 import pytest
@@ -261,7 +262,9 @@ def test_the_first_run_screen_makes_the_only_account(app, store):
 
     assert made.status_code == 302
     assert store.usernames() == ['trader']       # tidied, and signed in
-    assert client.get('/api/status').status_code == 200
+    # ...and sent straight on to the authenticator, which is the rest of
+    # the door: a password on its own does not open this screen.
+    assert '/enrol' in client.get('/').headers['Location']
     # And the door closes behind it: setup is guarded on the STORE, so
     # the second caller cannot make a second account.
     other = app.test_client()
@@ -403,3 +406,262 @@ def test_the_page_carries_the_token_that_its_writes_need(app):
 
     assert 'name="csrf-token"' in body
     assert 'X-CSRF-Token' in body
+
+
+# -- the second factor -----------------------------------------------------
+
+def enrolled(store, username='trader', password=GOOD):
+    """An account with a working authenticator. Returns its secret."""
+    if username not in store.usernames():
+        store.create_user(username, password)
+    secret = store.start_enrolment(username)
+    store.confirm_enrolment(username, auth.totp_code(secret))
+    return secret
+
+
+def next_code(secret):
+    """The code the app will show next — enrolment spent this one."""
+    return auth.totp_code(secret, at=time.time() + auth.TOTP_STEP)
+
+
+def test_the_codes_are_the_ones_rfc_6238_specifies():
+    """Checked against the RFC's own vectors, because "my phone says a
+    different number" is not something to debug at 7am with a live
+    position on."""
+    import base64
+    secret = base64.b32encode(b'12345678901234567890').decode().rstrip('=')
+
+    assert auth.totp_code(secret, at=59) == '287082'
+    assert auth.totp_code(secret, at=1111111109) == '081804'
+    assert auth.totp_code(secret, at=1234567890) == '005924'
+
+
+def test_a_code_from_the_step_before_still_works(store):
+    """A trader who starts typing at 29 seconds past must not be told
+    they are wrong — and a phone clock is never exactly ours."""
+    secret = enrolled(store)
+    now = time.time() + 2 * auth.TOTP_STEP
+
+    assert store.check_second_factor(
+        'trader', auth.totp_code(secret, at=now - auth.TOTP_STEP),
+        now=now) == 'code'
+
+
+def test_a_code_from_last_year_does_not(store):
+    secret = enrolled(store)
+    now = time.time()
+
+    with pytest.raises(auth.AuthError):
+        store.check_second_factor('trader',
+                                  auth.totp_code(secret, at=now - 3600),
+                                  now=now)
+
+
+def test_a_code_works_once(store):
+    """Shoulder-surfed, or read off a screen share: the thirty seconds
+    it would otherwise stay valid for is thirty seconds too many."""
+    secret = enrolled(store)
+    now = time.time() + 5 * auth.TOTP_STEP
+    code = auth.totp_code(secret, at=now)
+    assert store.check_second_factor('trader', code, now=now) == 'code'
+
+    with pytest.raises(auth.AuthError) as again:
+        store.check_second_factor('trader', code, now=now + 1)
+
+    assert 'already been used' in str(again.value)
+    # ...and the control: the NEXT code is fine, so this is a replay
+    # being refused and not the authenticator being broken.
+    assert store.check_second_factor(
+        'trader', auth.totp_code(secret, at=now + auth.TOTP_STEP),
+        now=now + auth.TOTP_STEP) == 'code'
+
+
+def test_a_recovery_code_signs_in_once(store, paths):
+    """The day the phone is lost. There is no server to email a reset
+    link from, so this is the whole of the answer."""
+    store.create_user('trader', GOOD)
+    secret = store.start_enrolment('trader')
+    codes = store.confirm_enrolment('trader', auth.totp_code(secret))
+    assert len(codes) == auth.RECOVERY_CODES
+
+    assert store.check_second_factor('trader', codes[0]) == 'recovery'
+    assert store.recovery_left('trader') == auth.RECOVERY_CODES - 1
+
+    # Spent, whether or not the phone ever comes back.
+    with pytest.raises(auth.AuthError):
+        store.check_second_factor('trader', codes[0])
+    # And the control: a different one still works.
+    assert store.check_second_factor('trader', codes[1]) == 'recovery'
+
+
+def test_the_recovery_codes_are_not_stored_in_the_clear(store, paths):
+    """The file would otherwise be a list of ten ways in."""
+    store.create_user('trader', GOOD)
+    secret = store.start_enrolment('trader')
+    codes = store.confirm_enrolment('trader', auth.totp_code(secret))
+
+    raw = open(paths['auth'], encoding='utf-8').read()
+
+    for code in codes:
+        assert code not in raw
+    assert store.check_second_factor('trader', codes[0]) == 'recovery'
+
+
+def test_guessing_the_code_counts_against_the_same_lockout(store):
+    """Guessing the password and guessing the code are the same attack.
+    Letting the second start fresh would double the guesses on offer."""
+    secret = enrolled(store)
+    for _ in range(auth.MAX_FAILURES):
+        with pytest.raises(auth.AuthError):
+            store.check_second_factor('trader', '000000')
+
+    with pytest.raises(auth.AuthError) as shut:
+        store.check_second_factor('trader', next_code(secret))
+    assert 'held shut for another' in str(shut.value)
+
+
+def test_an_unconfirmed_enrolment_is_not_an_authenticator(store):
+    """A secret nobody has proved they can read is an account nobody can
+    get back into."""
+    store.create_user('trader', GOOD)
+    store.start_enrolment('trader')
+
+    assert store.totp_state('trader') == 'pending'
+    with pytest.raises(auth.AuthError):
+        store.check_second_factor('trader', '000000')
+
+
+def test_enrolment_refuses_a_code_the_phone_is_not_showing(store):
+    store.create_user('trader', GOOD)
+    store.start_enrolment('trader')
+
+    with pytest.raises(auth.AuthError) as refusal:
+        store.confirm_enrolment('trader', '000000')
+
+    assert 'clock on the phone' in str(refusal.value)
+    assert store.totp_state('trader') == 'pending'
+
+
+# -- the second factor, through the door -----------------------------------
+
+def test_the_password_alone_does_not_open_the_terminal(app, store):
+    """The whole point. A password that has leaked is still only a
+    password."""
+    enrolled(store)
+    client = app.test_client()
+
+    answer = client.post('/login', data={'username': 'trader',
+                                         'password': GOOD,
+                                         'csrf_token': csrf_of(client)})
+
+    assert answer.status_code == 302
+    assert '/login/code' in answer.headers['Location']
+    # And nothing is signed in yet: there is no session to hijack, only
+    # a username sitting in a cookie.
+    assert client.get('/api/status').status_code == 401
+
+
+def test_the_code_finishes_the_sign_in(app, store):
+    secret = enrolled(store)
+    client = app.test_client()
+    client.post('/login', data={'username': 'trader', 'password': GOOD,
+                                'csrf_token': csrf_of(client)})
+
+    done = client.post('/login/code', data={'code': next_code(secret),
+                                            'csrf_token': csrf_of(client)})
+
+    assert done.status_code == 302
+    assert client.get('/api/status').status_code == 200
+
+
+def test_a_half_finished_sign_in_does_not_wait_all_night(app, store):
+    """The password has already been typed by then."""
+    enrolled(store)
+    client = app.test_client()
+    client.post('/login', data={'username': 'trader', 'password': GOOD,
+                                'csrf_token': csrf_of(client)})
+    with client.session_transaction() as session:
+        session['pending_at'] = time.time() - 3600
+
+    answer = client.get('/login/code')
+
+    assert answer.headers['Location'] == '/login'
+
+
+def test_a_wrong_code_says_what_it_would_also_accept(app, store):
+    """The trader whose phone is in the other room needs to be told,
+    on the screen, that the codes they printed will do."""
+    enrolled(store)
+    client = app.test_client()
+    client.post('/login', data={'username': 'trader', 'password': GOOD,
+                                'csrf_token': csrf_of(client)})
+
+    answer = client.post('/login/code', data={'code': '000000',
+                                              'csrf_token': csrf_of(client)})
+
+    assert answer.status_code == 401
+    assert b'recovery codes' in answer.data
+
+
+def test_an_account_with_no_authenticator_gets_no_further_than_enrolling(app):
+    """A new account cannot trade until it has a second factor. Half of
+    a login is not a login."""
+    client = signed_in(app, totp=False)
+
+    ladder = client.get('/')
+    assert ladder.status_code == 302 and '/enrol' in ladder.headers['Location']
+    assert client.post('/api/command', json={'kind': 'flatten_pair'}
+                       ).status_code == 403
+
+
+def test_enrolling_shows_a_qr_and_the_secret_to_type(app, store):
+    """The QR is the way in; the typed secret is the way in when a phone
+    held at the wrong angle will not scan it."""
+    client = signed_in(app, totp=False)
+
+    page = client.get('/enrol').data.decode()
+
+    assert '<svg' in page                       # drawn here, not fetched
+    assert 'otpauth://totp/' not in page or 'secret' in page
+    secret = store.load_secret('trader')
+    assert secret[:4] in page                   # grouped in fours
+
+
+def test_enrolling_ends_with_the_recovery_codes_on_screen(app, store):
+    """Shown once. What is on disk from here on is hashes, so there is
+    no screen and no support line that can show them again."""
+    client = signed_in(app, totp=False)
+    client.get('/enrol')
+    secret = store.load_secret('trader')
+
+    page = client.post('/enrol', data={'code': auth.totp_code(secret),
+                                       'csrf_token': client.csrf_token})
+
+    assert page.status_code == 200
+    body = page.data.decode()
+    assert 'Save these recovery codes' in body
+    shown = re.findall(r'<li>([0-9a-f]{8}-[0-9a-f]{8})</li>', body)
+    assert len(shown) == auth.RECOVERY_CODES
+    # ...and they are the ones that work.
+    assert store.check_second_factor('trader', shown[0]) == 'recovery'
+    assert store.totp_state('trader') == 'on'
+
+
+def test_a_spent_recovery_code_is_said_out_loud(app, store):
+    """Nine left is fine. One left is a week's notice that the terminal
+    is about to become unopenable, and nobody will count them."""
+    store.create_user('trader', GOOD)
+    secret = store.start_enrolment('trader')
+    codes = store.confirm_enrolment('trader', auth.totp_code(secret))
+    client = app.test_client()
+    client.post('/login', data={'username': 'trader', 'password': GOOD,
+                                'csrf_token': csrf_of(client)})
+    client.post('/login/code', data={'code': codes[0],
+                                     'csrf_token': csrf_of(client)})
+
+    body = client.get('/').data.decode()
+
+    assert 'Signed in with a recovery code' in body
+    assert f'{auth.RECOVERY_CODES - 1} are left' in body
+    # Said once, not on every reload for the rest of the day.
+    assert 'Signed in with a recovery code' not in client.get('/').data.decode()

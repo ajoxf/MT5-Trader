@@ -549,15 +549,32 @@ class TokenClient(FlaskClient):
         return super().open(*args, **kwargs)
 
 
-def signed_in(app, username='trader', password=TEST_PASSWORD):
-    """A client that has signed in — through the real login endpoint.
+def signed_in(app, username='trader', password=TEST_PASSWORD, totp=True):
+    """A client that has signed in — through the real login endpoints.
 
     Not a session poked into a cookie: the fixture goes through the same
-    door the trader does, so a login that breaks breaks the suite.
+    door the trader does, both factors, so a login that breaks breaks
+    the suite.
+
+    `totp=False` leaves the account with no authenticator, which is the
+    state a brand-new account is in and the one that must not be able to
+    reach the ladder.
     """
     store = auth.Store(app.config['AUTH_PATH'])
     if username not in store.usernames():
         store.create_user(username, password)
+    if totp and store.totp_state(username) != 'on':
+        secret = store.start_enrolment(username)
+        store.confirm_enrolment(username, auth.totp_code(secret))
+    if totp:
+        # A code works once, which is the point of it — and two tests in
+        # a module sign the same account in inside the same thirty
+        # seconds. A trader waits for the next code; a fixture cannot,
+        # so it forgets the last one it used. The replay refusal itself
+        # is tested in test_auth.py, against the store.
+        body = store.load()
+        body['users'][username]['totp_last_counter'] = None
+        store.save(body)
     app.test_client_class = TokenClient
     client = app.test_client()
     with client.session_transaction() as session:
@@ -566,6 +583,19 @@ def signed_in(app, username='trader', password=TEST_PASSWORD):
                                            'password': password,
                                            'csrf_token': token})
     assert response.status_code in (302, 303), response.data
+    if '/login/code' in response.headers['Location']:
+        with client.session_transaction() as session:
+            token = auth.csrf_token(session)
+        secret = store.load_secret(username)
+        # The NEXT step's code, not this one's: enrolment already spent
+        # the current one, and a code that has been used is refused —
+        # which is the whole point of it.
+        response = client.post(
+            '/login/code',
+            data={'code': auth.totp_code(secret,
+                                         at=time.time() + auth.TOTP_STEP),
+                  'csrf_token': token})
+        assert response.status_code in (302, 303), response.data
     with client.session_transaction() as session:
         client.csrf_token = session['csrf']
     return client
@@ -585,4 +615,12 @@ def sign_in_browser(page, url, username='trader', password=TEST_PASSWORD):
     if page.locator('#confirm').count():
         page.fill('#confirm', password)
     page.click('button[type="submit"]')
+    if page.locator('.secret').count():
+        # First run: enrol an authenticator the way the trader does —
+        # off the secret the page is showing, not out of the store.
+        secret = page.inner_text('.secret').replace(' ', '')
+        page.fill('#code', auth.totp_code(secret))
+        page.click('button[type="submit"]')
+        page.wait_for_selector('.codes', timeout=15000)
+        page.click('button[type="submit"]')
     page.wait_for_selector('#brand', timeout=15000)
