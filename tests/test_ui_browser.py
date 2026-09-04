@@ -4328,3 +4328,73 @@ def test_an_order_that_never_reached_the_broker_says_so_across_the_row(page):
         window.MT5Trader.render();
     }""")
     page.wait_for_selector('.ladder .grid tbody tr', timeout=WAIT)
+
+
+def test_two_closes_from_one_click_read_as_one_click(page):
+    """Live 2026-09-04, the desk's own Working Orders panel:
+
+        BUY  7.3400  Qty 0.1
+        BUY  7.3400  Qty 0.04999999999999999
+
+    One BUY 0.15 over two shorts. Nothing was wrong with the sizes —
+    the two rows are one click, split across the two tickets it covers,
+    and they sum to the 0.15 that was clicked. But seventeen digits of
+    float dust beside a clean 0.1, on two rows that were otherwise
+    identical, reads as the size having been changed on the way to the
+    broker. So: the size prints as a size, and each row says which
+    ticket it is closing.
+    """
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    level = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows[5].level""")
+    publisher.orders = [
+        {'order_id': 'O1', 'level': level, 'side': 'BUY', 'quantity': 0.1,
+         'filled_quantity': 0, 'state': 'WORKING', 'time_in_force': 'DAY',
+         'position_id': 'POS-AAA'},
+        # What the engine used to hand the panel, kept verbatim: a
+        # publisher that had already been tidied would test nothing.
+        {'order_id': 'O2', 'level': level, 'side': 'BUY',
+         'quantity': 0.15 - 0.1, 'filled_quantity': 0, 'state': 'WORKING',
+         'time_in_force': 'DAY', 'position_id': 'POS-BBB'},
+    ]
+    publisher.quotes = [
+        {'pair_key': 'XAUUSD_|GC1226', 'side': 'BUY', 'level': level,
+         'leg': 'BOTH', 'ticket': None, 'intent': 'CLOSE',
+         'position_id': 'POS-AAA', 'orders': ['O1']},
+        {'pair_key': 'XAUUSD_|GC1226', 'side': 'BUY', 'level': level,
+         'leg': 'BOTH', 'ticket': None, 'intent': 'CLOSE',
+         'position_id': 'POS-BBB', 'orders': ['O2']},
+    ]
+    publisher.publish()
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.open = ['monitor:'];
+        s.monitorTab = 'orders';
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('.monitor .pane table', timeout=WAIT)
+    # The panel renders from the SNAPSHOT, which arrives on the poll —
+    # rendering before it lands reads the previous one and finds
+    # nothing working.
+    page.wait_for_function(
+        "() => document.querySelector('.monitor .pane')"
+        ".textContent.indexOf('closes POS-AAA') >= 0", timeout=WAIT)
+
+    text = page.text_content('.monitor .pane')
+
+    assert '0.04999999999999999' not in text
+    assert '0.05' in text and '0.1' in text
+    # And each row names the ticket it closes, so two rows differing
+    # only in size are not two goes at the same order.
+    assert 'closes POS-AAA' in text and 'closes POS-BBB' in text
+
+    publisher.orders = None
+    publisher.quotes = None
+    publisher.publish()
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.open = ['XAUUSD_|GC1226'];
+        window.MT5Trader.render();
+    }""")

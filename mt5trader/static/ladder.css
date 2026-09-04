@@ -1818,3 +1818,14 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
   line-height: 1.3;
 }
 
+
+/* Which TICKET a working close is against. One click bigger than the
+ * oldest position arms one order per ticket it covers, and without
+ * this those rows differ only by size — which reads as one order
+ * placed twice at the wrong quantity. */
+.monitor .closing {
+  font-size: 10px;
+  font-weight: 700;
+  color: #166aae;
+  letter-spacing: 0.02em;
+}

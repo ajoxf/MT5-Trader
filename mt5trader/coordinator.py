@@ -1213,7 +1213,7 @@ class Coordinator:
                 # The WHOLE position went: a naked leg cannot be
                 # part-closed at a level, so what came off is the
                 # ticket, not the slice the click reached.
-                left -= float(position.quantity or 0.0)
+                left = sizing.tidy(left - float(position.quantity or 0.0))
                 continue
             # A target may already be armed here by AutoRouting, at ITS
             # level. The trader has just named a different one, and a
@@ -1237,7 +1237,8 @@ class Coordinator:
                 armed.append(at_this_level[0])
                 # What that order already covers, which is its own
                 # size — not the whole position, when it is a part.
-                left -= float(at_this_level[0].quantity or take)
+                left = sizing.tidy(left - float(at_this_level[0].quantity
+                                                or take))
                 continue
             if existing:
                 # A DIFFERENT level: the trader has just named their
@@ -1257,7 +1258,9 @@ class Coordinator:
             if order is None:
                 break
             armed.append(order)
-            left -= take
+            left = sizing.tidy(left - take)
+        # Tidied all the way down: what is left here is the REMAINDER
+        # the click still owes, and it goes on the screen.
         return armed, max(left, 0.0), closed, None
 
     def _quoting_leg_is_gone(self, pair, position):

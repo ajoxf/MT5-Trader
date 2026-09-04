@@ -37,6 +37,33 @@ nothing computes a hedge from it any more.
 import math
 
 
+#: Where a quantity stops being a number and starts being noise.
+#: Clicks are typed in hundredths at the smallest, so nine decimal
+#: places is far below anything a trader can mean and far above the
+#: binary error that accumulates through a subtraction.
+QUANTITY_DIGITS = 9
+
+
+def tidy(quantity):
+    """A quantity with the binary dust swept back off it.
+
+    `0.15 - 0.1` is `0.04999999999999999` in float, and a click of 0.15
+    covering a 0.1 position put exactly that on the Working Orders
+    panel — seventeen digits of it, next to a clean `0.1`, which reads
+    like the size was changed on the way to the broker. It was not: the
+    two rows summed to the 0.15 that was clicked. But a trader cannot
+    be asked to add up seventeen-digit floats to satisfy themselves
+    that their own click went in whole.
+
+    So every subtraction that walks a click down a stack of positions
+    goes through here. It changes no quantity anybody could type.
+    """
+    try:
+        return round(float(quantity), QUANTITY_DIGITS)
+    except (TypeError, ValueError):
+        return quantity
+
+
 def round_step(volume, step, minimum=0.0, down=False):
     """Snap to a tradable volume — NEAREST by default.
 

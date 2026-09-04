@@ -9,6 +9,7 @@ is a VIEW over them, computed here, never a replacement for them.
 
 from collections import defaultdict
 
+from . import sizing
 from .models import (OrderState, SpreadSide, SyntheticOrder)
 
 
@@ -207,11 +208,15 @@ class Book:
             # more: over-closing would flip the net the other way,
             # which is the mistake at the opposite end from the one
             # above and just as expensive.
-            take = min(size, left)
+            take = sizing.tidy(min(size, left))
             if take <= 1e-9:
                 break
             picked.append((position, take))
-            left -= take
+            # Tidied, because this subtraction is what the NEXT take is
+            # measured against: `0.15 - 0.1` is 0.04999999999999999 in
+            # float, and that is then the size of the second closing
+            # order, on the panel, in full.
+            left = sizing.tidy(left - take)
             if left <= 1e-9:
                 break
         return picked

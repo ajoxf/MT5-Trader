@@ -3,7 +3,19 @@
 import pytest
 
 from mt5trader.book import Book
-from mt5trader.models import SpreadSide
+from mt5trader.models import OrderType, SpreadPosition, SpreadSide
+
+
+def short(pair, quantity, opened_at):
+    """An open position of `quantity` spreads, on the sell side.
+
+    `opened_at` is explicit because the reduce walks the stack OLDEST
+    FIRST, and two positions made in the same microsecond would leave
+    the order of the takes to chance."""
+    position = SpreadPosition(pair.key, SpreadSide.SELL, quantity, None, None,
+                              7.30, OrderType.LIMIT, 100.0)
+    position.opened_at = opened_at
+    return position
 
 
 def test_three_clicks_at_one_price_are_three_cancellable_orders(pair):
@@ -93,3 +105,55 @@ def test_the_average_entry_is_weighted_by_quantity(pair, config, legs):
     assert average == pytest.approx(
         (first.position.entry_spread * 1.0
          + second.position.entry_spread * 3.0) / 4.0)
+
+
+# -- one click, several tickets, and the size it was clicked at ------------
+
+def test_a_click_across_two_tickets_still_adds_up_to_the_click(pair):
+    """Live 2026-09-04, from the desk's own Working Orders panel:
+
+        BUY 7.3400   Qty 0.1
+        BUY 7.3400   Qty 0.04999999999999999
+
+    One BUY 0.15 over two shorts. The arithmetic was right — the two
+    rows sum to the 0.15 that was clicked — but `0.15 - 0.1` is
+    0.04999999999999999 in float, and seventeen digits of it beside a
+    clean 0.1 reads as the size having been changed on the way to the
+    broker. A trader cannot be asked to add up floats to satisfy
+    themselves that their own click went in whole.
+    """
+    book = Book()
+    for age in range(2):
+        book.add_position(short(pair, 0.1, age))
+
+    picked = book.positions_to_reduce(pair.key, 'BUY', 0.15)
+
+    # Each take is a number the trader could have typed, and together
+    # they are the click. (The `approx` is this TEST's own addition —
+    # 0.1 + 0.05 is not 0.15 in float either, which is the whole point.)
+    assert [take for _position, take in picked] == [0.1, 0.05]
+    assert sum(take for _position, take in picked) == pytest.approx(0.15)
+
+
+def test_a_click_walking_a_long_stack_does_not_drift(pair):
+    """Ten subtractions, not one. The dust compounds."""
+    book = Book()
+    for age in range(10):
+        book.add_position(short(pair, 0.03, age))
+
+    picked = book.positions_to_reduce(pair.key, 'BUY', 0.3)
+
+    assert [take for _position, take in picked] == [0.03] * 10
+    assert sum(take for _position, take in picked) == pytest.approx(0.3)
+
+
+def test_a_click_smaller_than_the_ticket_is_still_taken_in_part(pair):
+    """The control for the two above: tidying must not round a genuine
+    part-close away, or a BUY 0.15 over a 1.2 short would close the
+    lot."""
+    book = Book()
+    book.add_position(short(pair, 1.2, 0))
+
+    picked = book.positions_to_reduce(pair.key, 'BUY', 0.15)
+
+    assert [take for _position, take in picked] == [0.15]

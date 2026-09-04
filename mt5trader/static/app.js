@@ -88,6 +88,22 @@
     return value.toFixed(digits === undefined ? 4 : digits);
   }
 
+  // A SIZE, printed the way it was typed.
+  //
+  // Quantities are added and subtracted — a click walking down a stack
+  // of positions is a chain of subtractions — and binary floats do not
+  // survive that cleanly. `0.15 - 0.1` is 0.04999999999999999, and the
+  // Working Orders panel printed exactly that beside a clean 0.1, which
+  // reads as the size having been changed on the way to the broker. The
+  // engine tidies the arithmetic now; this makes sure nothing on the
+  // way to the screen can put the dust back.
+  function qty(value) {
+    if (value === null || value === undefined || value === '') return DASH;
+    var number = Number(value);
+    if (!isFinite(number)) return DASH;
+    return String(parseFloat(number.toFixed(6)));
+  }
+
   function escapeHtml(value) {
     // Symbols, comments and broker refusals are the broker's text, not
     // ours, and every one of them lands in innerHTML.
@@ -2792,10 +2808,10 @@
         // a reducing click bigger than the position it covers holds
         // the rest back until the close has gone through, and that
         // part was on no panel at all.
-        html += '<td>' + (order.quantity - order.filled_quantity) +
+        html += '<td>' + qty(order.quantity - order.filled_quantity) +
           (quote.open_after
             ? ' <span class="after" title="held back until this close '
-              + 'goes through">+' + quote.open_after + '</span>'
+              + 'goes through">+' + qty(quote.open_after) + '</span>'
             : '') + '</td>';
         html += '<td>' + order.time_in_force + '</td>';
         html += '<td>' + order.state + '</td>';
@@ -2803,7 +2819,19 @@
         html += '<td>' + fmt(quote.price, 2) + '</td>';
         // WHICH broker will show this order, and which leg crosses
         // when it fills. 'leg a' alone read as leg A having nothing.
-        html += '<td>' + (quote.leg
+        // WHAT THIS ROW IS, before which leg it sits on.
+        //
+        // One click can arm SEVERAL orders: a click bigger than the
+        // oldest position walks down the stack, closing each ticket as
+        // far as it reaches. Those rows are identical apart from their
+        // size, so two of them at one level read as the same order
+        // placed twice at the wrong quantity. They are not — they are
+        // one click, split across the tickets it covers — and the row
+        // now says which ticket it closes.
+        html += '<td>' + (order.position_id
+          ? '<span class="closing">closes ' +
+            escapeHtml(order.position_id) + '</span><br>'
+          : '') + (quote.leg
           ? 'leg ' + quote.leg +
             (quote.symbol ? ' · ' + escapeHtml(quote.symbol) : '') +
             (quote.crosses_leg
@@ -2846,7 +2874,7 @@
         html += '<td>' + (row.name || key) + '</td>';
         html += '<td>' + order.side + '</td>';
         html += '<td>' + fmt(order.level, 4) + '</td>';
-        html += '<td>' + order.quantity + '</td>';
+        html += '<td>' + qty(order.quantity) + '</td>';
         html += '<td>' + order.time_in_force + '</td>';
         html += '<td class="mismatch">' + order.state + '</td>';
         html += '<td>' + (order.pending_ticket || DASH) + '</td>';
