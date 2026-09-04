@@ -31,7 +31,7 @@
   --frame-text: #1c1c1c;
   --frame-muted: #4c4c4c;
   --price-cell: #f2f2f2;      /* the price column */
-  --price-line: #ffffff;
+  --price-line: #e4e4e4;
 
   /* Softened, deliberately. The saturated pair was right for a dark
    * frame and is loud on a light one — and a band that shouts makes
@@ -57,8 +57,8 @@
    * the number being traded off: every blue here still clears 4.5:1
    * against white text, and the red side is untouched so the two sides
    * stay as far apart as they were. */
-  --bid: #1a76c0;             /* the solid blue bid band */
-  --bid-cell: #3fb2e6;        /* a quantity inside it — a step brighter */
+  --bid: #4a9ede;             /* the solid blue bid band */
+  --bid-cell: #6fb6e8;        /* a quantity inside it — a step brighter */
   --ask: #9c2222;             /* the solid red ask band */
   --ask-cell: #c53a3a;
   /* The size printed IN a band, and the two pale tints TT uses for an
@@ -66,12 +66,12 @@
   --band-text: #ffffff;
   /* ...and dark ink, for the one band pale enough to need it. */
   --band-ink: #06304f;
-  --work-buy: #c2e1f7;
+  --work-buy: #dceffb;
   --work-sell: #f0b4b4;
   /* One step deeper, for BUTTONS only. A band is data and gets out of
    * the way; a button is an action and has white text on it, which
    * needs the contrast. */
-  --bid-strong: #166aae;
+  --bid-strong: #1f7ac2;
   --ask-strong: #8f1f1f;
   --traded: #4a9c5d;          /* LTQ print, positive change */
   --down: #c0504d;
@@ -258,7 +258,7 @@ body {
 
 /* A window that was just opened, said once so the eye finds it. */
 @keyframes reveal-flash {
-  from { box-shadow: 0 0 0 3px #86b4da; }
+  from { box-shadow: 0 0 0 3px #9ec6e4; }
   to { box-shadow: 1px 1px 0 rgba(0, 0, 0, .3); }
 }
 .window.revealed { animation: reveal-flash .9s ease-out; }
@@ -697,7 +697,7 @@ table.exits td:nth-child(3) { color: #a02722; }
 /* Flat, as TT draws them: pink pulls the sells, blue pulls the buys,
  * and the grey one in the middle pulls everything. */
 .cxl-s { background: #e9a6aa; }
-.cxl-b { background: #a9d4ef; }
+.cxl-b { background: #bfe0f4; }
 /* The count of orders the button would pull — how the trader knows it
  * will do something before pressing it. */
 .cxl sup { font-size: 9px; margin-left: 2px; }
@@ -793,20 +793,23 @@ table.exits td:nth-child(3) { color: #a02722; }
  * every row also stops the uncoloured rows looking inert. Where the
  * market IS gets said by the things that say it without moving a block
  * of colour: the touch markers, the sizes, and the heavy rule. */
-/* ONE CONTINUOUS BAND, not a stack of cells.
+/* THE GRID IS RULED THROUGHOUT, in a very light grey.
  *
- * On TT the Bids column is a single unbroken block of blue from the
- * top of the window to the bottom, and the Asks a single block of red.
- * Drawing a white rule between every row cut them into forty separate
- * tiles, which is what made the columns read as a list rather than as
- * furniture. The rules stay on the price and the two outer columns,
- * where they separate things that ARE separate. */
+ * The bands used to run unbroken, because the rule was WHITE and on a
+ * deep blue that cut the column into forty bright tiles — a list
+ * rather than a block of furniture. Both halves of that have changed:
+ * the rule is now a very light grey and the blue is four steps
+ * lighter, so the line separates the rows without carving them up.
+ * Every cell on the ladder is ruled the same way, which is what makes
+ * a row read across as one row. */
 td.bid, td.ask {
-  border-top: 0;
-  border-bottom: 0;
   color: var(--band-text);
   font-weight: 600;
 }
+/* The bid band is pale enough now that white on it is the first thing
+ * to go. Dark ink on the blue, white on the red: what decides it is
+ * how light the band is, not which side it is. */
+td.bid { color: var(--band-ink); }
 td.bid { background: var(--bid); }
 td.ask { background: var(--ask); }
 /* Kept, and deliberately the same colour. The classes still carry
@@ -906,7 +909,7 @@ td.work.pending .ghost {
   opacity: .85;
 }
 td.work.pending.buy { background: repeating-linear-gradient(
-  45deg, var(--bid-cell), var(--bid-cell) 4px, #8fcef3 4px, #8fcef3 8px); }
+  45deg, var(--bid-cell), var(--bid-cell) 4px, #a8dbf7 4px, #a8dbf7 8px); }
 td.work.pending.sell { background: repeating-linear-gradient(
   45deg, var(--ask-cell), var(--ask-cell) 4px, #e88 4px, #e88 8px); }
 
