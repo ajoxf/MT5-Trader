@@ -25,10 +25,9 @@ import re
 import time
 from datetime import date
 
-from flask import Flask, jsonify, redirect, render_template, request, \
-    session, url_for
+from flask import Flask, jsonify, render_template, request
 
-from . import auth, config as cfg, diagnostics, fairvalue, hedgeratio, \
+from . import config as cfg, diagnostics, fairvalue, hedgeratio, \
     sizing, slippage
 from .commands import CommandLog
 from .legs import RemoteLeg
@@ -40,15 +39,10 @@ from .legs import RemoteLeg
 #: screen nothing is behind.
 STATUS_STALE_SEC = 2.0
 
-#: How long a half-finished sign-in stays open. The password has already
-#: been typed by then, so a browser left on the code page overnight is
-#: not somewhere to leave it.
-PENDING_SEC = 300.0
-
 
 def create_app(status_path='status.json', command_path='commands.jsonl',
                results_path='results.json', config_path='config.json',
-               db_path='mt5trader.db', auth_path='auth.json'):
+               db_path='mt5trader.db'):
     app = Flask(__name__)
     # The TEMPLATE is compiled once and cached for the life of the
     # process unless this is on. A `git pull` therefore updated the CSS
@@ -60,259 +54,6 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
     app.config['TEMPLATES_AUTO_RELOAD'] = True
     app.jinja_env.auto_reload = True
     commands = CommandLog(command_path)
-
-    # -- who is at the keyboard -------------------------------------------
-    #
-    # Loopback is not a login. It keeps the terminal off the network; it
-    # does nothing about the person who sits down at a machine that is
-    # already on. Every endpoint below is behind a session, and every
-    # write is behind a CSRF token, because `/api/command` is the button
-    # that sends orders.
-    accounts = auth.Store(auth_path)
-    app.config['AUTH_PATH'] = auth_path
-    app.secret_key = accounts.secret_key()
-    app.config.update(
-        SESSION_COOKIE_NAME='nexus_session',
-        SESSION_COOKIE_HTTPONLY=True,      # no script reads the cookie
-        SESSION_COOKIE_SAMESITE='Lax',     # no other site posts with it
-    )
-
-    #: Reachable without being signed in. `static` is on the list so the
-    #: login page has its stylesheet; nothing on it says anything about
-    #: the account or the market.
-    OPEN = {'login', 'sign_in', 'setup', 'static', 'code_form', 'code'}
-
-    def wants_json():
-        return request.path.startswith('/api/')
-
-    @app.before_request
-    def require_login():
-        endpoint = request.endpoint
-        if endpoint in OPEN:
-            return None
-        if not auth.session_is_live(session):
-            session.clear()
-            if wants_json():
-                return jsonify({'ok': False, 'login_required': True,
-                                'error': 'this session has expired — sign in '
-                                         'again'}), 401
-            return redirect(url_for('login', next=request.path))
-        if request.method not in ('GET', 'HEAD', 'OPTIONS'):
-            presented = (request.headers.get('X-CSRF-Token')
-                         or (request.form.get('csrf_token') if request.form
-                             else None))
-            if not auth.csrf_ok(session, presented):
-                # Not a redirect: a write that arrives without the token
-                # is either a stale page or another site, and neither is
-                # helped by being sent somewhere to try again.
-                return jsonify({'ok': False,
-                                'error': 'this page is out of date — '
-                                         'reload it and try again'}), 403
-        if endpoint not in ('password', 'password_form', 'logout') \
-                and accounts.must_change(session['user']):
-            if wants_json():
-                return jsonify({'ok': False,
-                                'error': 'change your password first'}), 403
-            return redirect(url_for('password'))
-        # An account with no working authenticator gets no further than
-        # the page that gives it one. Half-enrolled is not enrolled: a
-        # secret nobody has proved they can read is an account nobody
-        # can get back into.
-        if endpoint not in ('enrol', 'enrol_form', 'logout',
-                            'password', 'password_form') \
-                and accounts.totp_state(session['user']) != 'on':
-            if wants_json():
-                return jsonify({'ok': False,
-                                'error': 'set up your authenticator '
-                                         'first'}), 403
-            return redirect(url_for('enrol_form'))
-        auth.touch(session)
-        return None
-
-    def login_page(mode, error=None, status=200, **fields):
-        body = render_template('login.html', mode=mode, error=error,
-                               csrf_token=auth.csrf_token(session),
-                               min_password=auth.MIN_PASSWORD,
-                               asset_version=asset_version(), **fields)
-        response = app.make_response(body)
-        response.status_code = status
-        response.headers['Cache-Control'] = 'no-store'
-        return response
-
-    @app.get('/login')
-    def login():
-        if accounts.needs_setup():
-            return login_page('setup')
-        if auth.session_is_live(session):
-            return redirect(url_for('index'))
-        return login_page('login', next_url=_local(request.args.get('next')))
-
-    def after_password(user):
-        """Where a correct password leads.
-
-        Not to the ladder: a password is one factor. The session is not
-        started here at all — until the code comes back there is nothing
-        to hijack but a username.
-        """
-        if accounts.totp_state(user) == 'on':
-            session.clear()
-            session['pending_user'] = user
-            session['pending_at'] = time.time()
-            session['pending_next'] = _local(request.form.get('next'))
-            auth.csrf_token(session)
-            return redirect(url_for('code_form'))
-        auth.start_session(session, user)
-        if accounts.must_change(user):
-            return redirect(url_for('password'))
-        return redirect(_local(request.form.get('next')))
-
-    def pending_user():
-        """Who is halfway through signing in, if anyone.
-
-        Halfway does not last: a browser left on the code page overnight
-        is a password that has already been typed.
-        """
-        user = session.get('pending_user')
-        at = session.get('pending_at')
-        if not user or not isinstance(at, (int, float)):
-            return None
-        if time.time() - at > PENDING_SEC:
-            session.clear()
-            return None
-        return user
-
-    @app.post('/login')
-    def sign_in():
-        if not auth.csrf_ok(session, request.form.get('csrf_token')):
-            return login_page('login', 'that form was stale — try again',
-                              status=400, next_url='/')
-        try:
-            user = accounts.authenticate(request.form.get('username'),
-                                         request.form.get('password'))
-        except auth.AuthError as e:
-            logging.warning('sign-in refused: %s', e)
-            return login_page('login', str(e), status=401,
-                              next_url=_local(request.form.get('next')))
-        return after_password(user)
-
-    @app.get('/login/code')
-    def code_form():
-        if not pending_user():
-            return redirect(url_for('login'))
-        return login_page('code', recovery=accounts.recovery_left(
-            session['pending_user']))
-
-    @app.post('/login/code')
-    def code():
-        user = pending_user()
-        if not user:
-            return redirect(url_for('login'))
-        if not auth.csrf_ok(session, request.form.get('csrf_token')):
-            return login_page('code', 'that form was stale — try again',
-                              status=400)
-        try:
-            used = accounts.check_second_factor(user, request.form.get('code'))
-        except auth.AuthError as e:
-            logging.warning('second factor refused: %s', e)
-            return login_page('code', str(e), status=401,
-                              recovery=accounts.recovery_left(user))
-        target = session.get('pending_next') or '/'
-        auth.start_session(session, user)
-        if used == 'recovery':
-            # Spent one of ten, and the trader has to know: the page
-            # they land on cannot say it, so this one does.
-            session['recovery_note'] = accounts.recovery_left(user)
-        if accounts.must_change(user):
-            return redirect(url_for('password'))
-        return redirect(_local(target))
-
-    @app.get('/enrol')
-    def enrol_form():
-        user = session['user']
-        if accounts.totp_state(user) == 'none':
-            accounts.start_enrolment(user)
-        secret = accounts.load_secret(user)
-        uri = auth.otpauth_uri(secret, user)
-        return login_page('enrol', user=user, secret=_grouped(secret),
-                          otpauth=uri, qr=_qr_svg(uri))
-
-    @app.post('/enrol')
-    def enrol():
-        user = session['user']
-        if request.form.get('codes_seen'):
-            # The recovery codes have been read. Nothing to confirm.
-            return redirect(url_for('index'))
-        try:
-            codes = accounts.confirm_enrolment(user, request.form.get('code'))
-        except auth.AuthError as e:
-            secret = accounts.load_secret(user) or \
-                accounts.start_enrolment(user)
-            uri = auth.otpauth_uri(secret, user)
-            return login_page('enrol', str(e), status=400, user=user,
-                              secret=_grouped(secret), otpauth=uri,
-                              qr=_qr_svg(uri))
-        # Shown once, and never again: what is stored is hashes.
-        return login_page('codes', user=user, codes=codes)
-
-    @app.post('/setup')
-    def setup():
-        """The first account, and only the first.
-
-        Guarded on the store rather than on a flag: the moment one
-        account exists this endpoint stops making them, whoever asks.
-        """
-        if not accounts.needs_setup():
-            return login_page('login', 'this terminal already has an '
-                                       'account', status=409, next_url='/')
-        if not auth.csrf_ok(session, request.form.get('csrf_token')):
-            return login_page('setup', 'that form was stale — try again',
-                              status=400)
-        username = request.form.get('username')
-        password = request.form.get('password') or ''
-        if password != (request.form.get('confirm') or ''):
-            return login_page('setup', 'those two passwords are not the '
-                                       'same', status=400)
-        try:
-            user = accounts.create_user(username, password)
-        except auth.AuthError as e:
-            return login_page('setup', str(e), status=400)
-        auth.start_session(session, user)
-        return redirect(url_for('index'))
-
-    @app.get('/password')
-    def password_form():
-        return login_page('change', user=session.get('user'))
-
-    @app.post('/password')
-    def password():
-        user = session.get('user')
-        password = request.form.get('password') or ''
-        if password != (request.form.get('confirm') or ''):
-            return login_page('change', 'those two passwords are not the '
-                                        'same', status=400, user=user)
-        try:
-            accounts.authenticate(user, request.form.get('current'))
-        except auth.AuthError as e:
-            return login_page('change', str(e), status=401, user=user)
-        try:
-            accounts.set_password(user, password)
-        except auth.AuthError as e:
-            return login_page('change', str(e), status=400, user=user)
-        # A new password starts a new session: the old cookie was minted
-        # before the change and should not outlive it.
-        auth.start_session(session, user)
-        return redirect(url_for('index'))
-
-    @app.post('/logout')
-    def logout():
-        session.clear()
-        return redirect(url_for('login'))
-
-    @app.get('/api/whoami')
-    def api_whoami():
-        return jsonify({'user': session.get('user'),
-                        'csrf_token': auth.csrf_token(session)})
-
 
     def store():
         """A read-only view of the coordinator's database.
@@ -390,8 +131,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         """
         newest = 0.0
         for name in ('static/app.js', 'static/settings.js',
-                     'static/ladder.css', 'static/login.css',
-                     'templates/index.html', 'templates/login.html'):
+                     'static/ladder.css', 'templates/index.html'):
             path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 name)
             try:
@@ -403,14 +143,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
     @app.get('/')
     def index():
         response = app.make_response(
-            render_template('index.html', asset_version=asset_version(),
-                            csrf_token=auth.csrf_token(session),
-                            user=session.get('user'),
-                            # Popped: a spent recovery code is worth
-                            # saying once, on the screen the trader
-                            # lands on, and not on every reload after.
-                            recovery_note=session.pop('recovery_note',
-                                                      None)))
+            render_template('index.html', asset_version=asset_version()))
         # The PAGE itself is never cached: it carries the stamp that
         # tells the browser whether its cached CSS and JS are current.
         response.headers['Cache-Control'] = 'no-store'
@@ -1251,51 +984,6 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
     return app
 
 
-def _grouped(secret):
-    """The secret in fours, for someone typing it off a screen.
-
-    The QR code is the way in; this is the way in when the QR code will
-    not scan, which on a phone held at the wrong angle is often enough
-    to matter.
-    """
-    secret = str(secret or '')
-    return ' '.join(secret[i:i + 4] for i in range(0, len(secret), 4))
-
-
-def _qr_svg(uri):
-    """The enrolment QR, as inline SVG, or None.
-
-    Inline because everything here is self-hosted and a QR served as a
-    second request is a QR that can arrive late or not at all. None when
-    the library is not installed — the typed secret beside it is the
-    fallback, and a missing picture must not mean a terminal nobody can
-    enrol on.
-    """
-    try:
-        import qrcode
-        import qrcode.image.svg
-        image = qrcode.make(uri, image_factory=qrcode.image.svg.SvgPathImage,
-                            box_size=10, border=2)
-        return image.to_string(encoding='unicode')
-    except Exception as e:                            # pragma: no cover
-        logging.warning('the enrolment QR could not be drawn: %s', e)
-        return None
-
-
-def _local(target):
-    """Where to go after signing in, and it has to be HERE.
-
-    A `next` parameter that leaves this machine turns the login page
-    into an open redirect, so anything that is not a plain path on this
-    origin becomes the ladder.
-    """
-    target = str(target or '')
-    if target.startswith('/') and not target.startswith('//') \
-            and '\\' not in target:
-        return target
-    return '/'
-
-
 def _tidy_key(key):
     """A pair key as everything else writes it: no stray whitespace, and
     one spelling of the separator."""
@@ -1351,12 +1039,11 @@ def main():
     parser.add_argument('--commands', default='commands.jsonl')
     parser.add_argument('--results', default='results.json')
     parser.add_argument('--db', default='mt5trader.db')
-    parser.add_argument('--auth', default='auth.json')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8000)
     args = parser.parse_args()
     app = create_app(args.status, args.commands, args.results, args.config,
-                     args.db, args.auth)
+                     args.db)
     app.run(host=args.host, port=args.port, threaded=True)
 
 

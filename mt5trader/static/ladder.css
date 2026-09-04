@@ -139,34 +139,6 @@ body {
 }
 @media (max-width: 700px) { .brand-note { display: none; } }
 
-/* Who is signed in, and the way out — pushed to the far right of the
- * title bar, deliberately away from anything that trades. It is small
- * and quiet because it is used twice a day; it is present because a
- * terminal you cannot sign out of is one that stays signed in. */
-#signout {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-#signout .who {
-  font-size: 10px;
-  color: var(--frame-muted);
-  max-width: 12ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-#signout button {
-  font: 10px/1 var(--font);
-  color: var(--frame-muted);
-  background: transparent;
-  border: 1px solid var(--frame-line);
-  border-radius: 2px;
-  padding: 2px 6px;
-  cursor: pointer;
-}
-#signout button:hover { color: var(--frame-text); }
-
 /* -- banners ------------------------------------------------------- */
 
 .banner {

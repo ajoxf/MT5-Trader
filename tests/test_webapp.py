@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from conftest import signed_in
 from mt5trader import config as cfg
 from mt5trader.webapp import create_app
 
@@ -26,18 +25,15 @@ def paths(tmp_path):
         'commands': str(tmp_path / 'commands.jsonl'),
         'results': str(tmp_path / 'results.json'),
         'config': str(tmp_path / 'config.json'),
-        'auth': str(tmp_path / 'auth.json'),
     }
 
 
 @pytest.fixture
 def client(paths):
     app = create_app(paths['status'], paths['commands'], paths['results'],
-                     paths['config'], auth_path=paths['auth'])
+                     paths['config'])
     app.config.update(TESTING=True)
-    # The terminal is behind a login. Every test below is about what a
-    # signed-in trader sees; the login itself is tested in test_auth.py.
-    return signed_in(app)
+    return app.test_client()
 
 
 def write_status(paths, **overrides):
@@ -773,7 +769,7 @@ def test_the_page_is_rebuilt_when_the_template_changes(paths, tmp_path):
     markup, elements missing, and a screen that looks like the pull
     never landed."""
     app = create_app(paths['status'], paths['commands'], paths['results'],
-                     paths['config'], auth_path=paths['auth'])
+                     paths['config'])
 
     assert app.jinja_env.auto_reload is True
     assert app.config['TEMPLATES_AUTO_RELOAD'] is True

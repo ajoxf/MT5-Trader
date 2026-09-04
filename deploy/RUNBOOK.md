@@ -278,12 +278,9 @@ orphan, and it will refuse to clean up rather than guess.
 
 ## Reaching the screen from your own laptop
 
-The web page is behind a login now — a username, a password, and a
-CSRF token on every write. That is not the same as being safe on the
-internet: the page speaks plain HTTP, so anything between you and it
-reads the session cookie. It stays bound to localhost, and you reach it
-through an AWS Session Manager port forward, which supplies the
-encryption:
+The web page has **no password** and it can place orders, so it is
+never exposed to the internet. Reach it through an AWS Session Manager
+port forward:
 
 ```
 aws ssm start-session --target i-XXXXXXXX ^
@@ -293,18 +290,3 @@ aws ssm start-session --target i-XXXXXXXX ^
 
 then open `http://localhost:8000` in your browser. Nothing inbound has
 to be open on the instance for this to work.
-
-The first person to open it is asked to choose a username and password,
-and then to scan a QR code into an authenticator app. There is no
-default account and no default password — a terminal that ships with one
-is a terminal that runs with one.
-
-Enrolment ends by showing **ten recovery codes, once**. Print them. They
-are what gets you back in when the phone is lost, and they are the
-password reset too: nothing on this instance can email a link, and there
-is no support line that can read them back — what is on disk is hashes.
-
-All of it lives in `auth.json` beside the config: the password hash, the
-authenticator secret, the recovery hashes, and the cookie signing key for
-this machine. Back that file up with the other four, or the next start
-will offer first-run setup to whoever opens the page.
