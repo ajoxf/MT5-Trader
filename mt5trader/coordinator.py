@@ -1810,6 +1810,10 @@ class Coordinator:
                      'order_id': o.order_id, 'quantity': o.remaining}
                     for o in self.book.orders(key) if o.position_id],
                 'default_quantity': pair.default_quantity,
+                # The largest Qty either broker will take, so the
+                # keypad can stop offering a size that is a guaranteed
+                # refusal. None where neither broker caps volume.
+                'max_qty': sizing.max_qty(pair, pair.meta_a, pair.meta_b),
                 # How many price levels the ladder draws. Named apart
                 # from `rows`, which is the rows THEMSELVES — one of
                 # them is a count and the other is a list, and a

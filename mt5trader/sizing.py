@@ -123,6 +123,27 @@ def minimum_notional(contract_a, contract_b, price_a, price_b, beta,
     return max(needs) if needs else None
 
 
+def max_qty(pair, meta_a, meta_b):
+    """The largest whole Qty this pair can trade, or None if unbounded.
+
+    The same arithmetic the refusal uses, in a form the SCREEN can read
+    — so the keypad stops offering a size that is a guaranteed refusal.
+    A ladder whose broker caps leg A at 10 lots was showing 50 and 100
+    buttons, and a trader who pressed one got "Qty 100 x 1 wants 100
+    lots on leg A" back. Better not to offer it.
+    """
+    caps = []
+    for meta, unit in ((meta_a or {}, getattr(pair, 'clip_lots_a', None)),
+                       (meta_b or {}, getattr(pair, 'clip_lots_b', None))):
+        maximum = meta.get('volume_max') or 0.0
+        per_qty = float(unit or 1.0)
+        if maximum and per_qty:
+            caps.append(math.floor((maximum / per_qty) + 1e-9))
+    if not caps:
+        return None
+    return max(0, min(caps))
+
+
 def clip_plan(pair, meta_a, meta_b, price_a, price_b, spreads=1.0):
     """Resolve one click into leg lots, or say why it cannot be.
 

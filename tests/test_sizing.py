@@ -17,8 +17,8 @@ that reach the brokers, unchanged except by each broker's own step.
 import pytest
 
 from mt5trader.config import PairConfig
-from mt5trader.sizing import (clip_plan, leg_ratio, minimum_notional,
-                              round_step, spread_units)
+from mt5trader.sizing import (clip_plan, leg_ratio, max_qty,
+                              minimum_notional, round_step, spread_units)
 
 
 def a_pair(lots_a=1.0, lots_b=1.0, beta=1.0):
@@ -169,3 +169,41 @@ def test_the_derivation_says_lots_and_money_in_the_same_breath():
     plan = clip_plan(a_pair(), meta(), meta(), 88.63, 96.475, 100.0)
     assert plan['derivation'] == \
         'Qty 100 = 100 lots A / 100 lots B, $100,000.00 per 1.00 of spread'
+
+
+# -- the largest Qty this pair can trade ----------------------------------
+
+def test_the_cap_is_the_smaller_of_the_two_brokers():
+    """A pair can only trade what BOTH sides will take."""
+    pair = a_pair()
+
+    assert max_qty(pair, meta(maximum=10.0), meta(maximum=50.0)) == 10
+    assert max_qty(pair, meta(maximum=200.0), meta(maximum=7.0)) == 7
+
+
+def test_the_cap_is_in_QTY_not_in_lots():
+    """Qty is multiplied by the lots-per-Qty on each leg before it
+    reaches a broker, so a 10-lot cap at 2 lots per Qty is Qty 5."""
+    pair = a_pair(lots_a=2.0, lots_b=0.5)
+
+    assert max_qty(pair, meta(maximum=10.0), meta(maximum=10.0)) == 5
+
+
+def test_a_broker_that_caps_nothing_caps_nothing():
+    """None, not zero. A cap of 0 would grey out every button on the
+    keypad on a broker that simply did not report a maximum."""
+    assert max_qty(a_pair(), {}, {}) is None
+    assert max_qty(a_pair(), {'volume_max': 0.0},
+                   {'volume_max': None}) is None
+
+
+def test_the_cap_agrees_with_the_refusal():
+    """Two places must not disagree about the largest Qty that fits:
+    the keypad offers it, and `clip_plan` refuses past it."""
+    pair = a_pair()
+    both = meta(maximum=10.0)
+    cap = max_qty(pair, both, both)
+
+    assert clip_plan(pair, both, both, 88.0, 95.0, cap)['reason'] is None
+    refusal = clip_plan(pair, both, both, 88.0, 95.0, cap + 1)['reason']
+    assert refusal and f'Qty {cap:g} or less fits' in refusal

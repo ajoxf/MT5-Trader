@@ -91,6 +91,7 @@ class Publisher:
         #: too: a default that WAITS is a position nobody is getting
         #: out of.
         self.exit_type = 'MARKET'
+        self.max_qty = None
         #: How many of the working orders are resting CLOSES. They put
         #: nothing at the broker BY DESIGN, so they must not be counted
         #: against the broker's own number.
@@ -122,7 +123,7 @@ class Publisher:
                            self.working_sells, self.algo, self.algo_block,
                            self.net_position, self.quoting_leg,
                            self.exit_type, self.resting_closes,
-                           self.broker_pendings)
+                           self.broker_pendings, self.max_qty)
         if at is not None:
             payload['at'] = at
         # A tmp name of its OWN. The timer thread and the test publish
@@ -171,7 +172,7 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
              auto_route_master=True, show_fair_window=True, orders=None, quotes=None,
              working_buys=0, working_sells=0, algo='NONE', algo_block=None,
              net_position=0.0, quoting_leg='b', exit_type='MARKET',
-             resting_closes=0, broker_pendings=None):
+             resting_closes=0, broker_pendings=None, max_qty=None):
     rows = []
     for step in range(20, -21, -1):
         level = round(59.10 + step * 0.01, 4)
@@ -218,6 +219,9 @@ def snapshot(order_type='LIMIT', confirm=False, same_login=None,
                 'order_type': order_type, 'exit_type': exit_type,
                 'time_in_force': 'DAY',
                 'overnight': 'ALLOW', 'default_quantity': 1.0,
+                # What both brokers will take, in Qty. The keypad reads
+                # it; None where neither caps volume.
+                'max_qty': max_qty,
                 'auto_route': auto_route,
                 'auto_route_on': bool(auto_route and auto_route_master),
                 'auto_route_master': bool(auto_route_master),
@@ -4443,3 +4447,44 @@ def test_the_MARKET_badge_stays_readable_on_an_unfocused_ladder(page):
             ".classList.remove('inactive')")
         page.paths['publisher'].order_type = 'LIMIT'
         page.paths['publisher'].publish()
+
+
+def test_the_keypad_does_not_offer_a_size_the_broker_will_refuse(page):
+    """The oil ladder's broker caps leg A at 10 lots, and the keypad was
+    offering 50 and 100. Pressing one got the refusal back — "Qty 100 x
+    1 wants 100 lots on leg A, over this broker's 10-lot maximum". The
+    arithmetic was right; the button should not have been there."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    publisher.max_qty = 10
+    publisher.publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .keypad .qty[data-qty=\"50\"]')"
+        ".disabled === true", timeout=WAIT)
+
+    assert page.locator('.ladder .keypad .qty[data-qty="100"]').is_disabled()
+    assert not page.locator('.ladder .keypad .qty[data-qty="10"]').is_disabled()
+    assert not page.locator('.ladder .keypad .qty[data-qty="1"]').is_disabled()
+    assert 'tops out at 10' in page.get_attribute(
+        '.ladder .keypad .qty[data-qty="100"]', 'title')
+
+    # And a size TYPED over the cap is marked on the box itself, before
+    # the click rather than only in the refusal after it.
+    page.fill('.ladder .qty-box.buy', '97')
+    page.wait_for_selector('.ladder .qty-box.buy.over', timeout=WAIT)
+    page.fill('.ladder .qty-box.buy', '5')
+    page.wait_for_function(
+        "() => !document.querySelector('.ladder .qty-box.buy.over')",
+        timeout=WAIT)
+
+    # THE CONTROL: a broker that caps nothing greys out nothing.
+    publisher.max_qty = None
+    publisher.publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .keypad .qty[data-qty=\"100\"]')"
+        ".disabled === false", timeout=WAIT)
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.armed = {};
+        window.MT5Trader.render();
+    }""")

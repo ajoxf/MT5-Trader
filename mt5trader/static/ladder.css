@@ -52,27 +52,27 @@
    * the SIZE inside them is white, which is what makes a saturated
    * band work where a pale one needs dark text.
    *
-   * The blues are one step lighter than that screenshot. How far they
-   * could go was set by the SIZE printed on them in white, which is
-   * the number being traded off: every blue here still clears 4.5:1
-   * against white text, and the red side is untouched so the two sides
-   * stay as far apart as they were. */
+   * Both sides are lighter than that screenshot — the blues by four
+   * steps, the reds by one. How far they could go was set by the SIZE
+   * printed on them, which is the number being traded off: the reds
+   * still clear 4.5:1 against the white they carry, and the blues went
+   * past that, which is why the bid side carries dark ink instead. */
   --bid: #4a9ede;             /* the solid blue bid band */
   --bid-cell: #6fb6e8;        /* a quantity inside it — a step brighter */
-  --ask: #9c2222;             /* the solid red ask band */
-  --ask-cell: #c53a3a;
+  --ask: #b83232;             /* the solid red ask band */
+  --ask-cell: #cf4a4a;
   /* The size printed IN a band, and the two pale tints TT uses for an
    * order of your own sitting at a price. */
   --band-text: #ffffff;
   /* ...and dark ink, for the one band pale enough to need it. */
   --band-ink: #06304f;
   --work-buy: #dceffb;
-  --work-sell: #f0b4b4;
+  --work-sell: #f6c8c8;
   /* One step deeper, for BUTTONS only. A band is data and gets out of
    * the way; a button is an action and has white text on it, which
    * needs the contrast. */
   --bid-strong: #1f7ac2;
-  --ask-strong: #8f1f1f;
+  --ask-strong: #a02828;
   --traded: #4a9c5d;          /* LTQ print, positive change */
   --down: #c0504d;
   --last-trade: #e6e0f5;      /* the tinted last-traded price cell */
@@ -1855,4 +1855,18 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
   font-weight: 700;
   color: #166aae;
   letter-spacing: 0.02em;
+}
+
+/* A size the broker will not take, said on the box it was typed into
+ * rather than only in the refusal after the click. */
+.rail .qty-box.over {
+  border-color: var(--ask-strong);
+  background: #fff4f4;
+  color: var(--ask-strong);
+  font-weight: 700;
+}
+/* ...and a keypad preset that could never be traded on this pair. */
+.rail .keypad .qty[disabled] {
+  opacity: .38;
+  cursor: not-allowed;
 }

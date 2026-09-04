@@ -1682,6 +1682,24 @@
     // armed one if there is one and the ladder's default otherwise —
     // and never written while it is being typed in, or the poll would
     // eat the size as it is entered.
+    // THE KEYPAD OFFERS ONLY WHAT CAN BE TRADED.
+    //
+    // A ladder whose broker caps leg A at 10 lots was showing 50 and
+    // 100 buttons, and pressing one got a refusal back — "Qty 100 x 1
+    // wants 100 lots on leg A, over this broker's 10-lot maximum". The
+    // arithmetic was right and the button should not have been there.
+    var cap = (row.max_qty === null || row.max_qty === undefined)
+      ? null : Number(row.max_qty);
+    node.querySelectorAll('.keypad .qty').forEach(function (button) {
+      var size = Number(button.dataset.qty);
+      var beyond = cap !== null && button.dataset.qty && size > cap;
+      button.disabled = !!beyond;
+      button.title = beyond
+        ? 'Qty ' + size + ' is over what this pair can trade — it tops '
+          + 'out at ' + cap
+        : '';
+    });
+
     ['buy', 'sell'].forEach(function (side) {
       var box = node.querySelector(side === 'buy' ? '.armed' : '.sell-qty');
       var armed = armedFor(key, side);
@@ -1693,6 +1711,13 @@
       }
       box.classList.toggle('on', !!armed);
       var size = armed || row.default_quantity;
+      // OVER WHAT THE BROKER WILL TAKE. The refusal already says so
+      // once the click is made; this says it before, on the box the
+      // size was typed into.
+      box.classList.toggle('over', cap !== null && size > cap);
+      box.title = cap === null ? ''
+        : 'this pair tops out at Qty ' + cap + ' — the smaller of what '
+          + 'the two brokers will take';
       var sized = (size === null || size === undefined) ? '' : ' ' + size;
       var button = node.querySelector(
         side === 'buy' ? '.buy-touch' : '.sell-touch');
@@ -1860,6 +1885,24 @@
     // Rich = the market is above what the carry justifies, which is the
     // side a trader sells. Said in colour as well as sign: the
     // direction of a basis is the thing everyone gets backwards once.
+    // THE KEYPAD OFFERS ONLY WHAT CAN BE TRADED.
+    //
+    // A ladder whose broker caps leg A at 10 lots was showing 50 and
+    // 100 buttons, and pressing one got a refusal back — "Qty 100 x 1
+    // wants 100 lots on leg A, over this broker's 10-lot maximum". The
+    // arithmetic was right and the button should not have been there.
+    var cap = (row.max_qty === null || row.max_qty === undefined)
+      ? null : Number(row.max_qty);
+    node.querySelectorAll('.keypad .qty').forEach(function (button) {
+      var size = Number(button.dataset.qty);
+      var beyond = cap !== null && button.dataset.qty && size > cap;
+      button.disabled = !!beyond;
+      button.title = beyond
+        ? 'Qty ' + size + ' is over what this pair can trade — it tops '
+          + 'out at ' + cap
+        : '';
+    });
+
     ['buy', 'sell'].forEach(function (side) {
       var cell = node.querySelector('.gap-' + side);
       var gap = fair['gap_' + side];
