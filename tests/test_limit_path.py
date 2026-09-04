@@ -346,3 +346,45 @@ def test_a_fill_too_small_to_hedge_says_so_in_our_own_words(engine, pair,
     # And the sliver came back off: half a spread is a naked leg.
     assert legs['acct_b'].broker.open_positions() == []
     assert legs['acct_a'].broker.open_positions() == []
+
+
+def test_a_ladder_carries_several_working_orders_at_once(engine, pair, legs):
+    """Two sells above the market and two buys below, all resting.
+
+    A price ladder is worked by leaving orders at prices you want rather
+    than by watching for one. Each click is its own synthetic, each
+    (side, level) its own real pending on the quoting leg, and each is
+    cancellable on its own — so pulling the 7.90 sell leaves the 7.85
+    working.
+    """
+    coordinator = engine
+    md = coordinator.market[pair.key]
+    tick = pair.increment
+    sells = [round(md['short_spread'] + n * tick, 10) for n in (5, 10)]
+    buys = [round(md['long_spread'] - n * tick, 10) for n in (5, 10)]
+
+    for level in sells:
+        coordinator.click(pair.key, SpreadSide.SELL, level)
+    for level in buys:
+        coordinator.click(pair.key, SpreadSide.BUY, level)
+    coordinator.poll_once()
+
+    working = coordinator.book.orders(pair.key)
+    assert len(working) == 4
+    assert sorted(o.level for o in working) == sorted(sells + buys)
+
+    # Four separate pendings at the broker, one per level and side —
+    # not one aggregated order, and not the nearest one only.
+    pendings = legs['acct_b'].pending_orders()
+    assert len(pendings) == 4
+    assert len({p['ticket'] for p in pendings}) == 4
+    assert {p['side'] for p in pendings} == {'BUY', 'SELL'}
+
+    # And they are individually cancellable.
+    coordinator.cancel_order(
+        next(o.order_id for o in working if o.level == sells[1]))
+    coordinator.poll_once()
+
+    left = coordinator.book.orders(pair.key)
+    assert sorted(o.level for o in left) == sorted([sells[0]] + buys)
+    assert len(legs['acct_b'].pending_orders()) == 3
