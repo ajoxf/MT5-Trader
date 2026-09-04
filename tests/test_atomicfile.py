@@ -114,3 +114,70 @@ def test_the_engine_keeps_publishing_through_a_locked_reader(config, pair,
     assert json.loads(status.read_text(encoding='utf-8'))['at'] == first['at']
     coordinator.publish()                # and it recovers by itself
     assert json.loads(status.read_text(encoding='utf-8'))['at'] > first['at']
+
+
+# -- the other half: not blocking the writer in the first place ------------
+
+def test_a_read_asks_windows_for_share_delete(tmp_path, monkeypatch):
+    """The retries exist for scanners. THIS is the fix for us.
+
+    Windows refuses a rename over a file another process has open, and
+    the share mode is what decides it — Python's `open()` asks for read
+    and write sharing but not FILE_SHARE_DELETE, so every poll of
+    `status.json` held the coordinator's publish off. Asking for delete
+    sharing lets the publish land underneath a reader that goes on
+    reading the bytes it already has.
+    """
+    path = tmp_path / 'status.json'
+    path.write_text('{"at": 1}', encoding='utf-8')
+    asked = {}
+
+    def fake_open(name, encoding='utf-8'):
+        asked['name'] = name
+        return open(name, 'r', encoding=encoding)
+
+    monkeypatch.setattr(atomicfile.os, 'name', 'nt')
+
+    body = atomicfile.read_text(str(path), open_shared=fake_open)
+
+    assert body == '{"at": 1}'
+    assert asked['name'] == str(path)
+    # And the flags the Windows opener actually passes.
+    assert atomicfile.SHARE_ALL & atomicfile.FILE_SHARE_DELETE
+    assert atomicfile.SHARE_ALL & atomicfile.FILE_SHARE_READ
+    assert atomicfile.SHARE_ALL & atomicfile.FILE_SHARE_WRITE
+
+
+def test_a_share_delete_open_that_fails_still_reads_the_file(tmp_path,
+                                                             monkeypatch):
+    """A worse share mode is a collision the retries then handle. A
+    screen that cannot read the snapshot at all is a screen with nothing
+    behind it."""
+    path = tmp_path / 'status.json'
+    path.write_text('{"at": 2}', encoding='utf-8')
+
+    def refuses(name, encoding='utf-8'):
+        raise OSError(5, 'Access is denied')
+
+    monkeypatch.setattr(atomicfile.os, 'name', 'nt')
+
+    assert atomicfile.read_text(str(path), open_shared=refuses) == '{"at": 2}'
+
+
+def test_a_missing_file_is_missing_and_not_an_empty_snapshot(tmp_path):
+    """"No file" and "a file that says nothing" are different, and the
+    screen says different things about them."""
+    missing = str(tmp_path / 'nothing.json')
+
+    with pytest.raises(FileNotFoundError):
+        atomicfile.read_text(missing)
+    assert atomicfile.read_json(missing, 'the default') == 'the default'
+
+
+def test_a_half_written_file_reads_as_the_default_not_as_a_snapshot(tmp_path):
+    """It should never happen — that is what the tmp file is for — but
+    if it does, a truncated snapshot must not be served as a real one."""
+    path = tmp_path / 'status.json'
+    path.write_text('{"at": 1, "pairs": {', encoding='utf-8')
+
+    assert atomicfile.read_json(str(path), None) is None

@@ -18,7 +18,6 @@ Two rules from the spec shape the endpoints here:
   response body, for the panel to print.
 """
 
-import json
 import logging
 import os
 import re
@@ -27,8 +26,8 @@ from datetime import date
 
 from flask import Flask, jsonify, render_template, request
 
-from . import config as cfg, diagnostics, fairvalue, hedgeratio, \
-    sizing, slippage
+from . import atomicfile, config as cfg, diagnostics, fairvalue, \
+    hedgeratio, sizing, slippage
 from .commands import CommandLog
 from .legs import RemoteLeg
 
@@ -72,19 +71,17 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
 
     #: The snapshot is re-read only when the FILE has changed. The
     #: browser polls three times a second and every tab polls
-    #: separately; on Windows each open of `status.json` is a moment the
-    #: coordinator's own `os.replace` cannot land, and that collision
-    #: failed its whole poll (WinError 5). `os.stat` does not hold the
-    #: file against a rename, so asking "has it changed?" is free where
-    #: opening it is not.
+    #: separately, so the file is opened constantly — and on Windows an
+    #: open file is one the coordinator's own `os.replace` cannot land
+    #: on, which failed its whole poll (WinError 5). Two things keep
+    #: this side of it out of the way: `os.stat` does not hold the file
+    #: at all, so asking "has it changed?" is free; and the read itself
+    #: goes through `atomicfile.read_text`, which opens share-delete so
+    #: the publish lands underneath it.
     cache = {'stamp': None, 'body': None, 'path': None}
 
     def read_json(path, default=None):
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return default
+        return atomicfile.read_json(path, default)
 
     def read_status_file():
         try:
