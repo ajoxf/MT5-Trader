@@ -316,3 +316,33 @@ def test_quoting_leg_a_prices_off_leg_b(pair, legs):
     assert price == pytest.approx((md['leg_b_ask'] - md['spread']) / 2.0)
     assert implied_spread(pair, md, SpreadSide.BUY, 'a',
                           price) == pytest.approx(md['spread'])
+
+
+
+def test_a_fill_too_small_to_hedge_says_so_in_our_own_words(engine, pair,
+                                                            legs):
+    """A fill under one volume step of the crossing leg has no hedge
+    that size.
+
+    It used to go to the broker anyway, as a zero-volume order, and come
+    back "invalid volume" — a true statement about the wrong thing, at
+    the one moment a leg is on and unhedged. The leg still comes off;
+    what changes is that the reason names the fill.
+    """
+    coordinator = engine
+    level = level_of(coordinator, pair)
+    coordinator.click(pair.key, SpreadSide.SELL, level)
+    coordinator.poll_once()
+    ticket = coordinator.quoter.snapshot(pair.key)[0]['ticket']
+
+    # A sliver: leg A cannot trade 0.005 — its step is 0.01.
+    legs['acct_b'].broker.part_fill_pending(ticket, 0.005)
+    coordinator.poll_once()
+
+    orders = coordinator.book.orders(pair.key, working_only=False)
+    reason = ' '.join(o.reason or '' for o in orders)
+    assert 'under one volume step of leg A' in reason
+    assert 'invalid volume' not in reason.lower()
+    # And the sliver came back off: half a spread is a naked leg.
+    assert legs['acct_b'].broker.open_positions() == []
+    assert legs['acct_a'].broker.open_positions() == []

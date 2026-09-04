@@ -355,8 +355,12 @@ class PairExecutor:
         remaining = None if volume is None else float(volume)
         closed, errors = [], []
         # Newest first, so a partial unwind takes off the piece that was
-        # most recently added.
-        for ticket in sorted((str(t) for t in tickets), reverse=True):
+        # most recently added. Sorted as NUMBERS: MT5 tickets are
+        # numbers, and as strings '9999' sorts above '10000' — so the
+        # day a ticket rolls a digit, "newest first" quietly becomes
+        # "oldest first" and a partial unwind takes off the wrong piece.
+        for ticket in sorted((str(t) for t in tickets),
+                             key=_ticket_order, reverse=True):
             position = by_ticket.get(ticket)
             if position is None:
                 continue                    # already gone, not an error
@@ -417,6 +421,20 @@ class PairExecutor:
         if quantity is not None and position.quantity:
             share = max(0.0, min(1.0, float(quantity) /
                                  float(position.quantity)))
+        part = None
+        if share < 1.0 - 1e-9:
+            part, refusal = self._part_close_volumes(pair, position, share)
+            if part is None:
+                # NOT a guard, and not a close being withheld: a full
+                # close never comes through here, and CLOSE ALL, the
+                # kill and the overnight rule all send `quantity=None`.
+                # This is the broker's own volume step saying the PIECE
+                # asked for cannot be traded on both legs — and closing
+                # one leg of a hedge is worse than closing neither.
+                logging.warning('%s: part-close refused: %s',
+                                pair.key, refusal)
+                return {'ok': False, 'reason': refusal, 'refused': True,
+                        'legs': {}, 'position': position.to_dict()}
         if disarm and self.before_close is not None:
             # Disarm any resting close BEFORE closing. Afterwards is
             # too late: the level it was armed against no longer has a
@@ -441,15 +459,79 @@ class PairExecutor:
             # None on a full close, which lets `close_tickets` take the
             # volumes from the broker's own book rather than from what
             # we think we sent.
-            leg_volume = None
-            if share < 1.0 - 1e-9:
-                leg_volume = float((fill.volume if fill else 0.0) or 0.0) \
-                    * share
+            leg_volume = None if part is None else part.get(leg)
             results[leg] = self.close_tickets(
                 runner, symbol, (fill.position_tickets if fill else []),
                 entry_side, volume=leg_volume, comment='CLOSE')
 
         return self._settle_close(pair, position, results, md, reason)
+
+    def _part_close_volumes(self, pair, position, share):
+        """Both legs' volumes for a PART close, or (None, why not).
+
+        A share of a position is not a volume either broker can trade.
+        Leg lots come in steps — 0.01 on a spot CFD, often 0.10 on a
+        future — and the pro-rata piece was going to the broker raw:
+        0.0125 lots of a future is rejected outright (10014), which is
+        how a part-close closes ONE leg and leaves the pair imbalanced
+        at the broker with our own book still showing it whole.
+
+        So the share is quantised to something BOTH legs can trade. Each
+        leg rounds DOWN to its own step, the smaller of the two shares
+        wins, and both legs are then re-derived from that one share so
+        the piece that comes off is still hedged. Rounding down and not
+        up because closing more than the click asked for moves the net
+        the other way, which is the mistake at the far end.
+
+        None when no piece works — the smallest tradable step on one leg
+        is bigger than the whole piece asked for. The caller refuses the
+        CLICK then, which is safe: nothing opens on top of a close that
+        did not happen.
+        """
+        legs = {'a': (position.leg_a, pair.meta_a or {}),
+                'b': (position.leg_b, pair.meta_b or {})}
+        achievable = share
+        for leg, (fill, meta) in legs.items():
+            booked = float((fill.volume if fill else 0.0) or 0.0)
+            if booked <= 0:
+                continue
+            volume = sizing.round_step(booked * share, meta.get('volume_step'),
+                                       meta.get('volume_min'), down=True)
+            if volume <= 0:
+                return None, self._too_small(pair, leg, meta, booked, share)
+            achievable = min(achievable, volume / booked)
+
+        volumes = {}
+        for leg, (fill, meta) in legs.items():
+            booked = float((fill.volume if fill else 0.0) or 0.0)
+            if booked <= 0:
+                volumes[leg] = None
+                continue
+            volume = sizing.round_step(booked * achievable,
+                                       meta.get('volume_step'),
+                                       meta.get('volume_min'), down=True)
+            if volume <= 0:
+                # The other leg pulled the share down far enough that
+                # this one no longer reaches its own minimum.
+                return None, self._too_small(pair, leg, meta, booked,
+                                             achievable)
+            volumes[leg] = volume
+        return volumes, None
+
+    def _too_small(self, pair, leg, meta, booked, share):
+        """Why this piece cannot be closed, with the size that can be.
+
+        The trader's next move is to click a bigger size, and guessing
+        it from "invalid volume" is not a thing to do with a position
+        on.
+        """
+        step = float(meta.get('volume_step') or 0.0)
+        minimum = float(meta.get('volume_min') or 0.0)
+        floor = max(step, minimum)
+        return (f'closing {share:.1%} of this position is '
+                f'{booked * share:g} lots on leg {leg.upper()} '
+                f'({self._symbol(pair, leg)}), under the {floor:g} lots '
+                f'that broker can trade. Close more of it, or all of it.')
 
     def leg_open_volume(self, pair, leg, fill):
         """How much of one leg's tickets is STILL OPEN at the broker.
@@ -632,6 +714,15 @@ class PairExecutor:
         position.click_to_on_ms = elapsed_ms
         position.entry_slippage = slippage(decision_spread, entry_spread, side)
         return position
+
+
+def _ticket_order(ticket):
+    """Sort key that puts ticket 10000 after ticket 9999."""
+    text = str(ticket)
+    try:
+        return (1, int(text), '')
+    except (TypeError, ValueError):
+        return (0, 0, text)
 
 
 def closed_spread(results, hedge_ratio):

@@ -501,3 +501,78 @@ def test_the_switch_uses_disarm_auto_and_the_orphan_sweep_does_not():
     assert "disarm(order.position_id" in orphan, (
         'the orphan sweep no longer pulls everything')
     assert 'disarm_auto(' in switch
+
+
+# -- what the click actually COVERED, not what it asked for ---------------
+
+class PartialExecutor:
+    """A broker that closes less than it was asked for.
+
+    Real: a part-close is rounded to what each leg's volume step can
+    trade, and the quoting leg can come down on a piece the other leg
+    cannot follow — in which case NOTHING comes off and the answer is
+    still `ok`, flagged `imbalanced`.
+    """
+
+    def __init__(self, fraction):
+        self.fraction = fraction
+        self.asked = []
+
+    def close_position(self, pair, position, md=None, reason=None,
+                       quantity=None):
+        self.asked.append((position.position_id, quantity))
+        came_off = float(position.quantity) * self.fraction
+        if self.fraction <= 0:
+            return {'ok': True, 'partial': True, 'fraction': 0.0,
+                    'imbalanced': True, 'legs': {}}
+        position.quantity = float(position.quantity) - came_off
+        if position.quantity <= 1e-9:
+            position.is_open = False
+        return {'ok': True, 'partial': True, 'fraction': self.fraction,
+                'legs': {}}
+
+
+def test_a_close_that_took_nothing_does_not_count_as_cover():
+    """The dangerous one. `imbalanced` means the quoting leg came down
+    and the other could not follow, so NOTHING came off — and it comes
+    back `ok`. Counting it as cover let the click open the remainder the
+    other way on top of a position that is still on: a reduce that
+    opens, which is the failure this whole path exists to prevent."""
+    book = book_with(Position('old', SELL, 10.0, 100))
+    executor = PartialExecutor(0.0)
+
+    closed, left, failure = reduce_first(book, executor, Pair(), BUY, 4.0,
+                                         None)
+
+    assert closed == []
+    assert failure is not None                # refused, in its own words
+    assert left == pytest.approx(4.0)         # nothing was covered
+    assert book.positions('P')[0].quantity == pytest.approx(10.0)
+
+
+def test_a_close_that_took_half_counts_half():
+    """The click covered what came off. Booking the whole `take` would
+    leave the difference open and believed closed."""
+    book = book_with(Position('old', SELL, 10.0, 100))
+    executor = PartialExecutor(0.25)          # 2.5 of the 10 came off
+
+    closed, left, failure = reduce_first(book, executor, Pair(), BUY, 4.0,
+                                         None)
+
+    assert failure is None
+    assert executor.asked == [('old', 4.0)]   # it did ask for 4
+    assert left == pytest.approx(1.5)         # ...and 2.5 of it landed
+    assert book.positions('P')[0].quantity == pytest.approx(7.5)
+
+
+def test_the_control_a_whole_close_still_counts_whole():
+    """Without this the two above would pass on a build that had simply
+    stopped crediting closes at all."""
+    book = book_with(Position('old', SELL, 4.0, 100))
+    executor = Executor()
+
+    closed, left, failure = reduce_first(book, executor, Pair(), BUY, 10.0,
+                                         None)
+
+    assert failure is None and closed == ['old']
+    assert left == pytest.approx(6.0)

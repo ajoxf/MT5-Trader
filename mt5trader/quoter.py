@@ -546,9 +546,22 @@ class Quoter:
                 meta_b.get('volume_step'), meta_b.get('volume_min'), down=True)
             quote_side = leg_a_side
 
-        cross = self.executor._cross_with_deadline(
-            pair, cross_leg, cross_side, cross_volume,
-            contract_a if cross_leg == 'a' else contract_b, new_id('HEDGE'))
+        if cross_volume <= 0:
+            # The fill was smaller than one step of the crossing leg, so
+            # there is no hedge to send. Sending it anyway means a
+            # zero-volume order and the broker's "invalid volume" — a
+            # true statement about the wrong thing. Say what happened
+            # instead, and take the quoting leg back off: half a spread
+            # is a naked leg, whatever the arithmetic behind it.
+            cross = {'ok': False, 'error': (
+                f'{filled:g} lots filled on leg {group.leg.upper()} is under '
+                f'one volume step of leg {cross_leg.upper()} — there is no '
+                f'hedge that size')}
+        else:
+            cross = self.executor._cross_with_deadline(
+                pair, cross_leg, cross_side, cross_volume,
+                contract_a if cross_leg == 'a' else contract_b,
+                new_id('HEDGE'))
         elapsed_ms = (self.executor.clock() - started) * 1000.0
         self.hedge_times.append(elapsed_ms)
 

@@ -275,10 +275,24 @@ def reduce_first(book, executor, pair, side, quantity, md,
     closed = []
     for position, take in book.positions_to_reduce(pair.key, side, left,
                                                    exclude=exclude):
+        # BEFORE, because a part-close reduces it in place.
+        was = float(position.quantity or 0.0)
         result = executor.close_position(
             pair, position, md, reason='reduced by an opposite click',
             quantity=take)
-        if not result.get('ok'):
+        # WHAT ACTUALLY CAME OFF, not what was asked for.
+        #
+        # A part-close can come back having closed less than the piece
+        # requested, and `imbalanced` is the case where it closed
+        # NOTHING but still reported ok — the quoting leg came down and
+        # the other leg's step was too big to follow it. Both used to
+        # count as the whole `take`, so the click believed it had
+        # covered spreads that are still on and opened the remainder
+        # the other way. A reduce that opens is the exact failure this
+        # function exists to prevent.
+        covered = min(take, was * float(result.get('fraction', 1.0) or 0.0))
+        if not result.get('ok') or result.get('imbalanced') \
+                or covered <= 1e-9:
             # Stop at the first refusal rather than stepping over it.
             # The rest of the queue is no longer the queue the trader
             # would have closed, and opening the remainder on top of a
@@ -288,7 +302,7 @@ def reduce_first(book, executor, pair, side, quantity, md,
         if on_closed is not None:
             on_closed(position)
         closed.append(position.position_id)
-        left -= take
+        left = sizing.tidy(left - covered)
     return closed, max(left, 0.0), None
 
 
@@ -300,7 +314,14 @@ def close_failure(result, position):
     not the other has left a NAKED LEG — which is the sentence the
     trader has to see first.
     """
-    legs = (result or {}).get('legs') or {}
+    result = result or {}
+    # A refusal that never reached a broker carries its own sentence —
+    # the piece was too small for one leg's volume step, say — and
+    # there are no leg errors to quote.
+    if result.get('reason') and not (result.get('legs') or {}):
+        return f"could not close position {position.position_id}: " \
+               f"{result['reason']}"
+    legs = result.get('legs') or {}
     said = []
     done = []
     for leg, answer in sorted(legs.items()):

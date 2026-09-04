@@ -251,3 +251,85 @@ def test_a_ticket_closed_in_pieces_is_volume_weighted():
                                 {'volume': 0.3, 'price': 104.0}]},
                'b': {'closed': [{'volume': 0.4, 'price': 110.0}]}}
     assert closed_spread(results, 1.0) == pytest.approx(110.0 - 103.0)
+
+
+# -- a PART close is a volume both brokers can actually trade -------------
+
+def test_a_part_close_never_asks_for_a_volume_the_broker_cannot_trade(
+        config, pair, legs, timeline):
+    """A share of a position is not a volume.
+
+    Leg lots come in steps — 0.01 on the spot, 0.10 on the future — and
+    the pro-rata piece went to the broker raw. 0.05 lots of a future
+    whose step is 0.10 is rejected outright, so the SPOT leg closed and
+    the future did not: a part-close that leaves the pair imbalanced at
+    the broker, with our own book still showing it whole.
+    """
+    resolved(pair, legs)
+    executor = PairExecutor(config, legs, sleep=lambda s: None)
+    entered = executor.market_entry(pair, SpreadSide.SELL,
+                                    snapshot(pair, legs), 1.0)
+    position = entered.position
+    assert position.leg_b.volume == pytest.approx(0.1)   # one step exactly
+    del timeline[:]
+
+    # Half of it. The future cannot trade 0.05.
+    answer = executor.close_position(pair, position,
+                                     snapshot(pair, legs), quantity=0.5)
+
+    assert answer['ok'] is False
+    assert 'under the 0.1 lots that broker can trade' in answer['reason']
+    assert pair.symbol_b in answer['reason']
+    # NOTHING was sent. A close that cannot be halved must not half-close
+    # it — one leg off and one leg on is worse than neither.
+    assert [e for e in timeline if e['action'] == 'close'] == []
+    assert position.is_open and position.quantity == pytest.approx(1.0)
+
+
+def test_the_control_a_part_close_both_legs_can_trade_goes_through(
+        config, pair, legs, timeline):
+    """Without this the test above would pass on a build that had simply
+    stopped part-closing anything."""
+    resolved(pair, legs)
+    executor = PairExecutor(config, legs, sleep=lambda s: None)
+    # Ten spreads: 1.0 lot on each leg, so half of it is 0.5 — a whole
+    # number of steps on both.
+    position = executor.market_entry(pair, SpreadSide.SELL,
+                                     snapshot(pair, legs), 10.0).position
+    assert position.leg_b.volume == pytest.approx(1.0)
+    del timeline[:]
+
+    answer = executor.close_position(pair, position, snapshot(pair, legs),
+                                     quantity=5.0)
+
+    assert answer['ok'] and answer['partial']
+    sent = {e['symbol']: e['volume'] for e in timeline
+            if e['action'] == 'close'}
+    assert sent[pair.symbol_a] == pytest.approx(0.5)
+    assert sent[pair.symbol_b] == pytest.approx(0.5)
+    assert position.is_open
+    assert position.quantity == pytest.approx(5.0)
+
+
+def test_a_piece_one_leg_must_round_down_is_matched_on_the_other(
+        config, pair, legs, timeline):
+    """Both legs come off on ONE share, or the piece is not hedged.
+
+    The future rounds 0.63 lots down to 0.60; if the spot still closed
+    its own 0.63 the position left behind would be imbalanced by the
+    difference, and nothing in the book would say so.
+    """
+    resolved(pair, legs)
+    executor = PairExecutor(config, legs, sleep=lambda s: None)
+    position = executor.market_entry(pair, SpreadSide.SELL,
+                                     snapshot(pair, legs), 10.0).position
+    del timeline[:]
+
+    executor.close_position(pair, position, snapshot(pair, legs),
+                            quantity=6.3)
+
+    sent = {e['symbol']: e['volume'] for e in timeline
+            if e['action'] == 'close'}
+    # 0.60 on both, not 0.63 and 0.60.
+    assert sent[pair.symbol_b] == pytest.approx(0.6)
+    assert sent[pair.symbol_a] == pytest.approx(0.6)
