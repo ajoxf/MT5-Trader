@@ -50,20 +50,28 @@
    * HO-CL crack. Deeper and more saturated than the softened set this
    * replaces: on TT the bands are furniture the eye stops seeing, and
    * the SIZE inside them is white, which is what makes a saturated
-   * band work where a pale one needs dark text. */
-  --bid: #0f63a8;             /* the solid blue bid band */
-  --bid-cell: #2ba6de;        /* a quantity inside it — a step brighter */
+   * band work where a pale one needs dark text.
+   *
+   * The blues are one step lighter than that screenshot. How far they
+   * could go was set by the SIZE printed on them in white, which is
+   * the number being traded off: every blue here still clears 4.5:1
+   * against white text, and the red side is untouched so the two sides
+   * stay as far apart as they were. */
+  --bid: #1a76c0;             /* the solid blue bid band */
+  --bid-cell: #3fb2e6;        /* a quantity inside it — a step brighter */
   --ask: #9c2222;             /* the solid red ask band */
   --ask-cell: #c53a3a;
   /* The size printed IN a band, and the two pale tints TT uses for an
    * order of your own sitting at a price. */
   --band-text: #ffffff;
-  --work-buy: #a8d4f0;
+  /* ...and dark ink, for the one band pale enough to need it. */
+  --band-ink: #06304f;
+  --work-buy: #c2e1f7;
   --work-sell: #f0b4b4;
   /* One step deeper, for BUTTONS only. A band is data and gets out of
    * the way; a button is an action and has white text on it, which
    * needs the contrast. */
-  --bid-strong: #0d5794;
+  --bid-strong: #166aae;
   --ask-strong: #8f1f1f;
   --traded: #4a9c5d;          /* LTQ print, positive change */
   --down: #c0504d;
@@ -250,7 +258,7 @@ body {
 
 /* A window that was just opened, said once so the eye finds it. */
 @keyframes reveal-flash {
-  from { box-shadow: 0 0 0 3px #6ea3d0; }
+  from { box-shadow: 0 0 0 3px #86b4da; }
   to { box-shadow: 1px 1px 0 rgba(0, 0, 0, .3); }
 }
 .window.revealed { animation: reveal-flash .9s ease-out; }
@@ -665,7 +673,7 @@ table.exits td:nth-child(3) { color: #a02722; }
 /* Flat, as TT draws them: pink pulls the sells, blue pulls the buys,
  * and the grey one in the middle pulls everything. */
 .cxl-s { background: #e9a6aa; }
-.cxl-b { background: #93c6e9; }
+.cxl-b { background: #a9d4ef; }
 /* The count of orders the button would pull — how the trader knows it
  * will do something before pressing it. */
 .cxl sup { font-size: 9px; margin-left: 2px; }
@@ -786,7 +794,15 @@ tr.in-ask td.ask { background: var(--ask); }
 /* The touch itself: ONE row, a shade lighter, carrying the size and
  * the arrow. A single row changing shade is not a block of colour
  * sliding down the screen. */
-td.bid.has-qty { background: var(--bid-cell); }
+/* The touch row's SIZE, in dark ink on the bid side.
+ *
+ * White on this blue was the weakest thing on the ladder even before
+ * it was lightened — about 2.8:1, against 5.2:1 for the same number on
+ * the red side — and the touch size is the number being traded off. A
+ * lighter band makes that worse, so the text goes dark and the number
+ * comes back to a contrast the red side has always had. The red cell
+ * keeps white: it is dark enough to carry it. */
+td.bid.has-qty { background: var(--bid-cell); color: var(--band-ink); }
 td.ask.has-qty { background: var(--ask-cell); }
 
 /* The inside market is drawn by the two BANDS meeting — the blue ends
@@ -866,7 +882,7 @@ td.work.pending .ghost {
   opacity: .85;
 }
 td.work.pending.buy { background: repeating-linear-gradient(
-  45deg, var(--bid-cell), var(--bid-cell) 4px, #7cc3ef 4px, #7cc3ef 8px); }
+  45deg, var(--bid-cell), var(--bid-cell) 4px, #8fcef3 4px, #8fcef3 8px); }
 td.work.pending.sell { background: repeating-linear-gradient(
   45deg, var(--ask-cell), var(--ask-cell) 4px, #e88 4px, #e88 8px); }
 
