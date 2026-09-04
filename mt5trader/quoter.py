@@ -829,8 +829,29 @@ class Quoter:
         if level is None:
             return None
         existing = self.book.orders_for_position(position.position_id)
-        if existing:
-            return existing[0]
+        # ONE TARGET FOR AUTOMATION, AS MANY AS ARE CLICKED FOR THE
+        # TRADER.
+        #
+        # This returned any existing closing order, at any level, to
+        # whoever asked — which is right for AutoRouting, called on
+        # every fill and every poll, and must not stack duplicates. It
+        # was wrong for the trader: their second buy click at a second
+        # price got the FIRST order handed back, so the blue side could
+        # only ever hold one working order while the red side held as
+        # many as were clicked. Scaling out at two prices is the
+        # ordinary way a ladder is used.
+        if auto:
+            if existing:
+                return existing[0]
+        else:
+            # ...except where the trader has named the level automation
+            # already holds. Then they agree, and re-arming would trade
+            # an order that is already resting for an identical one.
+            agreed = [o for o in existing
+                      if getattr(o, 'auto_armed', False)
+                      and abs(o.level - level) < 1e-9]
+            if agreed:
+                return agreed[0]
         order = self.book.add_order(
             pair, position.side.opposite, level,
             quantity if quantity is not None else position.quantity,

@@ -147,7 +147,22 @@ class Book:
     def position(self, position_id):
         return self._positions.get(position_id)
 
-    def positions_to_reduce(self, pair_key, side, quantity, exclude=None):
+    def armed_by_hand(self, position_id):
+        """Spreads of one position already covered by the TRADER's own
+        resting closes.
+
+        Not automation's: an AutoRouting target is subordinate to a
+        click — the click either matches its level or replaces it — so
+        counting it here would make the trader's own click look like it
+        had nothing left to close.
+        """
+        return sizing.tidy(sum(
+            float(order.remaining or 0.0)
+            for order in self.orders_for_position(position_id)
+            if not getattr(order, 'auto_armed', False)))
+
+    def positions_to_reduce(self, pair_key, side, quantity, exclude=None,
+                            reserve_armed=False):
         """What an opposite click covers: `[(position, spreads)]`.
 
         OLDEST FIRST, which is what FIFO means and what every desk
@@ -202,6 +217,21 @@ class Book:
         picked = []
         for position in opposite:
             size = float(position.quantity or 0.0)
+            if reserve_armed:
+                # WHAT IS STILL UNCOVERED, for a click that RESTS.
+                #
+                # Two closing clicks at two prices are two working
+                # orders — that is how a position is scaled out of, and
+                # it is what the sell side does with two opening
+                # clicks. But each of them may only cover what is not
+                # already spoken for, or a 10-lot short ends up with 20
+                # lots of resting closes against it and the second one
+                # to fill opens a long.
+                #
+                # Only for the RESTING path. A market close is now, and
+                # it disarms whatever was resting as it goes.
+                size = sizing.tidy(size - self.armed_by_hand(
+                    position.position_id))
             if size <= 0:
                 continue
             # As much of this ticket as the click still reaches. Never

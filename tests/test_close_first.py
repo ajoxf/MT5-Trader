@@ -389,14 +389,24 @@ def test_a_click_that_fully_covers_opens_NOTHING():
 
 def test_the_trader_s_level_beats_an_armed_target():
     """AutoRouting may already hold a closing order for this position
-    at ITS level. `arm` returns the EXISTING order rather than moving
-    it, so a click would silently rest at somebody else's price."""
+    at ITS level, and `arm` returns the EXISTING order rather than
+    moving it — so a click would silently rest at somebody else's
+    price. AUTOMATION'S is pulled; the trader's own closes are not.
+
+    Asserted against a running coordinator in
+    tests/test_limit_path.py::test_two_closing_clicks_rest_at_two_prices
+    and the two tests beside it. This one only pins that the code
+    reaches for the automation-scoped disarm, because the difference
+    between that and the one that pulls EVERYTHING is the difference
+    between a ladder that can be scaled out of and one that cannot.
+    """
     import inspect
     from mt5trader.coordinator import Coordinator
 
     source = inspect.getsource(Coordinator._rest_reducing_orders)
-    assert 'orders_for_position' in source and 'disarm' in source
-    assert source.index('disarm') < source.index('self.quoter.arm(')
+    assert 'auto_armed_for' in source and 'disarm_auto' in source
+    assert 'self.book.orders_for_position' not in source
+    assert source.index('disarm_auto') < source.index('self.quoter.arm(')
 
 
 def test_arm_really_marks_the_order_as_CLOSING():

@@ -388,3 +388,97 @@ def test_a_ladder_carries_several_working_orders_at_once(engine, pair, legs):
     left = coordinator.book.orders(pair.key)
     assert sorted(o.level for o in left) == sorted([sells[0]] + buys)
     assert len(legs['acct_b'].pending_orders()) == 3
+
+
+# -- the BLUE side holds as many working orders as the red one ------------
+
+def short_position(coordinator, pair, legs, spreads=2.0):
+    """A short, on the board, made the way the ladder makes one."""
+    level = level_of(coordinator, pair)
+    coordinator.click(pair.key, SpreadSide.SELL, level, spreads)
+    coordinator.poll_once()
+    ticket = coordinator.quoter.snapshot(pair.key)[0]['ticket']
+    legs['acct_b'].broker.fill_pending(ticket)
+    coordinator.poll_once()
+    positions = coordinator.book.positions(pair.key)
+    assert len(positions) == 1
+    return positions[0]
+
+
+def closes(coordinator, pair):
+    return [o for o in coordinator.book.orders(pair.key) if o.position_id]
+
+
+def test_two_closing_clicks_rest_at_two_prices(engine, pair, legs):
+    """The desk's report: the red side held every order clicked and the
+    blue side held one.
+
+    A buy while short is a CLOSE, and the close path pulled every
+    existing closing order on the position before arming its own —
+    including ones the trader had placed by hand. So the second buy
+    cancelled the first, and scaling out at two prices, which is the
+    ordinary way a ladder is used, was impossible.
+    """
+    coordinator = engine
+    position = short_position(coordinator, pair, legs, 2.0)
+    md = coordinator.market[pair.key]
+    near = round(md['long_spread'] - 5 * pair.increment, 10)
+    far = round(md['long_spread'] - 10 * pair.increment, 10)
+
+    coordinator.click(pair.key, SpreadSide.BUY, near, 1.0)
+    coordinator.click(pair.key, SpreadSide.BUY, far, 1.0)
+    coordinator.poll_once()
+
+    working = closes(coordinator, pair)
+    assert sorted(o.level for o in working) == sorted([near, far])
+    assert all(o.position_id == position.position_id for o in working)
+    assert sum(o.quantity for o in working) == pytest.approx(2.0)
+
+
+def test_a_click_only_covers_what_is_not_already_covered(engine, pair, legs):
+    """Two closes may not add up to more than the position.
+
+    Otherwise a 2-spread short carries 3 spreads of resting closes, and
+    whichever fills last opens a long — a close that opens, at the far
+    end of the same mistake reduce-before-open exists to prevent.
+    """
+    coordinator = engine
+    short_position(coordinator, pair, legs, 2.0)
+    md = coordinator.market[pair.key]
+    levels = [round(md['long_spread'] - n * pair.increment, 10)
+              for n in (5, 10, 15)]
+
+    for level in levels:
+        coordinator.click(pair.key, SpreadSide.BUY, level, 1.0)
+    coordinator.poll_once()
+
+    working = closes(coordinator, pair)
+    assert sum(o.quantity for o in working) == pytest.approx(2.0)
+    # ...and the third click, with nothing left to close, is an ORDINARY
+    # opening order rather than a fourth close on a 2-spread position.
+    opening = [o for o in coordinator.book.orders(pair.key)
+               if not o.position_id]
+    assert [o.level for o in opening] == [levels[2]]
+
+
+def test_automations_target_still_stands_down_for_a_click(engine, pair, legs):
+    """The rule that was there for a reason: a click that silently
+    rested at AutoRouting's price is a click that did not do what it
+    said. Automation's target goes; the trader's own stays."""
+    coordinator = engine
+    position = short_position(coordinator, pair, legs, 2.0)
+    md = coordinator.market[pair.key]
+    auto_level = round(md['long_spread'] - 3 * pair.increment, 10)
+    mine = round(md['long_spread'] - 5 * pair.increment, 10)
+    other = round(md['long_spread'] - 9 * pair.increment, 10)
+    coordinator.quoter.arm(pair, position, auto_level, 1.0, auto=True)
+    coordinator.click(pair.key, SpreadSide.BUY, mine, 1.0)
+    coordinator.poll_once()
+
+    # The automated target went the moment the trader named a price.
+    assert auto_level not in [o.level for o in closes(coordinator, pair)]
+    # The trader's own does NOT go when they name a second one.
+    coordinator.click(pair.key, SpreadSide.BUY, other, 1.0)
+    coordinator.poll_once()
+    assert sorted(o.level for o in closes(coordinator, pair)) == \
+        sorted([mine, other])

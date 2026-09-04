@@ -1189,8 +1189,8 @@ class Coordinator:
             return [], quantity, [], None
         armed = []
         closed = []
-        for position, take in self.book.positions_to_reduce(pair.key, side,
-                                                            left):
+        for position, take in self.book.positions_to_reduce(
+                pair.key, side, left, reserve_armed=True):
             # THE LEG THIS WOULD REST ON MAY ALREADY BE FLAT.
             #
             # A resting close fires by TICKET. Once the broker no
@@ -1215,12 +1215,20 @@ class Coordinator:
                 # ticket, not the slice the click reached.
                 left = sizing.tidy(left - float(position.quantity or 0.0))
                 continue
-            # A target may already be armed here by AutoRouting, at ITS
+            # A target may already be armed here by AUTOMATION, at ITS
             # level. The trader has just named a different one, and a
             # click that silently rested at somebody else's price is a
             # click that did not do what it said. Theirs wins, and the
             # old one is pulled rather than left to race it.
-            existing = self.book.orders_for_position(position.position_id)
+            #
+            # AUTOMATION'S ONLY. This read every closing order on the
+            # position, including ones the TRADER had placed — so a
+            # second buy click at a second price pulled the first, and
+            # the blue side could never hold more than one working
+            # order while the red side held as many as were clicked.
+            # Scaling out of a position at two prices is the ordinary
+            # way a ladder is used, and it was impossible.
+            existing = self.book.auto_armed_for(position.position_id)
             # ALREADY RESTING AT THIS LEVEL? LEAVE IT ALONE.
             #
             # Pulling a live pending and putting an identical one back
@@ -1246,7 +1254,7 @@ class Coordinator:
                 # else's price is a click that did not do what it said.
                 # Theirs wins, and the old one is pulled rather than
                 # left to race it.
-                self.quoter.disarm(
+                self.quoter.disarm_auto(
                     position.position_id,
                     f'the trader clicked {level:g} to close this instead')
             # AS FAR AS THE CLICK REACHES, not the whole ticket. A
