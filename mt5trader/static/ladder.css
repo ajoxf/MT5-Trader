@@ -309,12 +309,29 @@ body {
 .titlebar .mode-badge { white-space: nowrap; }
 .titlebar .mode-badge {
   margin-left: auto;
-  padding: 0 5px;
-  border: 1px solid #fff;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 2px;
   font-weight: 700;
   letter-spacing: .5px;
 }
-.window.mode-market .titlebar .mode-badge { background: var(--ask); }
+/* MARKET MODE CARRIES ITS OWN INK.
+ *
+ * It used to take the title bar's colour, which is a mid grey on an
+ * INACTIVE window — so the badge went grey-on-dark-red the moment the
+ * ladder lost focus, which is most of the time when several are open.
+ * The one label that says a click will cross the market immediately
+ * was the least readable thing in the title bar.
+ *
+ * White, always, and stated after the inactive rule so losing focus
+ * cannot take it back. The border goes: a white outline on a solid
+ * block read as a sticker laid over the bar rather than part of it. */
+.window.mode-market .titlebar .mode-badge,
+.window.mode-market.inactive .titlebar .mode-badge {
+  background: var(--ask);
+  color: var(--band-text);
+  border-color: var(--ask-strong);
+}
 .titlebar button,
 .titlebar select { cursor: default; }
 /* The close button belongs at the FAR right of the title bar. Without
@@ -555,8 +572,15 @@ table.exits td:nth-child(3) { color: #a02722; }
 /* Which box is which, said twice: in the label and in the edge, in the
  * side's own colour. Two identical boxes one above the other is a size
  * typed into the wrong one. */
-.rail .qty-buy { color: var(--ask-strong); font-weight: 700; }
-.rail .qty-sell { color: var(--bid-strong); font-weight: 700; }
+/* ...and the label never wraps. On a narrow rail "Qty SELL" broke
+ * across two lines as "Qty" over "SELL", which reads as one Qty box
+ * with a side underneath it rather than as the SELL box of two — and
+ * the trader then checks the buy size against the sell box before
+ * clicking. It is two words; they stay together. */
+.rail .qty-buy,
+.rail .qty-sell { font-weight: 700; white-space: nowrap; }
+.rail .qty-buy { color: var(--ask-strong); }
+.rail .qty-sell { color: var(--bid-strong); }
 /* The size boxes stay big enough to read a number in at a glance —
  * they are the last thing checked before a click. */
 .rail .qty-row input { flex: 0 1 72px; width: 72px; min-width: 0; }

@@ -4398,3 +4398,48 @@ def test_two_closes_from_one_click_read_as_one_click(page):
         s.open = ['XAUUSD_|GC1226'];
         window.MT5Trader.render();
     }""")
+
+
+def test_the_MARKET_badge_stays_readable_on_an_unfocused_ladder(page):
+    """It took the title bar's colour, which is a mid grey once the
+    window is inactive — so the badge went grey on dark red the moment
+    the ladder lost focus, which is most of the time with several open.
+
+    That badge is the one label saying a click will cross the market
+    immediately, so it is the last thing on the screen that may become
+    hard to read."""
+    open_ladder(page)
+    page.paths['publisher'].order_type = 'MARKET'
+    page.paths['publisher'].publish()
+    page.wait_for_function(
+        "() => document.querySelector('.ladder .mode-badge')"
+        ".textContent.indexOf('MARKET') >= 0", timeout=WAIT)
+
+    def badge_colours():
+        return page.evaluate(
+            """() => {
+                 const n = document.querySelector('.ladder .mode-badge');
+                 const s = getComputedStyle(n);
+                 return [s.color, s.backgroundColor];
+               }""")
+
+    active_ink, active_bg = badge_colours()
+    assert is_red(active_bg)
+
+    # Now take the focus away, exactly as opening another window does.
+    page.evaluate(
+        "() => document.querySelector('.window.ladder')"
+        ".classList.add('inactive')")
+    inactive_ink, inactive_bg = badge_colours()
+
+    try:
+        # The ink does not change with focus, and it is white on both.
+        assert inactive_ink == active_ink, (active_ink, inactive_ink)
+        assert inactive_ink.replace(' ', '') in ('rgb(255,255,255)',)
+        assert is_red(inactive_bg)
+    finally:
+        page.evaluate(
+            "() => document.querySelector('.window.ladder')"
+            ".classList.remove('inactive')")
+        page.paths['publisher'].order_type = 'LIMIT'
+        page.paths['publisher'].publish()
